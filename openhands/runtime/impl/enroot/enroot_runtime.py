@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import json
 import time
@@ -39,6 +40,23 @@ APP_PORT_RANGE_1 = (50000, 54999)
 APP_PORT_RANGE_2 = (55000, 59999)
 
 
+def kill_process_tree(pid):
+    try:
+        # Method 1: Kill process group
+        pgid = os.getpgid(pid)
+        os.killpg(pgid, signal.SIGTERM)
+        time.sleep(2)
+
+        # Check if still alive, then force kill
+        try:
+            os.killpg(pgid, 0)  # Test if group exists
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            logger.info(f'Process group {pgid} already dead')
+    except Exception as e:
+        logger.info(f'Failed to kill process group {pgid}: {e}')
+
+
 def _is_retryablewait_until_alive_error(exception):
     if isinstance(exception, tenacity.RetryError):
         cause = exception.last_attempt.exception()
@@ -58,38 +76,27 @@ def _is_retryablewait_until_alive_error(exception):
 
 
 def stop_all_enroot_containers(prefix: str = CONTAINER_NAME_PREFIX):
-    """Stop running enroot processes with the given prefix without removing containers."""
+    """Stop running enroot processes using tracked PIDs."""
     try:
-        # Find running enroot processes that match our container prefix
-        result = subprocess.run(
-            ['pgrep', '-f', f'enroot.*{prefix}'],
-            capture_output=True,
-            text=True,
-            check=False
-        )
+        # Get all active container PIDs from the registry
+        pids_to_kill = list(EnrootRuntime._active_container_pids.copy())
 
-        if result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().split('\n')
-            for pid in pids:
-                if pid:  # Make sure pid is not empty
-                    logger.info(f'Stopping enroot process with PID: {pid}')
-                    try:
-                        # First try SIGTERM for graceful shutdown
-                        subprocess.run(['kill', '-TERM', pid], check=False)
-                        time.sleep(1)  # Give it a moment to terminate gracefully
+        if pids_to_kill:
+            logger.info(f'Stopping {len(pids_to_kill)} tracked enroot container processes')
 
-                        # Check if process is still running
-                        check_result = subprocess.run(['kill', '-0', pid], capture_output=True, check=False)
-                        if check_result.returncode == 0:  # Process still running
-                            logger.info(f'Force killing enroot process with PID: {pid}')
-                            subprocess.run(['kill', '-KILL', pid], check=False)
-                    except Exception as e:
-                        logger.warning(f'Failed to stop process {pid}: {e}')
+            for pid in pids_to_kill:
+                try:
+                    logger.info(f'Stopping enroot container process with PID: {pid}')
+                    kill_process_tree(pid)
+                    # Remove from active registry after successful kill attempt
+                    EnrootRuntime._active_container_pids.discard(pid)
+                except Exception as e:
+                    logger.warning(f'Failed to stop process {pid}: {e}')
         else:
-            logger.debug(f'No running enroot processes found with prefix: {prefix}')
+            logger.debug('No tracked enroot container processes to stop')
 
     except Exception as e:
-        logger.warning(f'Failed to stop enroot processes: {e}')
+        logger.warning(f'Failed to stop enroot containers: {e}')
 
 
 class EnrootRuntime(ActionExecutionClient):
@@ -106,6 +113,7 @@ class EnrootRuntime(ActionExecutionClient):
     """
 
     _shutdown_listener_id: UUID | None = None
+    _active_container_pids: set[int] = set()  # Track all active container PIDs
 
     def __init__(
         self,
@@ -141,6 +149,7 @@ class EnrootRuntime(ActionExecutionClient):
         self.runtime_container_image = self.config.sandbox.runtime_container_image
         self.container_name = CONTAINER_NAME_PREFIX + self._get_enroot_image_name()
         self.container_process = None
+        self.container_pid = None  # Store the actual container PID
         self.main_module = main_module
 
         super().__init__(
@@ -412,18 +421,25 @@ class EnrootRuntime(ActionExecutionClient):
                 env=dict(os.environ, **env_vars)
             )
 
+            # Save the container PID and add to active registry
+            self.container_pid = self.container_process.pid
+            EnrootRuntime._active_container_pids.add(self.container_pid)
+
             # Give the container a moment to start
             time.sleep(2)
 
             # Check if the process started successfully
             if self.container_process.poll() is not None:
+                # Process failed to start, remove from registry
+                if self.container_pid in EnrootRuntime._active_container_pids:
+                    EnrootRuntime._active_container_pids.remove(self.container_pid)
                 stdout, stderr = self.container_process.communicate()
                 raise RuntimeError(
                     f'Container failed to start. Return code: {self.container_process.returncode}\n'
                     f'Stdout: {stdout}\nStderr: {stderr}'
                 )
 
-            self.log('debug', f'Container started. Server url: {self.api_url}')
+            self.log('debug', f'Container started. Server url: {self.api_url}, PID: {self.container_pid}')
             self.send_status_message('STATUS$CONTAINER_STARTED')
 
         except Exception as e:
@@ -494,40 +510,30 @@ class EnrootRuntime(ActionExecutionClient):
         if self.config.sandbox.keep_runtime_alive or self.attach_to_existing:
             return
 
-        # Stop the container process
-        if self.container_process and self.container_process.poll() is None:
-            self.container_process.terminate()
-            try:
-                self.container_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.container_process.kill()
-                self.container_process.wait()
+        # # Stop the container process
+        # if self.container_process and self.container_process.poll() is None:
+        #     self.container_process.terminate()
+        #     try:
+        #         self.container_process.wait(timeout=10)
+        #     except subprocess.TimeoutExpired:
+        #         self.container_process.kill()
+        #         self.container_process.wait()
 
         # Stop enroot processes (but keep containers for reuse)
         if rm_all_containers:
             stop_all_enroot_containers(CONTAINER_NAME_PREFIX)
         else:
-            # Stop only this specific container's process
-            try:
-                result = subprocess.run(
-                    ['pgrep', '-f', f'enroot.*{self.container_name}'],
-                    capture_output=True,
-                    text=True,
-                    check=False
-                )
-
-                if result.returncode == 0 and result.stdout.strip():
-                    pids = result.stdout.strip().split('\n')
-                    for pid in pids:
-                        if pid:
-                            logger.info(f'Stopping enroot process for {self.container_name} with PID: {pid}')
-                            subprocess.run(['kill', '-TERM', pid], check=False)
-                            time.sleep(1)
-                            check_result = subprocess.run(['kill', '-0', pid], capture_output=True, check=False)
-                            if check_result.returncode == 0:
-                                subprocess.run(['kill', '-KILL', pid], check=False)
-            except Exception as e:
-                logger.warning(f'Failed to stop container process {self.container_name}: {e}')
+            # Stop only this specific container's process using the stored PID
+            if self.container_pid is not None:
+                try:
+                    logger.info(f'Stopping enroot container {self.container_name} with PID: {self.container_pid}')
+                    kill_process_tree(self.container_pid)
+                    EnrootRuntime._active_container_pids.discard(self.container_pid)
+                    self.container_pid = None
+                except Exception as e:
+                    logger.warning(f'Failed to stop container process {self.container_name}: {e}')
+            else:
+                logger.debug(f'No PID stored for container {self.container_name}, nothing to stop')
 
     def _find_available_port(self, port_range, max_attempts=5):
         """Find an available port in the given range."""
@@ -558,21 +564,23 @@ class EnrootRuntime(ActionExecutionClient):
 
     def pause(self):
         """Pause the runtime by stopping the container process."""
-        if self.container_process and self.container_process.poll() is None:
-            self.container_process.terminate()
-            self.log('debug', f'Container {self.container_name} paused')
+        raise NotImplementedError('Pause is not implemented for EnrootRuntime')
+        # if self.container_process and self.container_process.poll() is None:
+        #     self.container_process.terminate()
+        #     self.log('debug', f'Container {self.container_name} paused')
 
     def resume(self):
         """Resume the runtime by restarting the container."""
-        if not self._container_exists():
-            raise RuntimeError('Container not found')
+        raise NotImplementedError('Resume is not implemented for EnrootRuntime')
+        # if not self._container_exists():
+        #     raise RuntimeError('Container not found')
 
-        # Restart the container with the same configuration
-        self.init_container()
-        self.log('debug', f'Container {self.container_name} resumed')
+        # # Restart the container with the same configuration
+        # self.init_container()
+        # self.log('debug', f'Container {self.container_name} resumed')
 
-        # Wait for the container to be ready
-        self.wait_until_alive()
+        # # Wait for the container to be ready
+        # self.wait_until_alive()
 
     @classmethod
     async def delete(cls, conversation_id: str):
