@@ -240,7 +240,7 @@ class EnrootRuntime(ActionExecutionClient):
 
         await call_sync_from_async(self.init_container)
 
-#        await call_sync_from_async(self.wait_until_alive)
+        await call_sync_from_async(self.wait_until_alive)
 
         if not self.attach_to_existing:
             self.log('info', 'Runtime is ready.')
@@ -478,11 +478,6 @@ class EnrootRuntime(ActionExecutionClient):
         wait=tenacity.wait_fixed(2),
     )
     def wait_until_alive(self):
-        if not self._is_container_running():
-            raise AgentRuntimeDisconnectedError(
-                f'Container {self.container_name} is not running.'
-            )
-
         self.check_if_alive()
 
     def close(self, rm_all_containers: bool | None = None):
