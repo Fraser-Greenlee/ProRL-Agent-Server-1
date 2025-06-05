@@ -1,12 +1,14 @@
 import os
+import subprocess
+import json
+import time
 from functools import lru_cache
 from typing import Callable
 from uuid import UUID
+from pathlib import Path
 
-import docker
 import httpx
 import tenacity
-from docker.models.containers import Container
 
 from openhands.core.config import OpenHandsConfig
 from openhands.core.exceptions import (
@@ -16,19 +18,15 @@ from openhands.core.exceptions import (
 from openhands.core.logger import DEBUG, DEBUG_RUNTIME
 from openhands.core.logger import openhands_logger as logger
 from openhands.events import EventStream
-from openhands.runtime.builder import DockerRuntimeBuilder
 from openhands.runtime.impl.action_execution.action_execution_client import (
     ActionExecutionClient,
 )
-from openhands.runtime.impl.docker.containers import stop_all_containers
 from openhands.runtime.plugins import PluginRequirement
 from openhands.runtime.utils import find_available_tcp_port
 from openhands.runtime.utils.command import (
     DEFAULT_MAIN_MODULE,
     get_action_execution_server_startup_command,
 )
-from openhands.runtime.utils.log_streamer import LogStreamer
-from openhands.runtime.utils.runtime_build import build_runtime_image
 from openhands.utils.async_utils import call_sync_from_async
 from openhands.utils.shutdown_listener import add_shutdown_listener
 from openhands.utils.tenacity_stop import stop_if_should_exit
@@ -59,10 +57,45 @@ def _is_retryablewait_until_alive_error(exception):
     )
 
 
-class EnrootRuntime(ActionExecutionClient):
-    """This runtime will subscribe the event stream.
+def stop_all_enroot_containers(prefix: str = CONTAINER_NAME_PREFIX):
+    """Stop running enroot processes with the given prefix without removing containers."""
+    try:
+        # Find running enroot processes that match our container prefix
+        result = subprocess.run(
+            ['pgrep', '-f', f'enroot.*{prefix}'],
+            capture_output=True,
+            text=True,
+            check=False
+        )
 
-    When receive an event, it will send the event to runtime-client which run inside the docker environment.
+        if result.returncode == 0 and result.stdout.strip():
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                if pid:  # Make sure pid is not empty
+                    logger.info(f'Stopping enroot process with PID: {pid}')
+                    try:
+                        # First try SIGTERM for graceful shutdown
+                        subprocess.run(['kill', '-TERM', pid], check=False)
+                        time.sleep(1)  # Give it a moment to terminate gracefully
+
+                        # Check if process is still running
+                        check_result = subprocess.run(['kill', '-0', pid], capture_output=True, check=False)
+                        if check_result.returncode == 0:  # Process still running
+                            logger.info(f'Force killing enroot process with PID: {pid}')
+                            subprocess.run(['kill', '-KILL', pid], check=False)
+                    except Exception as e:
+                        logger.warning(f'Failed to stop process {pid}: {e}')
+        else:
+            logger.debug(f'No running enroot processes found with prefix: {prefix}')
+
+    except Exception as e:
+        logger.warning(f'Failed to stop enroot processes: {e}')
+
+
+class EnrootRuntime(ActionExecutionClient):
+    """This runtime uses enroot to manage containers for action execution.
+
+    When receive an event, it will send the event to runtime-client which run inside the enroot environment.
 
     Args:
         config (OpenHandsConfig): The application configuration.
@@ -86,9 +119,9 @@ class EnrootRuntime(ActionExecutionClient):
         headless_mode: bool = True,
         main_module: str = DEFAULT_MAIN_MODULE,
     ):
-        if not DockerRuntime._shutdown_listener_id:
-            DockerRuntime._shutdown_listener_id = add_shutdown_listener(
-                lambda: stop_all_containers(CONTAINER_NAME_PREFIX)
+        if not EnrootRuntime._shutdown_listener_id:
+            EnrootRuntime._shutdown_listener_id = add_shutdown_listener(
+                lambda: stop_all_enroot_containers(CONTAINER_NAME_PREFIX)
             )
 
         self.config = config
@@ -99,27 +132,16 @@ class EnrootRuntime(ActionExecutionClient):
         self._vscode_port = -1
         self._app_ports: list[int] = []
 
-        if os.environ.get('DOCKER_HOST_ADDR'):
-            logger.info(
-                f'Using DOCKER_HOST_IP: {os.environ["DOCKER_HOST_ADDR"]} for local_runtime_url'
-            )
-            self.config.sandbox.local_runtime_url = (
-                f'http://{os.environ["DOCKER_HOST_ADDR"]}'
-            )
+        # Check if enroot is available
+        self._check_enroot_availability()
 
-        self.docker_client: docker.DockerClient = self._init_docker_client()
         self.api_url = f'{self.config.sandbox.local_runtime_url}:{self._container_port}'
 
         self.base_container_image = self.config.sandbox.base_container_image
         self.runtime_container_image = self.config.sandbox.runtime_container_image
-        self.container_name = CONTAINER_NAME_PREFIX + sid
-        self.container: Container | None = None
+        self.container_name = CONTAINER_NAME_PREFIX + self._get_enroot_image_name()
+        self.container_process = None
         self.main_module = main_module
-
-        self.runtime_builder = DockerRuntimeBuilder(self.docker_client)
-
-        # Buffer for container logs
-        self.log_streamer: LogStreamer | None = None
 
         super().__init__(
             config,
@@ -139,6 +161,53 @@ class EnrootRuntime(ActionExecutionClient):
                 f'Installing extra user-provided dependencies in the runtime image: {self.config.sandbox.runtime_extra_deps}',
             )
 
+    @staticmethod
+    def _check_enroot_availability():
+        """Check if enroot is available on the system."""
+        try:
+            result = subprocess.run(
+                ['enroot', 'version'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.debug(f'Enroot version: {result.stdout.strip()}')
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            raise RuntimeError(
+                'Enroot is not available on this system. Please install enroot to use EnrootRuntime.'
+            ) from e
+
+    def _run_enroot_command(self, cmd: list[str], check: bool = True, capture_output: bool = True) -> subprocess.CompletedProcess:
+        """Run an enroot command and return the result."""
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=capture_output,
+                text=True,
+                check=check
+            )
+            return result
+        except subprocess.CalledProcessError as e:
+            logger.error(f'Enroot command failed: {" ".join(cmd)}')
+            logger.error(f'Error: {e.stderr}')
+            raise
+
+    def _container_exists(self) -> bool:
+        """Check if the container exists."""
+        try:
+            result = self._run_enroot_command(['enroot', 'list'], check=False)
+            if result.returncode == 0:
+                containers = result.stdout.strip().split('\n')
+                return self.container_name in containers
+            return False
+        except Exception:
+            return False
+
+    def _is_container_running(self) -> bool:
+        """Check if the container is currently running."""
+        # For enroot, we can check if our process is still alive
+        return self.container_process is not None and self.container_process.poll() is None
+
     @property
     def action_execution_server_url(self):
         return self.api_url
@@ -147,14 +216,15 @@ class EnrootRuntime(ActionExecutionClient):
         self.send_status_message('STATUS$STARTING_RUNTIME')
         try:
             await call_sync_from_async(self._attach_to_container)
-        except docker.errors.NotFound as e:
+        except Exception as e:
             if self.attach_to_existing:
                 self.log(
                     'warning',
-                    f'Container {self.container_name} not found.',
+                    f'Container {self.container_name} not found or not running.',
                 )
                 raise AgentRuntimeDisconnectedError from e
-            self.maybe_build_runtime_container_image()
+
+            self.maybe_prepare_runtime_container_image()
             self.log(
                 'info', f'Starting runtime with image: {self.runtime_container_image}'
             )
@@ -164,16 +234,13 @@ class EnrootRuntime(ActionExecutionClient):
                 f'Container started: {self.container_name}. VSCode URL: {self.vscode_url}',
             )
 
-        if DEBUG_RUNTIME:
-            self.log_streamer = LogStreamer(self.container, self.log)
-        else:
-            self.log_streamer = None
-
         if not self.attach_to_existing:
             self.log('info', f'Waiting for client to become ready at {self.api_url}...')
             self.send_status_message('STATUS$WAITING_FOR_CLIENT')
 
-        await call_sync_from_async(self.wait_until_alive)
+        await call_sync_from_async(self.init_container)
+
+#        await call_sync_from_async(self.wait_until_alive)
 
         if not self.attach_to_existing:
             self.log('info', 'Runtime is ready.')
@@ -189,41 +256,53 @@ class EnrootRuntime(ActionExecutionClient):
             self.send_status_message(' ')
         self._runtime_initialized = True
 
-    def maybe_build_runtime_container_image(self):
+    def maybe_prepare_runtime_container_image(self):
+        """Prepare the runtime container image for enroot."""
         if self.runtime_container_image is None:
             if self.base_container_image is None:
                 raise ValueError(
                     'Neither runtime container image nor base container image is set'
                 )
-            self.send_status_message('STATUS$STARTING_CONTAINER')
-            self.runtime_container_image = build_runtime_image(
-                self.base_container_image,
-                self.runtime_builder,
-                platform=self.config.sandbox.platform,
-                extra_deps=self.config.sandbox.runtime_extra_deps,
-                force_rebuild=self.config.sandbox.force_rebuild_runtime,
-                extra_build_args=self.config.sandbox.runtime_extra_build_args,
-            )
+            # For enroot, we'll use the base image directly
+            # In a full implementation, you might want to build a custom image
+            self.runtime_container_image = self.base_container_image
+            self.send_status_message('STATUS$PREPARING_CONTAINER')
 
-    @staticmethod
-    @lru_cache(maxsize=1)
-    def _init_docker_client() -> docker.DockerClient:
+        # Import the image if it doesn't exist locally
+        self._import_image_if_needed()
+
+    def _import_image_if_needed(self):
+        """Import the container image into enroot if not already available."""
         try:
-            return docker.from_env()
-        except Exception as ex:
-            logger.error(
-                'Launch docker client failed. Please make sure you have installed docker and started docker desktop/daemon.',
-            )
-            raise ex
 
-    def _process_volumes(self) -> dict[str, dict[str, str]]:
-        """Process volume mounts based on configuration.
+            # Import the image
+            logger.info(f'Importing image {self.runtime_container_image} into enroot...')
+            filename = f'/tmp/{self._get_enroot_image_name()}.sqsh'
+            if os.path.exists(filename):
+                return
+            import_cmd = ['enroot', 'import', '-o', filename, f'docker://{self.runtime_container_image}']
+            self._run_enroot_command(import_cmd)
+            logger.info(f'Successfully imported {self.runtime_container_image}')
+
+        except Exception as e:
+            logger.error(f'Failed to import image: {e}')
+            raise
+
+    def _get_enroot_image_name(self) -> str:
+        """Get the enroot-formatted image name."""
+        # Enroot converts docker image names to a specific format
+        # e.g., "python:3.11" becomes "python_3.11"
+        if self.runtime_container_image:
+            return self.runtime_container_image.replace(':', '_').replace('/', '_')
+        return ''
+
+    def _process_volumes(self) -> list[str]:
+        """Process volume mounts for enroot format.
 
         Returns:
-            A dictionary mapping host paths to container bind mounts with their modes.
+            A list of volume mount arguments for enroot.
         """
-        # Initialize volumes dictionary
-        volumes: dict[str, dict[str, str]] = {}
+        mount_args = []
 
         # Process volumes (comma-delimited)
         if self.config.sandbox.volumes is not None:
@@ -235,15 +314,10 @@ class EnrootRuntime(ActionExecutionClient):
                 if len(parts) >= 2:
                     host_path = os.path.abspath(parts[0])
                     container_path = parts[1]
-                    # Default mode is 'rw' if not specified
-                    mount_mode = parts[2] if len(parts) > 2 else 'rw'
-
-                    volumes[host_path] = {
-                        'bind': container_path,
-                        'mode': mount_mode,
-                    }
+                    # Enroot mount format: --mount host_path:container_path
+                    mount_args.extend(['--mount', f'{host_path}:{container_path}'])
                     logger.debug(
-                        f'Mount dir (sandbox.volumes): {host_path} to {container_path} with mode: {mount_mode}'
+                        f'Mount dir (sandbox.volumes): {host_path} to {container_path}'
                     )
 
         # Legacy mounting with workspace_* parameters
@@ -251,22 +325,20 @@ class EnrootRuntime(ActionExecutionClient):
             self.config.workspace_mount_path is not None
             and self.config.workspace_mount_path_in_sandbox is not None
         ):
-            mount_mode = 'rw'  # Default mode
-
-            # e.g. result would be: {"/home/user/openhands/workspace": {'bind': "/workspace", 'mode': 'rw'}}
-            volumes[self.config.workspace_mount_path] = {
-                'bind': self.config.workspace_mount_path_in_sandbox,
-                'mode': mount_mode,
-            }
+            mount_args.extend([
+                '--mount',
+                f'{self.config.workspace_mount_path}:{self.config.workspace_mount_path_in_sandbox}'
+            ])
             logger.debug(
-                f'Mount dir (legacy): {self.config.workspace_mount_path} with mode: {mount_mode}'
+                f'Mount dir (legacy): {self.config.workspace_mount_path}'
             )
 
-        return volumes
+        return mount_args
 
     def init_container(self):
-        self.log('debug', 'Preparing to start container...')
+        self.log('debug', 'Preparing to start enroot container...')
         self.send_status_message('STATUS$PREPARING_CONTAINER')
+
         self._host_port = self._find_available_port(EXECUTION_SERVER_PORT_RANGE)
         self._container_port = self._host_port
         # Use the configured vscode_port if provided, otherwise find an available port
@@ -280,113 +352,80 @@ class EnrootRuntime(ActionExecutionClient):
         ]
         self.api_url = f'{self.config.sandbox.local_runtime_url}:{self._container_port}'
 
-        use_host_network = self.config.sandbox.use_host_network
-        network_mode: str | None = 'host' if use_host_network else None
-
-        # Initialize port mappings
-        port_mapping: dict[str, list[dict[str, str]]] | None = None
-        if not use_host_network:
-            port_mapping = {
-                f'{self._container_port}/tcp': [
-                    {
-                        'HostPort': str(self._host_port),
-                        'HostIp': self.config.sandbox.runtime_binding_address,
-                    }
-                ],
-            }
-
-            if self.vscode_enabled:
-                port_mapping[f'{self._vscode_port}/tcp'] = [
-                    {
-                        'HostPort': str(self._vscode_port),
-                        'HostIp': self.config.sandbox.runtime_binding_address,
-                    }
-                ]
-
-            for port in self._app_ports:
-                port_mapping[f'{port}/tcp'] = [
-                    {
-                        'HostPort': str(port),
-                        'HostIp': self.config.sandbox.runtime_binding_address,
-                    }
-                ]
-        else:
-            self.log(
-                'warn',
-                'Using host network mode. If you are using MacOS, please make sure you have the latest version of Docker Desktop and enabled host network feature: https://docs.docker.com/network/drivers/host/#docker-desktop',
-            )
-
-        # Combine environment variables
-        environment = {
+        # Prepare environment variables
+        env_vars = {
             'port': str(self._container_port),
             'PYTHONUNBUFFERED': '1',
-            # Passing in the ports means nested runtimes do not come up with their own ports!
             'VSCODE_PORT': str(self._vscode_port),
-            'APP_PORT_1': self._app_ports[0],
-            'APP_PORT_2': self._app_ports[1],
+            'APP_PORT_1': str(self._app_ports[0]),
+            'APP_PORT_2': str(self._app_ports[1]),
             'PIP_BREAK_SYSTEM_PACKAGES': '1',
         }
         if self.config.debug or DEBUG:
-            environment['DEBUG'] = 'true'
+            env_vars['DEBUG'] = 'true'
         # also update with runtime_startup_env_vars
-        environment.update(self.config.sandbox.runtime_startup_env_vars)
+        env_vars.update(self.config.sandbox.runtime_startup_env_vars)
 
         self.log('debug', f'Workspace Base: {self.config.workspace_base}')
 
         # Process volumes for mounting
-        volumes = self._process_volumes()
+        mount_args = self._process_volumes()
 
-        # If no volumes were configured, set to None
-        if not volumes:
-            logger.debug(
-                'Mount dir is not set, will not mount the workspace directory to the container'
-            )
-            volumes = {}  # Empty dict instead of None to satisfy mypy
         self.log(
             'debug',
             f'Sandbox workspace: {self.config.workspace_mount_path_in_sandbox}',
         )
 
-        command = self.get_action_execution_server_startup_command()
+        # Get the startup command
+        startup_command = self.get_action_execution_server_startup_command()
 
         try:
-            self.container = self.docker_client.containers.run(
-                self.runtime_container_image,
-                command=command,
-                # Override the default 'bash' entrypoint because the command is a binary.
-                entrypoint=[],
-                network_mode=network_mode,
-                ports=port_mapping,
-                working_dir='/openhands/code/',  # do not change this!
-                name=self.container_name,
-                detach=True,
-                environment=environment,
-                volumes=volumes,
-                device_requests=(
-                    [docker.types.DeviceRequest(capabilities=[['gpu']], count=-1)]
-                    if self.config.sandbox.enable_gpu
-                    else None
-                ),
-                **(self.config.sandbox.docker_runtime_kwargs or {}),
+            # Create enroot container if it doesn't exist
+            if not self._container_exists():
+                self._create_enroot_container()
+
+            # Build the enroot start command
+            cmd = ['enroot', 'start', '--rw']
+
+            # Add environment variables
+            for key, value in env_vars.items():
+                cmd.extend(['--env', f'{key}={value}'])
+
+            # Add volume mounts
+            cmd.extend(mount_args)
+
+            # Add working directory
+            # cmd.extend(['--pwd', '/openhands/code/'])
+
+            # Add container name and command
+            cmd.append(self.container_name)
+            cmd.extend(startup_command)
+
+            self.log('debug', f'Starting enroot container with command: {" ".join(cmd)}')
+
+            # Start the container process
+            self.container_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=dict(os.environ, **env_vars)
             )
+
+            # Give the container a moment to start
+            time.sleep(2)
+
+            # Check if the process started successfully
+            if self.container_process.poll() is not None:
+                stdout, stderr = self.container_process.communicate()
+                raise RuntimeError(
+                    f'Container failed to start. Return code: {self.container_process.returncode}\n'
+                    f'Stdout: {stdout}\nStderr: {stderr}'
+                )
+
             self.log('debug', f'Container started. Server url: {self.api_url}')
             self.send_status_message('STATUS$CONTAINER_STARTED')
-        except docker.errors.APIError as e:
-            if '409' in str(e):
-                self.log(
-                    'warning',
-                    f'Container {self.container_name} already exists. Removing...',
-                )
-                stop_all_containers(self.container_name)
-                return self.init_container()
 
-            else:
-                self.log(
-                    'error',
-                    f'Error: Instance {self.container_name} FAILED to start container!\n',
-                )
-                self.log('error', str(e))
-                raise e
         except Exception as e:
             self.log(
                 'error',
@@ -396,29 +435,35 @@ class EnrootRuntime(ActionExecutionClient):
             self.close()
             raise e
 
+    def _create_enroot_container(self):
+        """Create an enroot container from the imported image."""
+        try:
+            image_name = f'/tmp/{self._get_enroot_image_name()}.sqsh'
+            cmd = ['enroot', 'create', '--name', self.container_name, image_name]
+            self._run_enroot_command(cmd)
+            logger.debug(f'Created enroot container: {self.container_name}')
+        except Exception as e:
+            logger.error(f'Failed to create enroot container: {e}')
+            raise
+
     def _attach_to_container(self):
-        self.container = self.docker_client.containers.get(self.container_name)
-        if self.container.status == 'exited':
-            self.container.start()
+        """Attach to an existing container."""
+        if not self._container_exists():
+            raise AgentRuntimeNotFoundError(f'Container {self.container_name} not found.')
 
-        config = self.container.attrs['Config']
-        for env_var in config['Env']:
-            if env_var.startswith('port='):
-                self._host_port = int(env_var.split('port=')[1])
-                self._container_port = self._host_port
-            elif env_var.startswith('VSCODE_PORT='):
-                self._vscode_port = int(env_var.split('VSCODE_PORT=')[1])
-
-        self._app_ports = []
-        exposed_ports = config.get('ExposedPorts')
-        if exposed_ports:
-            for exposed_port in exposed_ports.keys():
-                exposed_port = int(exposed_port.split('/tcp')[0])
-                if (
-                    exposed_port != self._host_port
-                    and exposed_port != self._vscode_port
-                ):
-                    self._app_ports.append(exposed_port)
+        # For enroot, we need to determine the ports from environment or config
+        # Since enroot doesn't have the same container inspection as Docker,
+        # we'll use our configured ports
+        self._host_port = self._find_available_port(EXECUTION_SERVER_PORT_RANGE)
+        self._container_port = self._host_port
+        self._vscode_port = (
+            self.config.sandbox.vscode_port
+            or self._find_available_port(VSCODE_PORT_RANGE)
+        )
+        self._app_ports = [
+            self._find_available_port(APP_PORT_RANGE_1),
+            self._find_available_port(APP_PORT_RANGE_2),
+        ]
 
         self.api_url = f'{self.config.sandbox.local_runtime_url}:{self._container_port}'
         self.log(
@@ -433,53 +478,67 @@ class EnrootRuntime(ActionExecutionClient):
         wait=tenacity.wait_fixed(2),
     )
     def wait_until_alive(self):
-        try:
-            container = self.docker_client.containers.get(self.container_name)
-            if container.status == 'exited':
-                raise AgentRuntimeDisconnectedError(
-                    f'Container {self.container_name} has exited.'
-                )
-        except docker.errors.NotFound:
-            raise AgentRuntimeNotFoundError(
-                f'Container {self.container_name} not found.'
+        if not self._is_container_running():
+            raise AgentRuntimeDisconnectedError(
+                f'Container {self.container_name} is not running.'
             )
 
         self.check_if_alive()
 
     def close(self, rm_all_containers: bool | None = None):
-        """Closes the DockerRuntime and associated objects
+        """Closes the EnrootRuntime and associated objects
 
         Parameters:
-        - rm_all_containers (bool): Whether to remove all containers with the 'openhands-sandbox-' prefix
+        - rm_all_containers (bool): Whether to stop all container processes with the prefix
         """
         super().close()
-        if self.log_streamer:
-            self.log_streamer.close()
 
         if rm_all_containers is None:
             rm_all_containers = self.config.sandbox.rm_all_containers
 
         if self.config.sandbox.keep_runtime_alive or self.attach_to_existing:
             return
-        close_prefix = (
-            CONTAINER_NAME_PREFIX if rm_all_containers else self.container_name
-        )
-        stop_all_containers(close_prefix)
 
-    def _is_port_in_use_docker(self, port):
-        containers = self.docker_client.containers.list()
-        for container in containers:
-            container_ports = container.ports
-            if str(port) in str(container_ports):
-                return True
-        return False
+        # Stop the container process
+        if self.container_process and self.container_process.poll() is None:
+            self.container_process.terminate()
+            try:
+                self.container_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.container_process.kill()
+                self.container_process.wait()
+
+        # Stop enroot processes (but keep containers for reuse)
+        if rm_all_containers:
+            stop_all_enroot_containers(CONTAINER_NAME_PREFIX)
+        else:
+            # Stop only this specific container's process
+            try:
+                result = subprocess.run(
+                    ['pgrep', '-f', f'enroot.*{self.container_name}'],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+
+                if result.returncode == 0 and result.stdout.strip():
+                    pids = result.stdout.strip().split('\n')
+                    for pid in pids:
+                        if pid:
+                            logger.info(f'Stopping enroot process for {self.container_name} with PID: {pid}')
+                            subprocess.run(['kill', '-TERM', pid], check=False)
+                            time.sleep(1)
+                            check_result = subprocess.run(['kill', '-0', pid], capture_output=True, check=False)
+                            if check_result.returncode == 0:
+                                subprocess.run(['kill', '-KILL', pid], check=False)
+            except Exception as e:
+                logger.warning(f'Failed to stop container process {self.container_name}: {e}')
 
     def _find_available_port(self, port_range, max_attempts=5):
-        port = port_range[1]
+        """Find an available port in the given range."""
         for _ in range(max_attempts):
             port = find_available_tcp_port(port_range[0], port_range[1])
-            if not self._is_port_in_use_docker(port):
-                return port
+            return port
         # If no port is found after max_attempts, return the last tried port
         return port
 
@@ -496,33 +555,25 @@ class EnrootRuntime(ActionExecutionClient):
     def web_hosts(self):
         hosts: dict[str, int] = {}
 
-        host_addr = os.environ.get('DOCKER_HOST_ADDR', 'localhost')
+        host_addr = 'localhost'  # enroot typically runs on localhost
         for port in self._app_ports:
             hosts[f'http://{host_addr}:{port}'] = port
 
         return hosts
 
     def pause(self):
-        """Pause the runtime by stopping the container.
-        This is different from container.stop() as it ensures environment variables are properly preserved."""
-        if not self.container:
-            raise RuntimeError('Container not initialized')
-
-        # First, ensure all environment variables are properly persisted in .bashrc
-        # This is already handled by add_env_vars in base.py
-
-        # Stop the container
-        self.container.stop()
-        self.log('debug', f'Container {self.container_name} paused')
+        """Pause the runtime by stopping the container process."""
+        if self.container_process and self.container_process.poll() is None:
+            self.container_process.terminate()
+            self.log('debug', f'Container {self.container_name} paused')
 
     def resume(self):
-        """Resume the runtime by starting the container.
-        This is different from container.start() as it ensures environment variables are properly restored."""
-        if not self.container:
-            raise RuntimeError('Container not initialized')
+        """Resume the runtime by restarting the container."""
+        if not self._container_exists():
+            raise RuntimeError('Container not found')
 
-        # Start the container
-        self.container.start()
+        # Restart the container with the same configuration
+        self.init_container()
         self.log('debug', f'Container {self.container_name} resumed')
 
         # Wait for the container to be ready
@@ -530,17 +581,16 @@ class EnrootRuntime(ActionExecutionClient):
 
     @classmethod
     async def delete(cls, conversation_id: str):
-        docker_client = cls._init_docker_client()
+        """Delete a container by conversation ID."""
         try:
             container_name = CONTAINER_NAME_PREFIX + conversation_id
-            container = docker_client.containers.get(container_name)
-            container.remove(force=True)
-        except docker.errors.APIError:
-            pass
-        except docker.errors.NotFound:
-            pass
-        finally:
-            docker_client.close()
+            subprocess.run(
+                ['enroot', 'remove', container_name],
+                capture_output=True,
+                check=False
+            )
+        except Exception as e:
+            logger.warning(f'Failed to delete container {container_name}: {e}')
 
     def get_action_execution_server_startup_command(self):
         return get_action_execution_server_startup_command(
