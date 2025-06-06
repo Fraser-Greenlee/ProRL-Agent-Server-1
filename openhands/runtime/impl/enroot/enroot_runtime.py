@@ -237,7 +237,6 @@ class EnrootRuntime(ActionExecutionClient):
             self.log(
                 'info', f'Starting runtime with image: {self.runtime_container_image}'
             )
-            await call_sync_from_async(self.init_container)
             self.log(
                 'info',
                 f'Container started: {self.container_name}. VSCode URL: {self.vscode_url}',
