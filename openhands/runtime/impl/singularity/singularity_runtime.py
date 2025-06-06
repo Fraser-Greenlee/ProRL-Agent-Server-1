@@ -60,42 +60,6 @@ def kill_process_tree(pid):
         logger.info(f'Failed to kill process {pid}: {e}')
 
 
-def kill_singularity_specific_processes():
-    """Kill Singularity-specific processes using pattern matching."""
-    try:
-        # Find Singularity processes that match OpenHands patterns
-        result = subprocess.run(
-            ['pgrep', '-f', 'singularity.*openhands'],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-
-        if result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().split('\n')
-
-            for pid in pids:
-                if pid.isdigit():
-                    try:
-                        logger.info(f'Killing Singularity process {pid}')
-                        os.kill(int(pid), signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-
-            time.sleep(2)
-
-            # Force kill survivors
-            for pid in pids:
-                if pid.isdigit():
-                    try:
-                        os.kill(int(pid), signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-
-    except Exception as e:
-        logger.warning(f'Failed to kill Singularity processes: {e}')
-
-
 def _is_retryablewait_until_alive_error(exception):
     if isinstance(exception, tenacity.RetryError):
         cause = exception.last_attempt.exception()
@@ -133,9 +97,6 @@ def stop_all_singularity_containers(prefix: str = CONTAINER_NAME_PREFIX):
                     logger.warning(f'Failed to stop process {pid}: {e}')
         else:
             logger.debug('No tracked singularity container processes to stop')
-
-        # Also kill any remaining Singularity processes
-        kill_singularity_specific_processes()
 
     except Exception as e:
         logger.warning(f'Failed to stop singularity containers: {e}')
@@ -608,13 +569,11 @@ class SingularityRuntime(ActionExecutionClient):
             # and optionally remove the image file
             container_name = CONTAINER_NAME_PREFIX + conversation_id
 
-            # Kill any remaining processes
-            kill_singularity_specific_processes()
-
             # Optionally clean up image files (commented out to preserve for reuse)
-            # image_path = f'/tmp/singularity_{container_name}.sif'
-            # if os.path.exists(image_path):
-            #     os.remove(image_path)
+            image_path = f'/root/singularity_images/{container_name}.sif'
+            if os.path.exists(image_path):
+                logger.info(f'Removing image file {image_path}')
+                # os.remove(image_path)
 
         except Exception as e:
             logger.warning(f'Failed to delete container {conversation_id}: {e}')
