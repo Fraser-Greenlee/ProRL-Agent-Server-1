@@ -789,7 +789,7 @@ def test_copy_from_directory(temp_dir, runtime_cls, run_as_openhands):
 
 # skip if run_as_openhands is True, since it will use the host user to run the test
 @pytest.mark.skipif(
-    is_windows() or os.getenv('RUN_AS_OPENHANDS', 'True').lower() in ['true', '1', 'yes']
+    is_windows() or not os.getenv('RUN_AS_OPENHANDS', 'True').lower() in ['true', '1', 'yes']
 , reason='Test uses Linux-specific file permissions and sudo commands'
 )
 def test_git_operation(temp_dir, runtime_cls, run_as_openhands):
