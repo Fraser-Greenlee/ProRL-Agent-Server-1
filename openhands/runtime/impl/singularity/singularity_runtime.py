@@ -41,21 +41,23 @@ APP_PORT_RANGE_2 = (55000, 59999)
 
 
 def kill_process_tree(pid):
-    """Kill a process and all its descendants."""
+    """Kill a specific process, not the entire process group."""
     try:
-        # Method 1: Kill process group
-        pgid = os.getpgid(pid)
-        os.killpg(pgid, signal.SIGTERM)
+        # Kill the specific process with SIGTERM first
+        os.kill(pid, signal.SIGTERM)
         time.sleep(2)
 
         # Check if still alive, then force kill
         try:
-            os.killpg(pgid, 0)  # Test if group exists
-            os.killpg(pgid, signal.SIGKILL)
+            os.kill(pid, 0)  # Test if process exists
+            os.kill(pid, signal.SIGKILL)
+            logger.info(f'Force killed process {pid}')
         except ProcessLookupError:
-            logger.info(f'Process group {pgid} already dead')
+            logger.info(f'Process {pid} already dead')
+    except ProcessLookupError:
+        logger.info(f'Process {pid} already dead')
     except Exception as e:
-        logger.info(f'Failed to kill process group {pgid}: {e}')
+        logger.info(f'Failed to kill process {pid}: {e}')
 
 
 def kill_singularity_specific_processes():
