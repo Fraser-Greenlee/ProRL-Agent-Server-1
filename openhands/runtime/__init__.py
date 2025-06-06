@@ -10,6 +10,7 @@ from openhands.runtime.impl.local.local_runtime import LocalRuntime
 from openhands.runtime.impl.modal.modal_runtime import ModalRuntime
 from openhands.runtime.impl.remote.remote_runtime import RemoteRuntime
 from openhands.runtime.impl.runloop.runloop_runtime import RunloopRuntime
+from openhands.runtime.impl.singularity.singularity_runtime import SingularityRuntime
 from openhands.utils.import_utils import get_impl
 
 # mypy: disable-error-code="type-abstract"
@@ -23,6 +24,7 @@ _DEFAULT_RUNTIME_CLASSES: dict[str, type[Runtime]] = {
     'local': LocalRuntime,
     'daytona': DaytonaRuntime,
     'enroot': EnrootRuntime,
+    'singularity': SingularityRuntime,
     'cli': CLIRuntime,
 }
 
@@ -54,5 +56,6 @@ __all__ = [
     'DaytonaRuntime',
     'CLIRuntime',
     'EnrootRuntime',
+    'SingularityRuntime',
     'get_runtime_cls',
 ]

@@ -14,6 +14,7 @@ from openhands.runtime.impl.modal.modal_runtime import ModalRuntime
 from openhands.runtime.impl.remote.remote_runtime import RemoteRuntime
 from openhands.runtime.impl.runloop.runloop_runtime import RunloopRuntime
 from openhands.runtime.impl.enroot.enroot_runtime import EnrootRuntime
+from openhands.runtime.impl.singularity.singularity_runtime import SingularityRuntime
 __all__ = [
     'ActionExecutionClient',
     'CLIRuntime',
@@ -25,4 +26,5 @@ __all__ = [
     'RemoteRuntime',
     'RunloopRuntime',
     'EnrootRuntime',
+    'SingularityRuntime',
 ]
