@@ -21,6 +21,7 @@ from openhands.runtime.impl.enroot.enroot_runtime import EnrootRuntime
 from openhands.runtime.plugins import AgentSkillsRequirement, JupyterRequirement
 from openhands.storage import get_file_store
 from openhands.utils.async_utils import call_async_from_sync
+from openhands.runtime.impl.singularity.singularity_runtime import SingularityRuntime
 
 TEST_IN_CI = os.getenv('TEST_IN_CI', 'False').lower() in ['true', '1', 'yes']
 TEST_RUNTIME = os.getenv('TEST_RUNTIME', 'docker').lower()
@@ -139,6 +140,8 @@ def get_runtime_classes() -> list[type[Runtime]]:
         return [CLIRuntime]
     elif runtime.lower() == 'enroot':
         return [EnrootRuntime]
+    elif runtime.lower() == 'singularity':
+        return [SingularityRuntime]
     else:
         raise ValueError(f'Invalid runtime: {runtime}')
 
