@@ -185,8 +185,8 @@ def test_ipython_multi_user(temp_dir, runtime_cls, run_as_openhands):
     os.environ.get('TEST_RUNTIME') == 'cli',
     reason='CLIRuntime does not support full IPython/Jupyter kernel features or return IPythonRunCellObservation',
 )
-def test_ipython_simple(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_ipython_simple(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
 
     # Test run ipython
     # get username
@@ -212,9 +212,9 @@ def test_ipython_simple(temp_dir, runtime_cls):
     os.environ.get('TEST_RUNTIME') == 'cli',
     reason='CLIRuntime does not support full IPython/Jupyter kernel features or return IPythonRunCellObservation',
 )
-def test_ipython_chdir(temp_dir, runtime_cls):
+def test_ipython_chdir(temp_dir, runtime_cls, run_as_openhands):
     """Test that os.chdir correctly handles paths with slashes."""
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
 
     # Create a test directory and get its absolute path
     test_code = """
@@ -298,12 +298,12 @@ def test_ipython_package_install(temp_dir, runtime_cls, run_as_openhands):
 
 
 @pytest.mark.skipif(
-    os.environ.get('TEST_RUNTIME') == 'cli',
+    os.environ.get('TEST_RUNTIME') == 'cli' or os.getenv('RUN_AS_OPENHANDS', 'True').lower() in ['true', '1', 'yes'],
     reason='CLIRuntime does not support sudo with password prompts if the user has not enabled passwordless sudo',
 )
-def test_ipython_file_editor_permissions_as_openhands(temp_dir, runtime_cls):
+def test_ipython_file_editor_permissions_as_openhands(temp_dir, runtime_cls, run_as_openhands):
     """Test file editor permission behavior when running as different users."""
-    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands=True)
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
 
     # Create a file owned by root with restricted permissions
     action = CmdRunAction(
