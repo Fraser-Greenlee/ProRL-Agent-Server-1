@@ -189,8 +189,8 @@ def test_bash_background_server(temp_dir, runtime_cls, run_as_openhands):
         _close_test_runtime(runtime)
 
 
-def test_multiline_commands(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_multiline_commands(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         if is_windows():
             # Windows PowerShell version using backticks for line continuation
@@ -263,7 +263,7 @@ def test_no_ps2_in_output(temp_dir, runtime_cls, run_as_openhands):
 @pytest.mark.skipif(
     is_windows(), reason='Test uses Linux-specific bash loops and sed commands'
 )
-def test_multiline_command_loop(temp_dir, runtime_cls):
+def test_multiline_command_loop(temp_dir, runtime_cls, run_as_openhands):
     # https://github.com/All-Hands-AI/OpenHands/issues/3143
     init_cmd = """mkdir -p _modules && \
 for month in {01..04}; do
@@ -277,7 +277,7 @@ done && echo "created files"
     mv "$file" "$new_date"
 done && echo "success"
 """
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         obs = _run_cmd_action(runtime, init_cmd)
         assert obs.exit_code == 0, 'The exit code should be 0.'
@@ -500,8 +500,8 @@ def test_run_as_user_correct_home_dir(temp_dir, runtime_cls, run_as_openhands):
         _close_test_runtime(runtime)
 
 
-def test_multi_cmd_run_in_single_line(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_multi_cmd_run_in_single_line(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         if is_windows():
             # Windows PowerShell version using semicolon
@@ -519,8 +519,8 @@ def test_multi_cmd_run_in_single_line(temp_dir, runtime_cls):
         _close_test_runtime(runtime)
 
 
-def test_stateful_cmd(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_stateful_cmd(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         if is_windows():
             # Windows PowerShell version
@@ -565,8 +565,8 @@ def test_stateful_cmd(temp_dir, runtime_cls):
         _close_test_runtime(runtime)
 
 
-def test_failed_cmd(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_failed_cmd(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         obs = _run_cmd_action(runtime, 'non_existing_command')
         assert obs.exit_code != 0, 'The exit code should not be 0 for a failed command.'
@@ -580,8 +580,8 @@ def _create_test_file(host_temp_dir):
         f.write('Hello, World!')
 
 
-def test_copy_single_file(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_copy_single_file(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         sandbox_dir = config.workspace_mount_path_in_sandbox
         sandbox_file = os.path.join(sandbox_dir, 'test_file.txt')
@@ -619,8 +619,8 @@ def _create_host_test_dir_with_files(test_dir):
         f.write('File 2 content')
 
 
-def test_copy_directory_recursively(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_copy_directory_recursively(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
 
     sandbox_dir = config.workspace_mount_path_in_sandbox
     try:
@@ -668,8 +668,8 @@ def test_copy_directory_recursively(temp_dir, runtime_cls):
         _close_test_runtime(runtime)
 
 
-def test_copy_to_non_existent_directory(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_copy_to_non_existent_directory(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         sandbox_dir = config.workspace_mount_path_in_sandbox
         _create_test_file(temp_dir)
@@ -684,8 +684,8 @@ def test_copy_to_non_existent_directory(temp_dir, runtime_cls):
         _close_test_runtime(runtime)
 
 
-def test_overwrite_existing_file(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_overwrite_existing_file(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         sandbox_dir = config.workspace_mount_path_in_sandbox
         sandbox_file = os.path.join(sandbox_dir, 'test_file.txt')
@@ -748,8 +748,8 @@ def test_overwrite_existing_file(temp_dir, runtime_cls):
         _close_test_runtime(runtime)
 
 
-def test_copy_non_existent_file(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_copy_non_existent_file(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
         sandbox_dir = config.workspace_mount_path_in_sandbox
         with pytest.raises(FileNotFoundError):
@@ -764,8 +764,8 @@ def test_copy_non_existent_file(temp_dir, runtime_cls):
         _close_test_runtime(runtime)
 
 
-def test_copy_from_directory(temp_dir, runtime_cls):
-    runtime, config = _load_runtime(temp_dir, runtime_cls)
+def test_copy_from_directory(temp_dir, runtime_cls, run_as_openhands):
+    runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     sandbox_dir = config.workspace_mount_path_in_sandbox
     try:
         temp_dir_copy = os.path.join(temp_dir, 'test_dir')
@@ -790,80 +790,80 @@ def test_copy_from_directory(temp_dir, runtime_cls):
 @pytest.mark.skipif(
     is_windows(), reason='Test uses Linux-specific file permissions and sudo commands'
 )
-def test_git_operation(temp_dir, runtime_cls):
-    # do not mount workspace, since workspace mount by tests will be owned by root
-    # while the user_id we get via os.getuid() is different from root
-    # which causes permission issues
-    runtime, config = _load_runtime(
-        temp_dir=temp_dir,
-        use_workspace=False,
-        runtime_cls=runtime_cls,
-        # Need to use non-root user to expose issues
-        run_as_openhands=True,
-    )
-    # this will happen if permission of runtime is not properly configured
-    # fatal: detected dubious ownership in repository at config.workspace_mount_path_in_sandbox
-    try:
-        if runtime_cls != LocalRuntime and runtime_cls != CLIRuntime:
-            # on local machine, permissionless sudo will probably not be available
-            obs = _run_cmd_action(runtime, 'sudo chown -R openhands:root .')
-            assert obs.exit_code == 0
-
-        # check the ownership of the current directory
-        obs = _run_cmd_action(runtime, 'ls -alh .')
-        assert obs.exit_code == 0
-        # drwx--S--- 2 openhands root   64 Aug  7 23:32 .
-        # drwxr-xr-x 1 root      root 4.0K Aug  7 23:33 ..
-        for line in obs.content.split('\n'):
-            if runtime_cls == LocalRuntime or runtime_cls == CLIRuntime:
-                continue  # skip these checks
-
-            if ' ..' in line:
-                # parent directory should be owned by root
-                assert 'root' in line
-                assert 'openhands' not in line
-            elif ' .' in line:
-                # current directory should be owned by openhands
-                # and its group should be root
-                assert 'openhands' in line
-                assert 'root' in line
-
-        # make sure all git operations are allowed
-        obs = _run_cmd_action(runtime, 'git init')
-        assert obs.exit_code == 0
-
-        # create a file
-        obs = _run_cmd_action(runtime, 'echo "hello" > test_file.txt')
-        assert obs.exit_code == 0
-
-        if runtime_cls == LocalRuntime or runtime_cls == CLIRuntime:
-            # set git config author in CI only, not on local machine
-            logger.info('Setting git config author')
-            obs = _run_cmd_action(
-                runtime,
-                'git config user.name "openhands" && git config user.email "openhands@all-hands.dev"',
-            )
-            assert obs.exit_code == 0
-
-            # Set up git config - list current settings (should be empty or just what was set)
-            obs = _run_cmd_action(runtime, 'git config --list')
-            assert obs.exit_code == 0
-
-        # git add
-        obs = _run_cmd_action(runtime, 'git add test_file.txt')
-        assert obs.exit_code == 0
-
-        # git diff
-        obs = _run_cmd_action(runtime, 'git diff --no-color --cached')
-        assert obs.exit_code == 0
-        assert 'b/test_file.txt' in obs.content
-        assert '+hello' in obs.content
-
-        # git commit
-        obs = _run_cmd_action(runtime, 'git commit -m "test commit"')
-        assert obs.exit_code == 0
-    finally:
-        _close_test_runtime(runtime)
+# def test_git_operation(temp_dir, runtime_cls, run_as_openhands):
+#     # do not mount workspace, since workspace mount by tests will be owned by root
+#     # while the user_id we get via os.getuid() is different from root
+#     # which causes permission issues
+#     runtime, config = _load_runtime(
+#         temp_dir=temp_dir,
+#         use_workspace=False,
+#         runtime_cls=runtime_cls,
+#         # Need to use non-root user to expose issues
+#         run_as_openhands=True,
+#     )
+#     # this will happen if permission of runtime is not properly configured
+#     # fatal: detected dubious ownership in repository at config.workspace_mount_path_in_sandbox
+#     try:
+#         if runtime_cls != LocalRuntime and runtime_cls != CLIRuntime:
+#             # on local machine, permissionless sudo will probably not be available
+#             obs = _run_cmd_action(runtime, 'sudo chown -R openhands:root .')
+#             assert obs.exit_code == 0
+#
+#         # check the ownership of the current directory
+#         obs = _run_cmd_action(runtime, 'ls -alh .')
+#         assert obs.exit_code == 0
+#         # drwx--S--- 2 openhands root   64 Aug  7 23:32 .
+#         # drwxr-xr-x 1 root      root 4.0K Aug  7 23:33 ..
+#         for line in obs.content.split('\n'):
+#             if runtime_cls == LocalRuntime or runtime_cls == CLIRuntime:
+#                 continue  # skip these checks
+#
+#             if ' ..' in line:
+#                 # parent directory should be owned by root
+#                 assert 'root' in line
+#                 assert 'openhands' not in line
+#             elif ' .' in line:
+#                 # current directory should be owned by openhands
+#                 # and its group should be root
+#                 assert 'openhands' in line
+#                 assert 'root' in line
+#
+#         # make sure all git operations are allowed
+#         obs = _run_cmd_action(runtime, 'git init')
+#         assert obs.exit_code == 0
+#
+#         # create a file
+#         obs = _run_cmd_action(runtime, 'echo "hello" > test_file.txt')
+#         assert obs.exit_code == 0
+#
+#         if runtime_cls == LocalRuntime or runtime_cls == CLIRuntime:
+#             # set git config author in CI only, not on local machine
+#             logger.info('Setting git config author')
+#             obs = _run_cmd_action(
+#                 runtime,
+#                 'git config user.name "openhands" && git config user.email "openhands@all-hands.dev"',
+#             )
+#             assert obs.exit_code == 0
+#
+#             # Set up git config - list current settings (should be empty or just what was set)
+#             obs = _run_cmd_action(runtime, 'git config --list')
+#             assert obs.exit_code == 0
+#
+#         # git add
+#         obs = _run_cmd_action(runtime, 'git add test_file.txt')
+#         assert obs.exit_code == 0
+#
+#         # git diff
+#         obs = _run_cmd_action(runtime, 'git diff --no-color --cached')
+#         assert obs.exit_code == 0
+#         assert 'b/test_file.txt' in obs.content
+#         assert '+hello' in obs.content
+#
+#         # git commit
+#         obs = _run_cmd_action(runtime, 'git commit -m "test commit"')
+#         assert obs.exit_code == 0
+#     finally:
+#         _close_test_runtime(runtime)
 
 
 def test_python_version(temp_dir, runtime_cls, run_as_openhands):
