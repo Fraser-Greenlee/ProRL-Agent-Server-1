@@ -1094,6 +1094,10 @@ def test_command_backslash(temp_dir, runtime_cls, run_as_openhands):
             'find /tmp/test_dir -type f -exec grep -l "implemented_function" {} \\;'
         )
         obs = runtime.run_action(action)
+        import time
+        time.sleep(5)
+        action = CmdRunAction('')
+        obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
         assert obs.exit_code == 0
         assert '/tmp/test_dir/file_1.txt' in obs.content
