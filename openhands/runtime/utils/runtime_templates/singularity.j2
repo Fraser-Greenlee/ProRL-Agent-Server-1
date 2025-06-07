@@ -32,7 +32,7 @@ From: {{ base_image }}
         {% endif -%}
         libasound2-plugins libatomic1
 
-    {%- if 'ubuntu' in base_image -%}
+    {% if 'ubuntu' in base_image %}
     # Install Node.js
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     TZ=Etc/UTC DEBIAN_FRONTEND=noninteractive \
