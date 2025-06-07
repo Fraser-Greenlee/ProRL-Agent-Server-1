@@ -156,9 +156,9 @@ From: {{ base_image }}
     /openhands/micromamba/bin/micromamba install -n openhands -c conda-forge poetry python=3.12 -y
 
     # Create a clean openhands directory
-    if [ -d /openhands/code ]; then
-        rm -rf /openhands/code
-    fi
+    # if [ -d /openhands/code ]; then
+    #     rm -rf /openhands/code
+    # fi
     mkdir -p /openhands/code/openhands
     touch /openhands/code/openhands/__init__.py
 
@@ -171,9 +171,9 @@ From: {{ base_image }}
     # ================================================================
     # Copy Project source files
     # ================================================================
-    if [ -d /openhands/code/openhands ]; then
-        rm -rf /openhands/code/openhands
-    fi
+    # if [ -d /openhands/code/openhands ]; then
+    #     rm -rf /openhands/code/openhands
+    # fi
 
     # Files are copied via %files section above
     chmod a+rwx /openhands/code/openhands/__init__.py
