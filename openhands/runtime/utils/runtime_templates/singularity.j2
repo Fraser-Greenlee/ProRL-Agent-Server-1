@@ -1,0 +1,210 @@
+Bootstrap: docker
+From: {{ base_image }}
+
+%environment
+    export POETRY_VIRTUALENVS_PATH=/openhands/poetry
+    export MAMBA_ROOT_PREFIX=/openhands/micromamba
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export EDITOR=code
+    export VISUAL=code
+    export GIT_EDITOR="code --wait"
+    export OPENVSCODE_SERVER_ROOT=/openhands/.openvscode-server
+    export PATH="/openhands/bin:${PATH}"
+
+%files
+    ./code/pyproject.toml /openhands/code/pyproject.toml
+    ./code/poetry.lock /openhands/code/poetry.lock
+    ./code/openhands /openhands/code/openhands
+
+%post
+    # Update package manager
+    apt-get update
+
+{% macro setup_base_system() %}
+    # Install base system dependencies
+    apt-get install -y --no-install-recommends \
+        wget curl ca-certificates sudo apt-utils git jq tmux build-essential ripgrep \
+        {%- if 'ubuntu' in base_image and (base_image.endswith(':latest') or base_image.endswith(':24.04')) -%}
+        libgl1 \
+        {%- else %}
+        libgl1-mesa-glx \
+        {% endif -%}
+        libasound2-plugins libatomic1
+
+    {%- if 'ubuntu' in base_image -%}
+    # Install Node.js
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+    TZ=Etc/UTC DEBIAN_FRONTEND=noninteractive \
+        apt-get install -y --no-install-recommends nodejs python3.12 python-is-python3 python3-pip python3.12-venv
+    corepack enable yarn
+    {% endif -%}
+
+    # Clean up
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+{% if 'ubuntu' in base_image %}
+    # Setup corepack and poetry
+    ln -s "$(dirname $(which node))/corepack" /usr/local/bin/corepack
+    npm install -g corepack
+    corepack enable yarn
+    curl -fsSL --compressed https://install.python-poetry.org | python -
+{% endif %}
+
+    # Install uv (required by MCP)
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/openhands/bin" sh
+
+    # Remove UID 1000 users to avoid conflicts
+    if getent passwd 1000 | grep -q pn; then userdel pn; fi
+    if getent passwd 1000 | grep -q ubuntu; then userdel ubuntu; fi
+
+    # Create necessary directories
+    mkdir -p /openhands
+    mkdir -p /openhands/logs
+    mkdir -p /openhands/poetry
+{% endmacro %}
+
+{% macro setup_vscode_server() %}
+    # Setup VSCode Server
+    RELEASE_TAG="openvscode-server-v1.98.2"
+    RELEASE_ORG="gitpod-io"
+
+    if [ -z "${RELEASE_TAG}" ]; then
+        echo "The RELEASE_TAG build arg must be set." >&2
+        exit 1
+    fi
+
+    arch=$(uname -m)
+    if [ "${arch}" = "x86_64" ]; then
+        arch="x64"
+    elif [ "${arch}" = "aarch64" ]; then
+        arch="arm64"
+    elif [ "${arch}" = "armv7l" ]; then
+        arch="armhf"
+    fi
+
+    wget https://github.com/${RELEASE_ORG}/openvscode-server/releases/download/${RELEASE_TAG}/${RELEASE_TAG}-linux-${arch}.tar.gz
+    tar -xzf ${RELEASE_TAG}-linux-${arch}.tar.gz
+
+    if [ -d "${OPENVSCODE_SERVER_ROOT}" ]; then
+        rm -rf "${OPENVSCODE_SERVER_ROOT}"
+    fi
+
+    mv ${RELEASE_TAG}-linux-${arch} ${OPENVSCODE_SERVER_ROOT}
+    cp ${OPENVSCODE_SERVER_ROOT}/bin/remote-cli/openvscode-server ${OPENVSCODE_SERVER_ROOT}/bin/remote-cli/code
+    rm -f ${RELEASE_TAG}-linux-${arch}.tar.gz
+{% endmacro %}
+
+{% macro install_vscode_extensions() %}
+    # Install custom extensions
+    mkdir -p ${OPENVSCODE_SERVER_ROOT}/extensions/openhands-hello-world
+    cp -r /openhands/code/openhands/runtime/utils/vscode-extensions/hello-world/* ${OPENVSCODE_SERVER_ROOT}/extensions/openhands-hello-world/
+
+    mkdir -p ${OPENVSCODE_SERVER_ROOT}/extensions/openhands-memory-monitor
+    cp -r /openhands/code/openhands/runtime/utils/vscode-extensions/memory-monitor/* ${OPENVSCODE_SERVER_ROOT}/extensions/openhands-memory-monitor/
+
+    # Remove extension dirs that trigger false positives in vulnerability scans
+    rm -rf ${OPENVSCODE_SERVER_ROOT}/extensions/{handlebars,pug,json,diff,grunt,ini,npm}
+{% endmacro %}
+
+{% macro install_dependencies() %}
+    # Install all dependencies
+    cd /openhands/code
+
+    # Configure micromamba and poetry
+    /openhands/micromamba/bin/micromamba config set changeps1 False
+    /openhands/micromamba/bin/micromamba run -n openhands poetry config virtualenvs.path /openhands/poetry
+    /openhands/micromamba/bin/micromamba run -n openhands poetry env use python3.12
+
+    # Install project dependencies in smaller chunks
+    /openhands/micromamba/bin/micromamba run -n openhands poetry install --only main --no-interaction --no-root
+    /openhands/micromamba/bin/micromamba run -n openhands poetry install --only runtime --no-interaction --no-root
+
+    # Install playwright and its dependencies
+    apt-get update
+    /openhands/micromamba/bin/micromamba run -n openhands poetry run pip install playwright
+    /openhands/micromamba/bin/micromamba run -n openhands poetry run playwright install --with-deps chromium
+
+    # Set environment variables and permissions
+    /openhands/micromamba/bin/micromamba run -n openhands poetry run python -c "import sys; print('OH_INTERPRETER_PATH=' + sys.executable)" >> /etc/environment
+    chmod -R g+rws /openhands/poetry
+    mkdir -p /openhands/workspace
+    chmod -R g+rws,o+rw /openhands/workspace
+
+    # Clear caches
+    /openhands/micromamba/bin/micromamba run -n openhands poetry cache clear --all . -n
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    /openhands/micromamba/bin/micromamba clean --all
+{% endmacro %}
+
+{% if build_from_scratch %}
+    # ================================================================
+    # START: Build Runtime Image from Scratch
+    # ================================================================
+    {{ setup_base_system() }}
+
+    # Install micromamba
+    mkdir -p /openhands/micromamba/bin
+    PREFIX_LOCATION=/openhands/micromamba BIN_FOLDER=/openhands/micromamba/bin INIT_YES=no CONDA_FORGE_YES=yes $(curl -L https://micro.mamba.pm/install.sh) | /bin/bash
+    /openhands/micromamba/bin/micromamba config remove channels defaults
+    /openhands/micromamba/bin/micromamba config list
+
+    # Create the openhands virtual environment and install poetry and python
+    /openhands/micromamba/bin/micromamba create -n openhands -y
+    /openhands/micromamba/bin/micromamba install -n openhands -c conda-forge poetry python=3.12 -y
+
+    # Create a clean openhands directory
+    if [ -d /openhands/code ]; then
+        rm -rf /openhands/code
+    fi
+    mkdir -p /openhands/code/openhands
+    touch /openhands/code/openhands/__init__.py
+
+    {{ install_dependencies() }}
+    # ================================================================
+    # END: Build Runtime Image from Scratch
+    # ================================================================
+{% endif %}
+
+    # ================================================================
+    # Copy Project source files
+    # ================================================================
+    if [ -d /openhands/code/openhands ]; then
+        rm -rf /openhands/code/openhands
+    fi
+
+    # Files are copied via %files section above
+    chmod a+rwx /openhands/code/openhands/__init__.py
+
+    {{ setup_vscode_server() }}
+
+    # ================================================================
+    # END: Build from versioned image
+    # ================================================================
+{% if build_from_versioned %}
+    {{ install_dependencies() }}
+    {{ install_vscode_extensions() }}
+{% endif %}
+
+    # Install extra dependencies if specified
+{% if extra_deps %}    {{ extra_deps }} {% endif %}
+
+%runscript
+    # Default runscript - can be overridden at runtime
+    exec "$@"
+
+%labels
+    Author OpenHands Team
+    Version {{ oh_version if oh_version is defined else 'latest' }}
+    Description OpenHands Runtime Environment
+
+%help
+    This is an OpenHands runtime environment container.
+
+    To run interactively:
+        apptainer shell openhands_runtime.sif
+
+    To execute commands:
+        apptainer exec openhands_runtime.sif <command>
