@@ -154,12 +154,19 @@ From: {{ base_image }}
     # Install micromamba
     mkdir -p /openhands/micromamba/bin
     /bin/bash -c "PREFIX_LOCATION=/openhands/micromamba BIN_FOLDER=/openhands/micromamba/bin INIT_YES=no CONDA_FORGE_YES=yes $(curl -L https://micro.mamba.pm/install.sh)"
+
+    # Configure micromamba
     /openhands/micromamba/bin/micromamba config remove channels defaults
     /openhands/micromamba/bin/micromamba config list
 
     # Create the openhands virtual environment and install poetry and python
+    # Set MAMBA_ROOT_PREFIX to ensure proper environment creation
+    export MAMBA_ROOT_PREFIX=/openhands/micromamba
     /openhands/micromamba/bin/micromamba create -n openhands -y
     /openhands/micromamba/bin/micromamba install -n openhands -c conda-forge poetry python=3.12 -y
+
+    # Verify environment was created
+    /openhands/micromamba/bin/micromamba env list
 
     # Create a clean openhands directory
     # if [ -d /openhands/code ]; then
