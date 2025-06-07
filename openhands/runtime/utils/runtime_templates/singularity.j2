@@ -69,6 +69,7 @@ From: {{ base_image }}
     # Setup VSCode Server
     RELEASE_TAG="openvscode-server-v1.98.2"
     RELEASE_ORG="gitpod-io"
+    OPENVSCODE_SERVER_ROOT="/openhands/.openvscode-server"
 
     if [ -z "${RELEASE_TAG}" ]; then
         echo "The RELEASE_TAG build arg must be set." >&2
@@ -98,6 +99,8 @@ From: {{ base_image }}
 
 {% macro install_vscode_extensions() %}
     # Install custom extensions
+    OPENVSCODE_SERVER_ROOT="/openhands/.openvscode-server"
+
     mkdir -p ${OPENVSCODE_SERVER_ROOT}/extensions/openhands-hello-world
     cp -r /openhands/code/openhands/runtime/utils/vscode-extensions/hello-world/* ${OPENVSCODE_SERVER_ROOT}/extensions/openhands-hello-world/
 
@@ -135,7 +138,10 @@ From: {{ base_image }}
     # Clear caches
     /openhands/micromamba/bin/micromamba run -n openhands poetry cache clear --all . -n
     apt-get clean
-    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    rm -rf /var/lib/apt/lists/*
+    # Clean only specific temp directories, avoid system-managed mounts
+    # find /tmp -maxdepth 1 -type f -delete 2>/dev/null || true
+    # find /var/tmp -maxdepth 1 -type f -delete 2>/dev/null || true
     /openhands/micromamba/bin/micromamba clean --all
 {% endmacro %}
 
