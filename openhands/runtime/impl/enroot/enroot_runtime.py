@@ -151,8 +151,8 @@ class EnrootRuntime(ActionExecutionClient):
         self.base_container_image = self.config.sandbox.base_container_image
         self.runtime_container_image = self.config.sandbox.runtime_container_image
         self.container_name = CONTAINER_NAME_PREFIX + self._get_enroot_image_name()
-        self.container_process = None
-        self.container_pid = None  # Store the actual container PID
+        self.container_process: subprocess.Popen[str] | None = None
+        self.container_pid: int | None = None  # Store the actual container PID
         self.main_module = main_module
 
         super().__init__(
@@ -431,6 +431,7 @@ class EnrootRuntime(ActionExecutionClient):
             time.sleep(2)
 
             # Check if the process started successfully
+            assert self.container_process is not None  # Help mypy understand this cannot be None
             if self.container_process.poll() is not None:
                 # Process failed to start, remove from registry
                 if self.container_pid in EnrootRuntime._active_container_pids:

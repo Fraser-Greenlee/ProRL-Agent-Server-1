@@ -151,8 +151,8 @@ class SingularityRuntime(ActionExecutionClient):
         self.base_container_image = self.config.sandbox.base_container_image
         self.runtime_container_image = self.config.sandbox.runtime_container_image
         self.container_name = CONTAINER_NAME_PREFIX + sid
-        self.container_process = None
-        self.container_pid = None  # Store the actual container PID
+        self.container_process: subprocess.Popen[str] | None = None
+        self.container_pid: int | None = None  # Store the actual container PID
         self.main_module = main_module
 
         super().__init__(
@@ -488,8 +488,11 @@ class SingularityRuntime(ActionExecutionClient):
     def wait_until_alive(self):
         if not self._is_container_running():
             # need to see the error message from the container
-            stdout, stderr = self.container_process.communicate()
-            logger.error(f'Container {self.container_name} is not running. Stdout: {stdout}, Stderr: {stderr}')
+            if self.container_process is not None:
+                stdout, stderr = self.container_process.communicate()
+                logger.error(f'Container {self.container_name} is not running. Stdout: {stdout}, Stderr: {stderr}')
+            else:
+                logger.error(f'Container {self.container_name} is not running. No process information available.')
             raise AgentRuntimeDisconnectedError(
                 f'Container {self.container_name} is not running.'
             )
