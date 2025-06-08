@@ -12,6 +12,13 @@ From: {{ base_image }}
     export OPENVSCODE_SERVER_ROOT=/openhands/.openvscode-server
     export PATH="/openhands/bin:${PATH}"
 
+    # Fix tmux environment variables to avoid user ID conflicts
+    # Clear TMUX to prevent conflicts with host tmux sessions
+    unset TMUX 2>/dev/null || true
+    export TMUX=""
+    # Set XDG_RUNTIME_DIR for root user (default container user)
+    export XDG_RUNTIME_DIR="/run/user/0"
+
 %files
     ./code/pyproject.toml /openhands/code/pyproject.toml
     ./code/poetry.lock /openhands/code/poetry.lock
@@ -58,6 +65,16 @@ From: {{ base_image }}
     # Remove UID 1000 users to avoid conflicts
     if getent passwd 1000 | grep -q pn; then userdel pn; fi
     if getent passwd 1000 | grep -q ubuntu; then userdel ubuntu; fi
+
+    # Create openhands user with UID 1000 for proper tmux environment (OPTIONAL)
+    # Uncomment these lines if you want to run as user 1000 instead of root:
+    # groupadd -g 1000 openhands
+    # useradd -u 1000 -g 1000 -m -s /bin/bash openhands
+    # usermod -aG sudo openhands
+    # echo 'openhands ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
+    # mkdir -p /run/user/1000
+    # chown openhands:openhands /run/user/1000
+    # chmod 700 /run/user/1000
 
     # Create necessary directories
     mkdir -p /openhands
