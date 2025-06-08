@@ -1,4 +1,8 @@
+{% if base_image.endswith('.sif') -%}
+Bootstrap: localimage
+{%- else -%}
 Bootstrap: docker
+{%- endif %}
 From: {{ base_image }}
 
 %environment

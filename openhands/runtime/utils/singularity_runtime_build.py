@@ -316,11 +316,11 @@ def build_runtime_image_in_folder(
     if runtime_builder.image_exists(lock_image_path):
         logger.debug(f'Build [{hash_image_path}] from lock image [{lock_image_path}]')
         build_from = BuildFromImageType.LOCK
-        base_image = f'library://localcontainer/{lock_image_path}'
+        base_image = lock_image_path  # lock_image_path is already a complete path
     elif runtime_builder.image_exists(versioned_image_path):
         logger.info(f'Build [{hash_image_path}] from versioned image [{versioned_image_path}]')
         build_from = BuildFromImageType.VERSIONED
-        base_image = f'library://localcontainer/{versioned_image_path}'
+        base_image = versioned_image_path  # versioned_image_path is already a complete path
     else:
         logger.debug(f'Build [{hash_image_path}] from scratch')
 
