@@ -186,10 +186,13 @@ def get_runtime_image_path_and_tag(base_image: str) -> tuple[str, str]:
         path_obj = Path(base_image)
         return str(path_obj.parent), path_obj.stem
     else:
-        if ':' not in base_image:
-            base_image = base_image + ':latest'
-        [repo, tag] = base_image.split(':')
-
+        if base_image.endswith('.sif'):
+            repo = Path(base_image).stem
+            tag = 'latest'
+        else:
+            if ':' not in base_image:
+                base_image = base_image + ':latest'
+            [repo, tag] = base_image.split(':')
         # Hash the repo if it's too long
         if len(repo) > 32:
             repo_hash = hashlib.md5(repo[:-24].encode()).hexdigest()[:8]
@@ -410,6 +413,9 @@ def get_hash_for_lock_files(base_image: str) -> str:
 
 
 def get_tag_for_versioned_image(base_image: str) -> str:
+    # remove '.sif' if it exists
+    if base_image.endswith('.sif'):
+        base_image = base_image[:-4]
     return base_image.replace('/', '_s_').replace(':', '_t_').lower()[-96:]
 
 
