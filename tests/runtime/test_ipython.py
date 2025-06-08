@@ -298,10 +298,13 @@ def test_ipython_package_install(temp_dir, runtime_cls, run_as_openhands):
 
 
 @pytest.mark.skipif(
-    os.environ.get('TEST_RUNTIME') == 'cli' or not os.getenv('RUN_AS_OPENHANDS', 'True').lower() in ['true', '1', 'yes'],
+    os.environ.get('TEST_RUNTIME') == 'cli'
+    or os.getenv('RUN_AS_OPENHANDS', 'True').lower() not in ['true', '1', 'yes'],
     reason='CLIRuntime does not support sudo with password prompts if the user has not enabled passwordless sudo',
 )
-def test_ipython_file_editor_permissions_as_openhands(temp_dir, runtime_cls, run_as_openhands):
+def test_ipython_file_editor_permissions_as_openhands(
+    temp_dir, runtime_cls, run_as_openhands
+):
     """Test file editor permission behavior when running as different users."""
     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
 

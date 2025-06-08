@@ -25,8 +25,15 @@ From: {{ base_image }}
     ./code/openhands /openhands/code/openhands
 
 %post
+    # Configure APT to work in container environment
+    export DEBIAN_FRONTEND=noninteractive
+    export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+
+    # Fix APT user/group switching issues in containers
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99sandboxdisable
+
     # Update package manager
-    apt-get update
+    apt-get update -o APT::Sandbox::User=root
 
 {% macro setup_base_system() %}
     # Install base system dependencies
@@ -142,7 +149,7 @@ From: {{ base_image }}
     /openhands/micromamba/bin/micromamba run -n openhands poetry install --only runtime --no-interaction --no-root
 
     # Install playwright and its dependencies
-    apt-get update
+    apt-get update -o APT::Sandbox::User=root
     /openhands/micromamba/bin/micromamba run -n openhands poetry run pip install playwright
     /openhands/micromamba/bin/micromamba run -n openhands poetry run playwright install --with-deps chromium
 
