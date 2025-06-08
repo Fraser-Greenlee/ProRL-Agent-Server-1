@@ -63,7 +63,7 @@ From: {{ base_image }}
     ln -s "$(dirname $(which node))/corepack" /usr/local/bin/corepack
     npm install -g corepack
     corepack enable yarn
-    curl -fsSL --compressed https://install.python-poetry.org | python -
+    # curl -fsSL --compressed https://install.python-poetry.org | python -
 {% endif %}
 
     # Install uv (required by MCP)
