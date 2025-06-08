@@ -48,7 +48,7 @@ From: {{ base_image }}
     # Install base system dependencies
     apt-get install -y --no-install-recommends \
         wget curl ca-certificates sudo apt-utils git jq tmux build-essential ripgrep \
-        {%- if 'ubuntu' in base_image and (base_image.endswith(':latest') or base_image.endswith(':24.04')) -%}
+        {%- if 'ubuntu' in base_image and (base_image.endswith(':latest') or base_image.endswith(':24.04') or base_image.endswith('24.04.sif')) -%}
         libgl1 \
         {%- else %}
         libgl1-mesa-glx \

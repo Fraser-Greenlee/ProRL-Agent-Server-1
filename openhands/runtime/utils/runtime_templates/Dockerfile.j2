@@ -19,6 +19,7 @@ RUN apt-get update && \
         {%- if 'ubuntu' in base_image and (base_image.endswith(':latest') or base_image.endswith(':24.04')) -%}
         libgl1 \
         {%- else %}
+        libgl1-mesa-glx \
         {% endif -%}
         libasound2-plugins libatomic1 && \
     {%- if 'ubuntu' in base_image -%}
