@@ -16,6 +16,11 @@ From: {{ base_image }}
     export OPENVSCODE_SERVER_ROOT=/openhands/.openvscode-server
     export PATH="/openhands/bin:${PATH}"
 
+    # add environment variables for SSL certificates
+    export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+    export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
     # Fix tmux environment variables to avoid user ID conflicts
     # Clear TMUX to prevent conflicts with host tmux sessions
     unset TMUX 2>/dev/null || true
@@ -53,10 +58,22 @@ From: {{ base_image }}
     {% if 'ubuntu' in base_image %}
     # Install Node.js
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+
+    # # Install Python 3.12 (add deadsnakes PPA if needed for older Ubuntu versions)
+    # if ! apt-cache show python3.12 >/dev/null 2>&1; then
+    #     apt-get install -y software-properties-common
+    #     add-apt-repository ppa:deadsnakes/ppa -y
+    #     apt-get update -o APT::Sandbox::User=root
+    # fi
+
     TZ=Etc/UTC DEBIAN_FRONTEND=noninteractive \
-        apt-get install -y --no-install-recommends nodejs python3.12 python-is-python3 python3-pip python3.12-venv
+        apt-get install -y --no-install-recommends nodejs
+
     corepack enable yarn
     {% endif -%}
+
+    # Update CA certificates
+    update-ca-certificates
 
     # Clean up
     apt-get clean
@@ -143,6 +160,11 @@ From: {{ base_image }}
     # Install all dependencies
     cd /openhands/code
 
+    # Ensure SSL certificates are available
+    export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+    export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
     # Configure micromamba and poetry
     /openhands/micromamba/bin/micromamba config set changeps1 False
     /openhands/micromamba/bin/micromamba run -n openhands poetry config virtualenvs.path /openhands/poetry
@@ -190,8 +212,12 @@ From: {{ base_image }}
     # Create the openhands virtual environment and install poetry and python
     # Set MAMBA_ROOT_PREFIX to ensure proper environment creation
     export MAMBA_ROOT_PREFIX=/openhands/micromamba
-    /openhands/micromamba/bin/micromamba create -n openhands -y
-    /openhands/micromamba/bin/micromamba install -n openhands -c conda-forge poetry python=3.12 -y
+    export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+    export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
+    # /openhands/micromamba/bin/micromamba create -n openhands -y
+    /openhands/micromamba/bin/micromamba create -n openhands -c conda-forge poetry python=3.12 ca-certificates certifi -y
 
     # Verify environment was created
     /openhands/micromamba/bin/micromamba env list
