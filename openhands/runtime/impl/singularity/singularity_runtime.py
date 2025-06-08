@@ -30,6 +30,11 @@ from openhands.runtime.utils.command import (
 )
 from openhands.utils.async_utils import call_sync_from_async
 from openhands.utils.shutdown_listener import add_shutdown_listener
+from openhands.runtime.utils.singularity_runtime_build import (
+    build_runtime_image,
+    SingularityRuntimeBuilder,
+    get_runtime_image_repo,
+)
 from openhands.utils.tenacity_stop import stop_if_should_exit
 
 CONTAINER_NAME_PREFIX = 'openhands-runtime-'
@@ -154,6 +159,7 @@ class SingularityRuntime(ActionExecutionClient):
         self.container_process: subprocess.Popen[str] | None = None
         self.container_pid: int | None = None  # Store the actual container PID
         self.main_module = main_module
+        self.runtime_builder = SingularityRuntimeBuilder()
 
         super().__init__(
             config,
@@ -267,12 +273,19 @@ class SingularityRuntime(ActionExecutionClient):
                 raise ValueError(
                     'Neither runtime container image nor base container image is set'
                 )
-            # For Singularity, we'll use the base image directly
-            self.runtime_container_image = self.base_container_image
-            self.send_status_message('STATUS$PREPARING_CONTAINER')
-
-        # Pull the image if it doesn't exist locally
-        self._pull_image_if_needed()
+            self.send_status_message('STATUS$STARTING_CONTAINER')
+            self.runtime_container_image = build_runtime_image(
+                self.base_container_image,
+                self.runtime_builder,
+                platform=self.config.sandbox.platform,
+                extra_deps=self.config.sandbox.runtime_extra_deps,
+                force_rebuild=self.config.sandbox.force_rebuild_runtime,
+                extra_build_args=self.config.sandbox.runtime_extra_build_args,
+            )
+        else:
+            # It has runtime container image in the dockerhub, so we need to pull it
+            # Pull the image if it doesn't exist locally
+            self._pull_image_if_needed()
 
     def _pull_image_if_needed(self):
         """Pull the container image for Singularity if not already available."""
@@ -302,9 +315,13 @@ class SingularityRuntime(ActionExecutionClient):
     def _get_singularity_image_path(self) -> str:
         """Get the Singularity image file path."""
         if self.runtime_container_image:
-            image_name = self.runtime_container_image.replace(':', '_').replace('/', '_')
-            os.makedirs('/root/singularity_images', exist_ok=True)
-            return f'/root/singularity_images/{image_name}.sif'
+            if not self.runtime_container_image.endswith('.sif'):
+                image_name = self.runtime_container_image.replace(':', '_').replace('/', '_')
+                image_repo = get_runtime_image_repo()
+                os.makedirs(image_repo, exist_ok=True)
+                return f'{image_repo}/{image_name}.sif'
+            else:
+                return self.runtime_container_image
         return ''
 
     def _process_volumes(self) -> list[str]:
@@ -573,7 +590,8 @@ class SingularityRuntime(ActionExecutionClient):
             container_name = CONTAINER_NAME_PREFIX + conversation_id
 
             # Optionally clean up image files (commented out to preserve for reuse)
-            image_path = f'/root/singularity_images/{container_name}.sif'
+            image_repo = get_runtime_image_repo()
+            image_path = f'{image_repo}/{container_name}.sif'
             if os.path.exists(image_path):
                 logger.info(f'Removing image file {image_path}')
                 # os.remove(image_path)

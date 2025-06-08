@@ -132,7 +132,7 @@ class SingularityRuntimeBuilder:
 
 
 def get_runtime_image_repo() -> str:
-    return os.getenv('OH_RUNTIME_SINGULARITY_IMAGE_REPO', '/tmp/openhands/singularity')
+    return os.getenv('OH_RUNTIME_SINGULARITY_IMAGE_REPO', '/root/singularity_images')
 
 
 def _generate_singularity_def(

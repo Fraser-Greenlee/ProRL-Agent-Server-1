@@ -78,8 +78,8 @@ class SingularityRuntimeBuilder(RuntimeBuilder):
         cmd = [
             self.singularity_cmd,
             'build',
-            f'--build-arg=OPENHANDS_RUNTIME_VERSION={oh_version}',
-            f'--build-arg=OPENHANDS_RUNTIME_BUILD_TIME={datetime.datetime.now().isoformat()}',
+#            f'--build-arg=OPENHANDS_RUNTIME_VERSION={oh_version}',
+#            f'--build-arg=OPENHANDS_RUNTIME_BUILD_TIME={datetime.datetime.now().isoformat()}',
         ]
 
         if extra_build_args:
