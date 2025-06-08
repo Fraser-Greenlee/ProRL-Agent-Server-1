@@ -1,7 +1,7 @@
 import os
 import subprocess
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest import TempPathFactory
@@ -34,7 +34,7 @@ def test_singularity_builder_init():
 def test_singularity_builder_init_not_available():
     """Test SingularityRuntimeBuilder initialization when singularity is not available."""
     with patch('openhands.runtime.builder.singularity.subprocess.run') as mock_run:
-        mock_run.side_effect = FileNotFoundError("Command not found")
+        mock_run.side_effect = FileNotFoundError('Command not found')
         with pytest.raises(AgentRuntimeBuildError):
             SingularityRuntimeBuilder('singularity')
 
@@ -50,7 +50,10 @@ def test_build_success(singularity_builder, temp_dir):
     mock_process.stdout.readline.side_effect = ['Building...', 'Complete!', '']
 
     with (
-        patch('openhands.runtime.builder.singularity.subprocess.Popen', return_value=mock_process),
+        patch(
+            'openhands.runtime.builder.singularity.subprocess.Popen',
+            return_value=mock_process,
+        ),
         patch('pathlib.Path.exists', return_value=True),
     ):
         result = singularity_builder.build(
@@ -83,7 +86,10 @@ def test_build_failed_process(singularity_builder, temp_dir):
     mock_process.stdout.readline.side_effect = ['Error building...', '']
 
     with (
-        patch('openhands.runtime.builder.singularity.subprocess.Popen', return_value=mock_process),
+        patch(
+            'openhands.runtime.builder.singularity.subprocess.Popen',
+            return_value=mock_process,
+        ),
         pytest.raises(AgentRuntimeBuildError),
     ):
         singularity_builder.build(
@@ -103,10 +109,13 @@ def test_build_multiple_tags(singularity_builder, temp_dir):
     mock_process.stdout.readline.side_effect = ['Building...', 'Complete!', '']
 
     with (
-        patch('openhands.runtime.builder.singularity.subprocess.Popen', return_value=mock_process),
+        patch(
+            'openhands.runtime.builder.singularity.subprocess.Popen',
+            return_value=mock_process,
+        ),
         patch('pathlib.Path.exists', return_value=True),
         patch('pathlib.Path.hardlink_to') as mock_hardlink,
-        patch('pathlib.Path.unlink') as mock_unlink,
+        patch('pathlib.Path.unlink'),
     ):
         result = singularity_builder.build(
             path=temp_dir,
@@ -224,7 +233,7 @@ def test_build_with_extra_args(singularity_builder, temp_dir):
         singularity_builder.build(
             path=temp_dir,
             tags=['test_image.sif'],
-            extra_build_args=['--fakeroot', '--sandbox']
+            extra_build_args=['--fakeroot', '--sandbox'],
         )
 
         # Check that extra args were included in the command
@@ -257,5 +266,5 @@ def test_build_permission_error(singularity_builder, temp_dir):
         patch('openhands.runtime.builder.singularity.subprocess.Popen') as mock_popen,
         pytest.raises(AgentRuntimeBuildError),
     ):
-        mock_popen.side_effect = PermissionError("Permission denied")
+        mock_popen.side_effect = PermissionError('Permission denied')
         singularity_builder.build(path=temp_dir, tags=['test_image.sif'])
