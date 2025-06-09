@@ -160,6 +160,7 @@ class SingularityRuntime(ActionExecutionClient):
         self.container_pid: int | None = None  # Store the actual container PID
         self.main_module = main_module
         self.runtime_builder = SingularityRuntimeBuilder()
+        self.headless_mode = headless_mode
 
         super().__init__(
             config,
@@ -224,6 +225,7 @@ class SingularityRuntime(ActionExecutionClient):
         return self.api_url
 
     async def connect(self):
+        # log the headless mode
         self.send_status_message('STATUS$STARTING_RUNTIME')
         try:
             await call_sync_from_async(self._attach_to_container)
@@ -256,8 +258,8 @@ class SingularityRuntime(ActionExecutionClient):
             await call_sync_from_async(self.setup_initial_env)
 
         self.log(
-            'debug',
-            f'Container initialized with plugins: {[plugin.name for plugin in self.plugins]}. VSCode URL: {self.vscode_url}',
+            'info',
+            f'Container initialized with plugins: {[plugin.name for plugin in self.plugins]}. VSCode URL: {self.vscode_url} Headless mode: {self.headless_mode}',
         )
         if not self.attach_to_existing:
             self.send_status_message(' ')
