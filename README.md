@@ -144,3 +144,12 @@ For a list of open source projects and licenses used in OpenHands, please see ou
       url={https://arxiv.org/abs/2407.16741},
 }
 ```
+## Use OpenHands In Slurm Cluster with Singularity Container
+Build
+```bash
+INSTALL_DOCKER=0 make -f Makefile.singularity build
+```
+Run
+```bash
+INSTALL_DOCKER=0 make -f Makefile.singularity run
+```

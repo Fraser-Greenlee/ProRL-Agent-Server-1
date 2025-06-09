@@ -236,12 +236,9 @@ class SingularityRuntime(ActionExecutionClient):
                 raise AgentRuntimeDisconnectedError from e
 
             self.maybe_prepare_runtime_container_image()
+
             self.log(
                 'info', f'Starting runtime with image: {self.runtime_container_image}'
-            )
-            self.log(
-                'info',
-                f'Container started: {self.container_name}. VSCode URL: {self.vscode_url}',
             )
 
         if not self.attach_to_existing:
@@ -265,6 +262,11 @@ class SingularityRuntime(ActionExecutionClient):
         if not self.attach_to_existing:
             self.send_status_message(' ')
         self._runtime_initialized = True
+
+        self.log(
+            'info',
+            f'Container started: {self.container_name}. VSCode URL: {self.vscode_url}',
+        )
 
     def maybe_prepare_runtime_container_image(self):
         """Prepare the runtime container image for Singularity."""
