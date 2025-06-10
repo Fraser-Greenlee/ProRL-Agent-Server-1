@@ -287,7 +287,7 @@ class SingularityRuntime(ActionExecutionClient):
                 raise AgentRuntimeDisconnectedError from e
 
         if not self._image_exists():
-            self.log('info', f'Image {self.runtime_container_image} not found.')
+            self.log('info', f'Runtime Image {self.runtime_container_image} not found.')
             self.maybe_prepare_runtime_container_image()
             self.log(
                 'info', f'Starting runtime with image: {self.runtime_container_image}'

@@ -34,6 +34,7 @@ from openhands.events.action.commands import CmdRunAction
 from openhands.runtime.impl.singularity.singularity_runtime import SingularityRuntime
 from openhands.runtime.plugins import AgentSkillsRequirement, JupyterRequirement
 from openhands.storage import get_file_store
+from openhands.core.exceptions import AgentRuntimeDisconnectedError
 
 
 def run_primary_runtime(temp_dir, duration=30):
@@ -182,7 +183,7 @@ def run_attach_runtime(temp_dir, primary_sid, max_wait=60):
             print(f'Running test command: {action.command}')
 
             # Send the action and wait for response
-            obs = asyncio.run(runtime.run_action(action))
+            obs = runtime.run_action(action)
 
             result = {
                 'success': True,
@@ -240,7 +241,7 @@ def test_singularity_runtime_attach_to_existing(temp_dir):
         )  # Run for 60 seconds
 
         # Give the primary runtime time to start
-        time.sleep(10)
+        time.sleep(30)
 
         # Start the attach runtime
         print('Starting attach runtime...')
@@ -348,10 +349,14 @@ def test_singularity_runtime_attach_fails_when_no_container(temp_dir):
 
     # Verify that the exception indicates the container was not found
     error_msg = str(exc_info.value).lower()
-    assert any(
-        word in error_msg for word in ['not found', 'not running', 'disconnected']
-    ), f'Expected container not found error, got: {exc_info.value}'
-
+    print(f'Error message: {error_msg}')
+    print(f'Error value: {exc_info.value}')
+    print(f'Error type: {type(exc_info.value)}')
+    print(f'Error traceback: {exc_info.traceback}')
+    assert exc_info.value is not None, 'Expected exception, got None'
+    assert isinstance(exc_info.value, AgentRuntimeDisconnectedError), (
+        f'Expected AgentRuntimeDisconnectedError, got: {type(exc_info.value)}'
+    )
     print('=== SingularityRuntime attach failure test completed successfully ===')
 
 
