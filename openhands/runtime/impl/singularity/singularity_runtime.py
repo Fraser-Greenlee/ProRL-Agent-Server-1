@@ -447,7 +447,7 @@ class SingularityRuntime(ActionExecutionClient):
                 raise RuntimeError(f'Singularity image not found: {image_path}')
 
             # Build the singularity exec command
-            cmd = ['singularity', 'run', '--fakeroot', '--pid', '--writable-tmpfs', '--no-home', '--home', '/root', '--workdir', '/workspace']
+            cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-home', '--home', '/root', '--workdir', '/workspace']
 
             # Add environment variables
             for key, value in env_vars.items():
