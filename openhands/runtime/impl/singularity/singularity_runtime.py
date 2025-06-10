@@ -103,8 +103,7 @@ def stop_all_singularity_containers(prefix: str = CONTAINER_NAME_PREFIX):
         else:
             logger.debug('No tracked singularity container processes to stop')
 
-        # Clean up all session port information
-        SingularityRuntime._session_port_info.clear()
+        # Note: Session port information cleanup is now handled per-session
 
     except Exception as e:
         logger.warning(f'Failed to stop singularity containers: {e}')
@@ -124,8 +123,7 @@ class SingularityRuntime(ActionExecutionClient):
     """
 
     _shutdown_listener_id: UUID | None = None
-    _active_container_pids: set[int] = set()  # Track all active container PIDs
-    _session_port_info: dict[str, dict] = {}  # Track session -> {pid: int, ports: dict} mapping
+    _active_container_pids: set[int] = set()  # Keep for backward compatibility with shutdown
 
     def __init__(
         self,
@@ -183,6 +181,33 @@ class SingularityRuntime(ActionExecutionClient):
                 'debug',
                 f'Installing extra user-provided dependencies in the runtime image: {self.config.sandbox.runtime_extra_deps}',
             )
+
+    def _get_session_storage_path(self) -> str:
+        """Get file path for storing session port information."""
+        return f'runtime/singularity_sessions/{self.sid}.json'
+
+    def _save_session_port_info(self, session_info: dict) -> None:
+        """Save session port information to file store."""
+        try:
+            json_str = json.dumps(session_info)
+            self.event_stream.file_store.write(self._get_session_storage_path(), json_str)
+        except Exception as e:
+            logger.warning(f'Failed to save session port info: {e}')
+
+    def _load_session_port_info(self) -> dict | None:
+        """Load session port information from file store."""
+        try:
+            json_str = self.event_stream.file_store.read(self._get_session_storage_path())
+            return json.loads(json_str)
+        except (FileNotFoundError, json.JSONDecodeError, Exception):
+            return None
+
+    def _delete_session_port_info(self) -> None:
+        """Delete session port information from file store."""
+        try:
+            self.event_stream.file_store.delete(self._get_session_storage_path())
+        except (FileNotFoundError, Exception):
+            pass  # Ignore if file doesn't exist
 
     @staticmethod
     def _check_singularity_availability():
@@ -253,7 +278,7 @@ class SingularityRuntime(ActionExecutionClient):
                 self.log('info', f'Successfully attached to existing container {self.container_name}')
         except Exception as e:
             logger.info(f'error: {e}')
-            logger.info(f'connect to container: {self.sid} Session info: {SingularityRuntime._session_port_info}')
+            logger.info(f'connect to container: {self.sid} Unable to attach to existing container')
             if self.attach_to_existing:
                 self.log(
                     'warning',
@@ -494,7 +519,7 @@ class SingularityRuntime(ActionExecutionClient):
                 )
 
             # Store session port information for later attachment
-            SingularityRuntime._session_port_info[self.sid] = {
+            session_info = {
                 'pid': self.container_pid,
                 'ports': {
                     'container_port': self._container_port,
@@ -503,6 +528,7 @@ class SingularityRuntime(ActionExecutionClient):
                     'app_port_2': self._app_ports[1],
                 }
             }
+            self._save_session_port_info(session_info)
 
             self.log('debug', f'Container started. Server url: {self.api_url}, PID: {self.container_pid}')
             self.send_status_message('STATUS$CONTAINER_STARTED')
@@ -519,9 +545,9 @@ class SingularityRuntime(ActionExecutionClient):
     def _attach_to_container(self):
         """Attach to an existing container."""
         # Get port information from class-level session registry
-        session_info = SingularityRuntime._session_port_info.get(self.sid)
+        session_info = self._load_session_port_info()
         if not session_info:
-            logger.info(f'attach to container: {self.sid} Session info: {SingularityRuntime._session_port_info}')
+            logger.info(f'attach to container: {self.sid} No session info found in file store')
             raise AgentRuntimeNotFoundError(f'Container {self.container_name} not found or not running.')
 
         self.container_pid = session_info['pid']
@@ -533,7 +559,7 @@ class SingularityRuntime(ActionExecutionClient):
                 os.kill(self.container_pid, 0)  # Check if process exists
             except (OSError, ProcessLookupError):
                 # Process doesn't exist anymore, clean up
-                SingularityRuntime._session_port_info.pop(self.sid, None)
+                self._delete_session_port_info()
                 SingularityRuntime._active_container_pids.discard(self.container_pid)
                 raise AgentRuntimeNotFoundError(f'Container {self.container_name} process no longer running.')
         else:
@@ -587,7 +613,7 @@ class SingularityRuntime(ActionExecutionClient):
             return
 
         # Clean up session port information
-        SingularityRuntime._session_port_info.pop(self.sid, None)
+        self._delete_session_port_info()
 
         # Stop Singularity processes
         if rm_all_containers:
