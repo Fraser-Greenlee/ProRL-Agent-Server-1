@@ -144,12 +144,65 @@ For a list of open source projects and licenses used in OpenHands, please see ou
       url={https://arxiv.org/abs/2407.16741},
 }
 ```
-## Use OpenHands In Slurm Cluster with Singularity Container
-Build
+
+
+## Running OpenHands on Slurm Clusters with Singularity Containers
+
+This guide explains how to deploy OpenHands on high-performance computing (HPC) clusters using Slurm and Singularity containers.
+
+### Prerequisites
+
+- Access to a Slurm cluster and launch a container with Singularity installed
+- A powerful Hugging Face model for the VLLM server
+
+### Step 1: Launch the VLLM Server
+
+Start the VLLM server with your desired Hugging Face model:
+
+```bash
+vllm serve path_to_hf_model
+```
+
+Replace `path_to_hf_model` with the actual path to your Hugging Face model.
+
+### Step 2: Install Dependencies
+
+Build OpenHands (Docker installation disabled):
+
 ```bash
 INSTALL_DOCKER=0 make -f Makefile.singularity build
 ```
-Run
+
+### Step 3: Start the OpenHands Server
+
+Launch the OpenHands server (both frontend and backend):
+
 ```bash
 INSTALL_DOCKER=0 make -f Makefile.singularity run
 ```
+
+### Step 4: Configure the Web Interface
+
+1. **Access the OpenHands web interface** in your browser
+2. **Navigate to LLM Settings** and enable **Advanced Options**
+3. **Configure the following fields:**
+
+   - **Custom Model**: Enter the model path
+     ```
+     hosted_vllm/path_to_hf_model
+     ```
+
+   - **Base URL**: Set the VLLM server endpoint
+     ```
+     http://localhost:8000/v1
+     ```
+
+   - **API Key**: Enter any random string (required for validation)
+
+4. **Click Save** to apply the configuration
+
+### Notes
+
+- Ensure the VLLM server is running and accessible before starting OpenHands
+- The API key can be any string since it's only used for local validation
+- Make sure port 8000 is accessible between your VLLM server and OpenHands instance
