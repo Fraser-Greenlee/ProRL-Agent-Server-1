@@ -528,13 +528,17 @@ class SingularityRuntime(ActionExecutionClient):
         port_info = session_info['ports']
 
         # Verify the process is still running
-        try:
-            os.kill(self.container_pid, 0)  # Check if process exists
-        except (OSError, ProcessLookupError):
-            # Process doesn't exist anymore, clean up
-            SingularityRuntime._session_port_info.pop(self.sid, None)
-            SingularityRuntime._active_container_pids.discard(self.container_pid)
-            raise AgentRuntimeNotFoundError(f'Container {self.container_name} process no longer running.')
+        if self.container_pid is not None:
+            try:
+                os.kill(self.container_pid, 0)  # Check if process exists
+            except (OSError, ProcessLookupError):
+                # Process doesn't exist anymore, clean up
+                SingularityRuntime._session_port_info.pop(self.sid, None)
+                SingularityRuntime._active_container_pids.discard(self.container_pid)
+                raise AgentRuntimeNotFoundError(f'Container {self.container_name} process no longer running.')
+        else:
+            # If we don't have a PID, something went wrong
+            raise AgentRuntimeNotFoundError(f'Container {self.container_name} has no valid PID.')
 
         # Set up port information from stored data
         self._container_port = port_info['container_port']
