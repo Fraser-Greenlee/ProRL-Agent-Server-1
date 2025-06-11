@@ -95,6 +95,11 @@ def get_config(
         instance_id=instance['instance_id'],
     )
 
+    sandbox_config.runtime_container_image = (
+        '/lustre/fsw/portfolios/nvr/users/mingjiel/root/singularity_images/'
+        'xingyaoww_sweb.eval.x86_64.getmoto_s_moto-7365.sif'
+    )
+
     config = OpenHandsConfig(
         default_agent=metadata.agent_class,
         run_as_openhands=False,
@@ -128,12 +133,12 @@ def get_config(
     return config
 
 async def initialize_agents(
-        instance:pd.Series,
-        llm_config:LLMConfig,
-        eval_output_dir:str = "/root",
-        git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a",
-        dataset:str = "swebench",
-        data_split:str = "train",
+        instance: pd.Series,
+        llm_config: LLMConfig | None = None,
+        eval_output_dir: str = "/root",
+        git_commit: str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a",
+        dataset: str = "swebench",
+        data_split: str = "train",
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
     """
     llm_config = LLMConfig(
@@ -146,6 +151,19 @@ async def initialize_agents(
         temperature=0.6,
     )
     """
+    # Fall back to a sensible default if the caller does not provide an
+    # explicit ``llm_config`` (mirrors the behaviour of the old
+    # ``initialize_agents`` implementation that lived in
+    # ``scripts/test_local_agent.py``).
+    if llm_config is None:
+        llm_config = LLMConfig(
+            model="gpt-4o-mini",
+            base_url="https://api.openai.com/v1",
+            api_key=os.environ.get("OPENAI_API_KEY", ""),
+            modify_params=False,
+            log_completions=True,
+        )
+
     metadata = EvalMetadata(
         agent_class="CodeActAgent",
         llm_config=llm_config,
@@ -179,7 +197,11 @@ async def initialize_agents(
         logger.error(f"Error initializing runtime: {e}")
         raise e
 
-    return runtime, metadata, config, instance
+    # Return the same triple expected by all current call-sites. The caller
+    # already has easy access to *instance* so we no longer return it here
+    # (this avoids the previous mismatch where some sites expected three
+    # return values).
+    return runtime, metadata, config
 
 async def run_agent(
         runtime:Runtime,
@@ -379,18 +401,18 @@ if __name__ == "__main__":
     instance = pd.Series(instance)
     instance = instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
 
-    try:
-        # Try to get the current event loop
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        # No event loop exists in this thread, create a new one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    # try:
+    #     # Try to get the current event loop
+    #     loop = asyncio.get_event_loop()
+    # except RuntimeError:
+    #     # No event loop exists in this thread, create a new one
+    #     loop = asyncio.new_event_loop()
+    #     asyncio.set_event_loop(loop)
 
-    result = loop.run_until_complete(run(instance))
-    print("BEGIN RESULTS.")
-    print(result)
-    print("END RESULTS.")
+    # result = loop.run_until_complete(run(instance))
+    # print("BEGIN RESULTS.")
+    # print(result)
+    # print("END RESULTS.")
 
     mock_patch = """
     diff --git a/openhands_patch_test.txt b/openhands_patch_test.txt
