@@ -85,17 +85,21 @@ def create_and_test_runtime(test_params):
         connection_start = time.time()
 
         # Try to connect
-        await_result = asyncio.run(runtime.connect())
+        asyncio.run(runtime.connect())
 
         connection_time = time.time() - connection_start
-        print(f'[RUNTIME {runtime_id}] Connected successfully in {connection_time:.2f}s')
+        print(
+            f'[RUNTIME {runtime_id}] Connected successfully in {connection_time:.2f}s'
+        )
 
         # Test with a simple command
         print(f'[RUNTIME {runtime_id}] Testing with echo command...')
         action = CmdRunAction(command=f'echo "hello world {runtime_id}"')
         obs = runtime.run_action(action)
 
-        print(f'[RUNTIME {runtime_id}] Command result: exit_code={obs.exit_code}, output="{obs.content.strip()}"')
+        print(
+            f'[RUNTIME {runtime_id}] Command result: exit_code={obs.exit_code}, output="{obs.content.strip()}"'
+        )
 
         # Clean up
         runtime.close()
@@ -139,7 +143,7 @@ def test_singularity_runtime_parallel_debug(temp_dir):
     print('\n=== DEBUGGING SINGULARITY RUNTIME PARALLEL EXECUTION ===')
     print(f'Workspace: {temp_dir}')
 
-    n_runtimes = 2
+    n_runtimes = 4
 
     # Test 1: Sequential execution (baseline)
     print(f'\n--- TEST 1: Sequential execution of {n_runtimes} runtimes ---')
@@ -158,7 +162,9 @@ def test_singularity_runtime_parallel_debug(temp_dir):
         if result['success']:
             print(f'[SEQUENTIAL] Runtime {i}: SUCCESS in {result["total_time"]:.2f}s')
         else:
-            print(f'[SEQUENTIAL] Runtime {i}: FAILED in {result["total_time"]:.2f}s - {result["error"]}')
+            print(
+                f'[SEQUENTIAL] Runtime {i}: FAILED in {result["total_time"]:.2f}s - {result["error"]}'
+            )
 
     sequential_time = time.time() - sequential_start
     print(f'[SEQUENTIAL] Total time: {sequential_time:.2f}s')
@@ -193,24 +199,30 @@ def test_singularity_runtime_parallel_debug(temp_dir):
                 parallel_results.append(result)
 
                 if result['success']:
-                    print(f'[PARALLEL] Runtime {runtime_id}: SUCCESS in {result["total_time"]:.2f}s')
+                    print(
+                        f'[PARALLEL] Runtime {runtime_id}: SUCCESS in {result["total_time"]:.2f}s'
+                    )
                 else:
-                    print(f'[PARALLEL] Runtime {runtime_id}: FAILED in {result["total_time"]:.2f}s - {result["error"]}')
+                    print(
+                        f'[PARALLEL] Runtime {runtime_id}: FAILED in {result["total_time"]:.2f}s - {result["error"]}'
+                    )
 
             except Exception as e:
                 print(f'[PARALLEL] Runtime {runtime_id}: EXCEPTION - {e}')
-                parallel_results.append({
-                    'runtime_id': runtime_id,
-                    'success': False,
-                    'error': str(e),
-                    'error_type': type(e).__name__,
-                })
+                parallel_results.append(
+                    {
+                        'runtime_id': runtime_id,
+                        'success': False,
+                        'error': str(e),
+                        'error_type': type(e).__name__,
+                    }
+                )
 
     parallel_time = time.time() - parallel_start
     print(f'[PARALLEL] Total time: {parallel_time:.2f}s')
 
     # Analyze results
-    print(f'\n--- ANALYSIS ---')
+    print('\n--- ANALYSIS ---')
 
     sequential_successes = sum(1 for r in sequential_results if r['success'])
     parallel_successes = sum(1 for r in parallel_results if r['success'])
@@ -219,13 +231,17 @@ def test_singularity_runtime_parallel_debug(temp_dir):
     print(f'Parallel: {parallel_successes}/{n_runtimes} successful')
 
     if sequential_successes > 0 and parallel_successes == 0:
-        print('\n*** ISSUE CONFIRMED: Runtimes work sequentially but fail in parallel ***')
+        print(
+            '\n*** ISSUE CONFIRMED: Runtimes work sequentially but fail in parallel ***'
+        )
 
         # Show error details
         print('\nParallel execution errors:')
         for result in parallel_results:
             if not result['success']:
-                print(f'  Runtime {result["runtime_id"]}: {result["error_type"]} - {result["error"]}')
+                print(
+                    f'  Runtime {result["runtime_id"]}: {result["error_type"]} - {result["error"]}'
+                )
 
         # This would normally fail the test, but for debugging we want to see the output
         print('\n*** DIAGNOSTIC TEST COMPLETE - CHECK LOGS FOR DETAILED ERROR INFO ***')
@@ -236,7 +252,9 @@ def test_singularity_runtime_parallel_debug(temp_dir):
         print(f'Efficiency ratio: {efficiency:.2f}x')
 
     else:
-        print(f'\n*** PARTIAL SUCCESS: {parallel_successes}/{n_runtimes} runtimes succeeded in parallel ***')
+        print(
+            f'\n*** PARTIAL SUCCESS: {parallel_successes}/{n_runtimes} runtimes succeeded in parallel ***'
+        )
 
     # For debugging purposes, let's not fail the test, just report findings
     print('\n=== DEBUG TEST COMPLETED ===')
