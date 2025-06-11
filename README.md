@@ -206,3 +206,9 @@ INSTALL_DOCKER=0 make -f Makefile.singularity run
 - Ensure the VLLM server is running and accessible before starting OpenHands
 - The API key can be any string since it's only used for local validation
 - Make sure port 8000 is accessible between your VLLM server and OpenHands instance
+
+## Run unit tests
+Example:
+```bash
+TEST_RUNTIME=singularity RUN_AS_OPENHANDS=False PYTHONPATH='.' pytest tests/runtime/test_browsing.py -v
+```
