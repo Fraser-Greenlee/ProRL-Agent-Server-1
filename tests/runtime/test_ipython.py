@@ -4,7 +4,6 @@ import os
 
 import pytest
 from conftest import (
-    TEST_IN_CI,
     _close_test_runtime,
     _load_runtime,
 )
