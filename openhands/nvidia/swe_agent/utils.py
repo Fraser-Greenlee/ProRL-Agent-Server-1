@@ -430,7 +430,8 @@ if __name__ == "__main__":
         for idx in range(1):
             inst_clone = instance.copy()
             inst_clone["instance_id"] = f"{instance['instance_id']}_{idx}"
-            tasks.append(_evaluate_agent(mock_patch, inst_clone))
+            gold_patch = inst_clone['patch']
+            tasks.append(_evaluate_agent(gold_patch, inst_clone))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     try:
