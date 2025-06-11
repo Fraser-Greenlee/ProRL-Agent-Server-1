@@ -41,11 +41,32 @@ def get_platform_command(linux_cmd, windows_cmd):
     return windows_cmd if is_windows() else linux_cmd
 
 
+def _get_python_command(runtime):
+    """Get the appropriate Python command (python or python3) for the container."""
+    # Try python first, then python3 if python doesn't exist
+    test_python = CmdRunAction(command='python --version')
+    obs = runtime.run_action(test_python)
+    if obs.exit_code == 0:
+        return 'python'
+
+    # If python failed, try python3
+    test_python3 = CmdRunAction(command='python3 --version')
+    obs = runtime.run_action(test_python3)
+    if obs.exit_code == 0:
+        return 'python3'
+
+    # If both failed, default to python (will likely fail but maintains existing behavior)
+    return 'python'
+
+
 def test_bash_server(temp_dir, runtime_cls, run_as_openhands):
     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
+        # Get the appropriate Python command for this container
+        python_cmd = _get_python_command(runtime)
+
         # Use python -u for unbuffered output, potentially helping capture initial output on Windows
-        action = CmdRunAction(command='python -u -m http.server 8088')
+        action = CmdRunAction(command=f'{python_cmd} -u -m http.server 8088')
         action.set_hard_timeout(1)
         obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -103,7 +124,7 @@ def test_bash_server(temp_dir, runtime_cls, run_as_openhands):
             assert config.workspace_mount_path_in_sandbox in obs.metadata.working_dir
 
         # run it again!
-        action = CmdRunAction(command='python -u -m http.server 8088')
+        action = CmdRunAction(command=f'{python_cmd} -u -m http.server 8088')
         action.set_hard_timeout(1)
         obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -119,8 +140,11 @@ def test_bash_background_server(temp_dir, runtime_cls, run_as_openhands):
     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     server_port = 8088
     try:
+        # Get the appropriate Python command for this container
+        python_cmd = _get_python_command(runtime)
+
         # Start the server, expect it to timeout (run in background manner)
-        action = CmdRunAction(f'python3 -m http.server {server_port} &')
+        action = CmdRunAction(f'{python_cmd} -m http.server {server_port} &')
         obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
         assert isinstance(obs, CmdOutputObservation)
@@ -872,7 +896,9 @@ def test_git_operation(temp_dir, runtime_cls, run_as_openhands):
 def test_python_version(temp_dir, runtime_cls, run_as_openhands):
     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
-        obs = runtime.run_action(CmdRunAction(command='python --version'))
+        # Get the appropriate Python command for this container
+        python_cmd = _get_python_command(runtime)
+        obs = runtime.run_action(CmdRunAction(command=f'{python_cmd} --version'))
 
         assert isinstance(obs, CmdOutputObservation), (
             'The observation should be a CmdOutputObservation.'
@@ -1095,11 +1121,11 @@ def test_command_backslash(temp_dir, runtime_cls, run_as_openhands):
             'find /tmp/test_dir -type f -exec grep -l "implemented_function" {} \\;'
         )
         obs = runtime.run_action(action)
-        import time
+        # import time
 
-        time.sleep(5)
-        action = CmdRunAction('')
-        obs = runtime.run_action(action)
+        # time.sleep(5)
+        # action = CmdRunAction('')
+        # obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
         assert obs.exit_code == 0
         assert '/tmp/test_dir/file_1.txt' in obs.content
@@ -1370,12 +1396,15 @@ def test_empty_command_errors(temp_dir, runtime_cls, run_as_openhands):
 def test_python_interactive_input(temp_dir, runtime_cls, run_as_openhands):
     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
+        # Get the appropriate Python command for this container
+        python_cmd = _get_python_command(runtime)
+
         # Test Python program that asks for input - same for both platforms
         python_script = """name = input('Enter your name: '); age = input('Enter your age: '); print(f'Hello {name}, you are {age} years old')"""
 
         # Start Python with the interactive script
         # For both platforms we can use the same command
-        obs = runtime.run_action(CmdRunAction(f'python -c "{python_script}"'))
+        obs = runtime.run_action(CmdRunAction(f'{python_cmd} -c "{python_script}"'))
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
         assert 'Enter your name:' in obs.content
         assert obs.metadata.exit_code == -1  # -1 indicates command is still running
@@ -1408,11 +1437,14 @@ def test_python_interactive_input_without_set_input(
 ):
     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
     try:
+        # Get the appropriate Python command for this container
+        python_cmd = _get_python_command(runtime)
+
         # Test Python program that asks for input
         python_script = """name = input('Enter your name: '); age = input('Enter your age: '); print(f'Hello {name}, you are {age} years old')"""
 
         # Start Python with the interactive script
-        obs = runtime.run_action(CmdRunAction(f'python -c "{python_script}"'))
+        obs = runtime.run_action(CmdRunAction(f'{python_cmd} -c "{python_script}"'))
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
         assert 'Enter your name:' in obs.content
         assert obs.metadata.exit_code == -1  # -1 indicates command is still running

@@ -101,14 +101,14 @@ def test_simple_cmd_ipython_and_fileop(temp_dir, runtime_cls, run_as_openhands):
     _close_test_runtime(runtime)
 
 
-@pytest.mark.skipif(
-    TEST_IN_CI != 'True',
-    reason='This test is not working in WSL (file ownership)',
-)
-@pytest.mark.skipif(
-    os.environ.get('TEST_RUNTIME') == 'cli',
-    reason='CLIRuntime does not support full IPython/Jupyter kernel features or return IPythonRunCellObservation',
-)
+# @pytest.mark.skipif(
+#     TEST_IN_CI != 'True',
+#     reason='This test is not working in WSL (file ownership)',
+# )
+# @pytest.mark.skipif(
+#     os.environ.get('TEST_RUNTIME') == 'cli',
+#     reason='CLIRuntime does not support full IPython/Jupyter kernel features or return IPythonRunCellObservation',
+# )
 def test_ipython_multi_user(temp_dir, runtime_cls, run_as_openhands):
     runtime, config = _load_runtime(temp_dir, runtime_cls, run_as_openhands)
 
