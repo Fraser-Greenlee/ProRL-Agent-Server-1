@@ -26,7 +26,7 @@ class AsyncOpenHandsServer:
         heapq.heappush(self.weighted_addresses, [0, llm_server_address])
 
     def create_llm_config(self, sampling_params):
-        if len(self.llm_server_addresses) == 0:
+        if len(self.weighted_addresses) == 0:
             raise ValueError("No LLM server addresses added")
         
         address = self.weighted_addresses[0][1]
@@ -39,11 +39,11 @@ class AsyncOpenHandsServer:
         )
         return llm_config
     
-    async def process(self, instance, llm_server_address, sampling_params):
-        if len(self.llm_server_addresses) == 0:
+    async def process(self, instance, sampling_params):
+        if len(self.weighted_addresses) == 0:
             raise ValueError("No LLM server addresses added")
         
-        llm_config = self.create_llm_config(sampling_params, llm_server_address)
+        llm_config = self.create_llm_config(sampling_params)
         job_id = get_job_id(instance)
         if job_id in self._results:
             raise ValueError(f"Job {job_id} already added")
@@ -144,7 +144,7 @@ async def test_server():
     server = AsyncOpenHandsServer(llm_server_addresses=[llm_server_address, llm_server_address], max_init_workers=1, max_run_workers=1)
     await server.start()
     for instance in requests:
-        future =  server.process(instance, llm_server_address, sampling_params)
+        future =  server.process(instance, sampling_params)
         futures.append(future)
     results = await asyncio.gather(*futures)
     await server.stop()
