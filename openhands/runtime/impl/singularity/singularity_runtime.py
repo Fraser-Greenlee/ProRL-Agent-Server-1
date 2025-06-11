@@ -294,7 +294,7 @@ class SingularityRuntime(ActionExecutionClient):
             )
 
         if not self.attach_to_existing:
-            self.log('info', f'Waiting for client to become ready at {self.api_url}...')
+            self.log('info', f'Container Image: {self.runtime_container_image} is ready, launching runtime...')
             self.send_status_message('STATUS$WAITING_FOR_CLIENT')
 
         # Only call init_container if we're not attaching to an existing container
