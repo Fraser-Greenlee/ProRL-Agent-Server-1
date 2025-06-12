@@ -355,17 +355,18 @@ def create_test_file_and_copy_to_runtime(test_params):
 
         # Test copy_to operation
         print(f'[COPY_TO {runtime_id}] Testing copy_to operation...')
-        container_dest_path = f'/tmp/copied_file_{runtime_id}.txt'
+        container_dest_dir = f'/tmp/copytest_{runtime_id}'
+        container_dest_file = f'{container_dest_dir}/test_file_{runtime_id}.txt'
 
         copy_start = time.time()
-        runtime.copy_to(test_file_path, container_dest_path, recursive=False)
+        runtime.copy_to(test_file_path, container_dest_dir, recursive=False)
         copy_time = time.time() - copy_start
 
         print(f'[COPY_TO {runtime_id}] File copied in {copy_time:.2f}s')
 
         # Verify the file was copied correctly using a command
         print(f'[COPY_TO {runtime_id}] Verifying file size...')
-        check_action = CmdRunAction(command=f'wc -c {container_dest_path}')
+        check_action = CmdRunAction(command=f'wc -c {container_dest_file}')
         obs = runtime.run_action(check_action)
 
         print(
@@ -384,7 +385,7 @@ def create_test_file_and_copy_to_runtime(test_params):
 
         # Test reading the file content to ensure it's correct
         print(f'[COPY_TO {runtime_id}] Verifying file content...')
-        content_action = CmdRunAction(command=f'head -n 5 {container_dest_path}')
+        content_action = CmdRunAction(command=f'head -n 5 {container_dest_file}')
         content_obs = runtime.run_action(content_action)
 
         # Clean up
@@ -393,6 +394,10 @@ def create_test_file_and_copy_to_runtime(test_params):
         total_time = time.time() - start_time
 
         size_match = actual_size == expected_size if actual_size is not None else False
+
+        # print the preview of the content
+        if content_obs.exit_code == 0:
+            print(f'[COPY_TO {runtime_id}] File content preview: {content_obs.content.strip()[:100]}')
 
         return {
             'runtime_id': runtime_id,
