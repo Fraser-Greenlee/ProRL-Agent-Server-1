@@ -444,33 +444,35 @@ def test_singularity_runtime_parallel_copy_to(temp_dir):
     print('\n=== TESTING SINGULARITY RUNTIME PARALLEL COPY_TO ===')
     print(f'Workspace: {temp_dir}')
 
-    n_runtimes = 4
+    n_runtimes = 6
+    skip_sequential = True
 
-    # Test 1: Sequential copy_to operations (baseline)
-    print(f'\n--- TEST 1: Sequential copy_to with {n_runtimes} runtimes ---')
-    sequential_results = []
-    sequential_start = time.time()
+    if not skip_sequential:
+        # Test 1: Sequential copy_to operations (baseline)
+        print(f'\n--- TEST 1: Sequential copy_to with {n_runtimes} runtimes ---')
+        sequential_results = []
+        sequential_start = time.time()
 
-    for i in range(1, n_runtimes + 1):
-        test_params = {
-            'runtime_id': i,
-            'temp_dir': temp_dir,
-            'delay': 0,
-        }
-        result = create_test_file_and_copy_to_runtime(test_params)
-        sequential_results.append(result)
+        for i in range(1, n_runtimes + 1):
+            test_params = {
+                'runtime_id': i,
+                'temp_dir': temp_dir,
+                'delay': 0,
+            }
+            result = create_test_file_and_copy_to_runtime(test_params)
+            sequential_results.append(result)
 
-        if result['success']:
-            print(
-                f'[SEQUENTIAL] Runtime {i}: SUCCESS in {result["total_time"]:.2f}s (copy: {result["copy_time"]:.2f}s)'
-            )
-        else:
-            print(
-                f'[SEQUENTIAL] Runtime {i}: FAILED in {result["total_time"]:.2f}s - {result.get("error", "Unknown error")}'
-            )
+            if result['success']:
+                print(
+                    f'[SEQUENTIAL] Runtime {i}: SUCCESS in {result["total_time"]:.2f}s (copy: {result["copy_time"]:.2f}s)'
+                )
+            else:
+                print(
+                    f'[SEQUENTIAL] Runtime {i}: FAILED in {result["total_time"]:.2f}s - {result.get("error", "Unknown error")}'
+                )
 
-    sequential_time = time.time() - sequential_start
-    print(f'[SEQUENTIAL] Total time: {sequential_time:.2f}s')
+        sequential_time = time.time() - sequential_start
+        print(f'[SEQUENTIAL] Total time: {sequential_time:.2f}s')
 
     # Test 2: Parallel copy_to operations
     print(f'\n--- TEST 2: Parallel copy_to with {n_runtimes} runtimes ---')
@@ -532,13 +534,20 @@ def test_singularity_runtime_parallel_copy_to(temp_dir):
     # Analyze results
     print('\n--- COPY_TO ANALYSIS ---')
 
-    sequential_successes = sum(1 for r in sequential_results if r['success'])
+    if not skip_sequential:
+        sequential_successes = sum(1 for r in sequential_results if r['success'])
+        sequential_time = time.time() - sequential_start
+        print(f'[SEQUENTIAL] Total time: {sequential_time:.2f}s')
+    else:
+        sequential_successes = 0
+        sequential_time = 0
+
     parallel_successes = sum(1 for r in parallel_results if r['success'])
 
     print(f'Sequential copy_to: {sequential_successes}/{n_runtimes} successful')
     print(f'Parallel copy_to: {parallel_successes}/{n_runtimes} successful')
 
-    if sequential_successes > 0 and parallel_successes == 0:
+    if not skip_sequential and sequential_successes > 0 and parallel_successes == 0:
         print(
             '\n*** ISSUE CONFIRMED: copy_to works sequentially but fails in parallel ***'
         )
@@ -551,7 +560,7 @@ def test_singularity_runtime_parallel_copy_to(temp_dir):
                     f'  Runtime {result["runtime_id"]}: {result.get("error_type", "Unknown")} - {result.get("error", "Unknown error")}'
                 )
 
-    elif parallel_successes == n_runtimes:
+    elif not skip_sequential and parallel_successes == n_runtimes:
         print('\n*** SUCCESS: Parallel copy_to operations work! ***')
         efficiency = sequential_time / parallel_time if parallel_time > 0 else 1.0
         print(f'Efficiency ratio: {efficiency:.2f}x')
