@@ -165,6 +165,11 @@ vllm serve path_to_hf_model
 
 Replace `path_to_hf_model` with the actual path to your Hugging Face model.
 
+Example:
+```bash
+vllm serve /path/Qwen3-8B --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser deepseek_r1 --host 127.0.0.1 --port 8000
+```
+
 ### Step 2: Install Dependencies
 
 Build OpenHands (Docker installation disabled):
