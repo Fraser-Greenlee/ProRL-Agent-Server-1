@@ -133,24 +133,14 @@ def get_config(
     return config
 
 async def initialize_agents(
-        instance: pd.Series,
-        llm_config: LLMConfig | None = None,
-        eval_output_dir: str = "/root",
-        git_commit: str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a",
-        dataset: str = "swebench",
-        data_split: str = "train",
+        instance:pd.Series, 
+        llm_config:LLMConfig,
+        sid:str = None,
+        eval_output_dir:str = "/root",
+        git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a", 
+        dataset:str = "swebench", 
+        data_split:str = "train", 
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
-    """
-    llm_config = LLMConfig(
-        model="openai/Qwen/Qwen3-8B",
-        base_url="http://127.0.0.1:8000/v1",
-        api_key="mykey",
-        modify_params=False,
-        log_completions=True,
-        native_tool_calling=True,
-        temperature=0.6,
-    )
-    """
     # Fall back to a sensible default if the caller does not provide an
     # explicit ``llm_config`` (mirrors the behaviour of the old
     # ``initialize_agents`` implementation that lived in
@@ -168,7 +158,7 @@ async def initialize_agents(
         agent_class="CodeActAgent",
         llm_config=llm_config,
         agent_config=None,
-        max_iterations=50,
+        max_iterations=1,
         eval_output_dir=eval_output_dir,
         start_time=time.strftime('%Y-%m-%d %H:%M:%S'),
         git_commit=git_commit,
@@ -186,9 +176,10 @@ async def initialize_agents(
         config.sandbox.remote_runtime_resource_factor
     )
 
-    runtime = create_runtime(config)
+    runtime = create_runtime(config, sid=sid)
 
     await runtime.connect()
+    print(f"Runtime connected {runtime.action_execution_server_url}")
 
     try:
         initialize_runtime(runtime, instance, metadata)
@@ -231,9 +222,7 @@ async def run_agent(
     except Exception as e:
         logger.error(f"Error running agent: {e}")
         #raise e
-        runtime.close()
         return ""
-    runtime.close()
     return git_patch
 
 async def run(instance):

@@ -3,24 +3,55 @@ from openhands.nvidia.swe_agent.utils import initialize_agents, run_agent
 from openhands.core.config.llm_config import LLMConfig
 from typing import List
 import heapq
+import uuid
+import pandas as pd
+from openhands.runtime.base import Runtime
+from evaluation.utils.shared import EvalMetadata
+from openhands.core.config import OpenHandsConfig
+from concurrent.futures import ThreadPoolExecutor
+import copy
+import queue
+import threading
+import time
 
-def get_job_id(instance):
-    return f"swebench_{instance.instance_id}_{instance.trajectory_id}"
+class JobDetails:
+    job_id: str = None
+    instance: pd.Series = None
+    llm_config: LLMConfig = None
+    runtime: Runtime = None
+    metadata: EvalMetadata = None
+    config: OpenHandsConfig = None
+    result: str = None
+    event: threading.Event = None
+    start_time: float = None
+    start_run_time: float = None
+    end_time: float = None
 
-class AsyncOpenHandsServer:
+class OpenHandsServer:
     def __init__(self, llm_server_addresses: List[str] = [], max_init_workers:int = 6, max_run_workers:int = 5):
         self.max_init_workers = max_init_workers
         self.max_run_workers = max_run_workers
-        self.init_queue = asyncio.Queue(maxsize=max_init_workers)
-        self.run_queue = asyncio.Queue(maxsize=max_run_workers)
+
+        self.init_queue = None
+        self.run_queue = None
         self._init_workers = []
         self._run_workers = []
-        self._results = {}  # jobid -> Future
         self._active_init_jobs = set()  # Track jobs being initialized
         self._active_run_jobs = set()   # Track jobs being run
+        
+        # store job detail objects to pass around.
+        self._job_details = {}
 
         self.weighted_addresses = [[0, address] for address in llm_server_addresses]
         heapq.heapify(self.weighted_addresses)
+
+    def get_unique_id(self, instance, max_retries=10):
+        for _ in range(max_retries):
+            uid = str(uuid.uuid4())
+            uid = f"swebench_{instance.instance_id}_{instance.trajectory_id}_{uid}"
+            if uid not in self._job_details:
+                return uid
+        raise ValueError("Failed to get unique id")
 
     def add_llm_server_address(self, llm_server_address: str):
         heapq.heappush(self.weighted_addresses, [0, llm_server_address])
@@ -39,72 +70,201 @@ class AsyncOpenHandsServer:
         )
         return llm_config
     
-    async def process(self, instance, sampling_params):
+    def start(self):
+        self.init_queue = queue.Queue()
+        self.run_queue = queue.Queue()
+        
+        self._executor = ThreadPoolExecutor(max_workers=self.max_init_workers + self.max_run_workers)
+        
+        # Initialize worker lists
+        self._init_workers = [None] * self.max_init_workers
+        self._run_workers = [None] * self.max_run_workers
+        
+        # Submit init workers
+        for i in range(self.max_init_workers):
+            self._executor.submit(self._run_worker_in_thread, i, True)
+        
+        # Submit run workers
+        for i in range(self.max_run_workers):
+            self._executor.submit(self._run_worker_in_thread, i, False)
+
+    def process(self, instance, sampling_params):
         if len(self.weighted_addresses) == 0:
             raise ValueError("No LLM server addresses added")
+            
+        if not hasattr(self, 'init_queue') or self.init_queue is None:
+            raise RuntimeError("Server is not started or has been stopped")
         
+        # Create job details
         llm_config = self.create_llm_config(sampling_params)
-        job_id = get_job_id(instance)
-        if job_id in self._results:
-            raise ValueError(f"Job {job_id} already added")
-        future = asyncio.get_running_loop().create_future()
-        self._results[job_id] = future
-        await self.init_queue.put((instance, llm_config))
-        results = await future
-        del self._results[job_id]
-        return results
+        job_id = self.get_unique_id(instance)
+        job_details = JobDetails()
+        job_details.job_id = job_id
+        job_details.instance = instance
+        job_details.llm_config = llm_config
+        job_details.start_time = time.time()
+        job_details.event = threading.Event()
+        self._job_details[job_id] = job_details
+        print(f"Job {job_id} added to job details")
+
+        # Add job to init queue
+        self.init_queue.put(job_id)
+        print(f"Job {job_id} added to init queue")
+
+        # Wait for job to be finished
+        job_details.event.wait()
+        job_details.end_time = time.time()
+        result = copy.deepcopy(job_details.result)
+        if job_details.start_run_time:
+            init_time_taken = job_details.start_run_time - job_details.start_time
+            run_time_taken = job_details.end_time - job_details.start_run_time
+        else:
+            init_time_taken = job_details.end_time - job_details.start_time
+            run_time_taken = 0
+        # Close runtime
+        if job_details.runtime:
+            job_details.runtime.close()
+        # Delete job details
+        del self._job_details[job_id]
+        return {'results': result, 'init_time_taken': init_time_taken, 'run_time_taken': run_time_taken}
 
     async def _init_worker(self, wid):
         while True:
-            instance, llm_config = await self.init_queue.get()
-            job_id = get_job_id(instance)
+            print(f"[init-worker-{wid}] Waiting for job")
+            job_id = await asyncio.to_thread(self.init_queue.get)
+            
+            # Check for stop sentinel
+            if job_id == "__STOP__":
+                print(f"[init-worker-{wid}] Received stop signal, exiting")
+                self.init_queue.task_done()
+                break
+                
             print(f"[init-worker-{wid}] Got job {job_id}")
+            job_details = self._job_details[job_id]
             self._active_init_jobs.add(job_id)
             try:
-                initialized_results = await initialize_agents(instance, llm_config)
-                asyncio.create_task(self.run_queue.put(initialized_results)) # Fire-and-forget
+                runtime, metadata, config = await initialize_agents(job_details.instance, job_details.llm_config, sid=job_id)
+                job_details.runtime = runtime
+                job_details.metadata = metadata
+                job_details.config = config
+                self.run_queue.put(job_id)
             except Exception as e:
-                future = self._results.get(job_id)
-                if future and not future.done():
-                    future.set_exception(e)
+                job_details.result = "Error in init."
+                job_details.event.set()
             finally:
                 self._active_init_jobs.remove(job_id)
                 self.init_queue.task_done()
-            asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)
 
     async def _run_worker(self, wid):
         while True:
-            runtime, metadata, config, instance = await self.run_queue.get()
-            job_id = get_job_id(instance)
+            print(f"[run-worker-{wid}] Waiting for job")
+            job_id = await asyncio.to_thread(self.run_queue.get)
+            
+            # Check for stop sentinel
+            if job_id == "__STOP__":
+                print(f"[run-worker-{wid}] Received stop signal, exiting")
+                self.run_queue.task_done()
+                break
+                
+            job_details = self._job_details[job_id]
             print(f"[run-worker-{wid}] Got job {job_id}")
+            job_details.start_run_time = time.time()
             self._active_run_jobs.add(job_id)
             try:
-                results = await run_agent(runtime, metadata, config, instance)
-                future = self._results.get(job_id)
-                if future and not future.done():
-                    future.set_result(results)
+                results = await run_agent(job_details.runtime, job_details.metadata, job_details.config, job_details.instance)
+                job_details.result = results
+                job_details.event.set()
             except Exception as e:
-                import pdb; pdb.set_trace()
-                future = self._results.get(job_id)
-                if future and not future.done():
-                    future.set_exception(e)
+                job_details.result = "Eror in run."
+                job_details.event.set()
             finally:
                 self._active_run_jobs.remove(job_id)
                 self.run_queue.task_done()
-            asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)
 
-    async def start(self):
-        self._init_workers = [asyncio.create_task(self._init_worker(i)) for i in range(self.max_init_workers)]
-        self._run_workers = [asyncio.create_task(self._run_worker(i)) for i in range(self.max_run_workers)]
+    def _run_worker_in_thread(self, worker_id, is_init_worker):
+        """Run a worker in its own thread with its own event loop. Run until the worker is stopped."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        if is_init_worker:
+            loop.run_until_complete(self._init_worker(worker_id))
+            self._init_workers[worker_id] = loop
+        else:   
+            loop.run_until_complete(self._run_worker(worker_id))
+            self._run_workers[worker_id] = loop
 
-    async def stop(self):
-        for task in self._init_workers + self._run_workers:
-            task.cancel()
+    def stop(self):
+        """Stops the server by shutting down all workers and clearing all queues and jobs."""
+        if not hasattr(self, 'init_queue') or self.init_queue is None:
+            # Server was never started or already stopped
+            return
+        
+        print(f"Stopping events")
+        # Signal all active jobs to complete
+        for job_id in list(self._active_init_jobs):
+            if job_id in self._job_details:
+                self._job_details[job_id].event.set()
+                
+        for job_id in list(self._active_run_jobs):
+            if job_id in self._job_details:
+                self._job_details[job_id].event.set()
+        
+        print(f"Stopping queues")
+        # Add sentinel values to queues to unblock workers
+        for _ in range(self.max_init_workers):
+            try:
+                self.init_queue.put_nowait("__STOP__")
+            except:
+                pass
+                
+        for _ in range(self.max_run_workers):
+            try:
+                self.run_queue.put_nowait("__STOP__")
+            except:
+                pass
+        
+        # Forced shutdown
+        for loop in self._init_workers + self._run_workers:
+            try:
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception as e:
+                pass
+            finally:
+                if loop:
+                    loop.close()
+        
+        print(f"Shutting down executor")
+        # Shutdown the executor with a timeout
+        if hasattr(self, '_executor') and self._executor:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+
+        print(f"Clearing active jobs")
+        # Clear all state
+        self._active_init_jobs.clear()
+        self._active_run_jobs.clear()
+        self._job_details.clear()
+        self._init_workers.clear()
+        self._run_workers.clear()
+        # Reset queues
+        self.init_queue = None
+        self.run_queue = None
+
+        print(f"Server status: {self.status()}")
 
     def status(self):
         """Returns the number of jobs currently being processed in both queues and workers."""
-        init_queue_count = self.init_queue.qsize()
-        run_queue_count = self.run_queue.qsize()
+        if self.init_queue:
+            init_queue_count = self.init_queue.qsize()
+        else:
+            init_queue_count = 0
+        if self.run_queue:
+            run_queue_count = self.run_queue.qsize()
+        else:
+            run_queue_count = 0
         active_init_count = len(self._active_init_jobs)
         active_run_count = len(self._active_run_jobs)
         return {
@@ -115,9 +275,10 @@ class AsyncOpenHandsServer:
             'total': init_queue_count + run_queue_count + active_init_count + active_run_count
         }
 
-async def test_server():
+def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
     import pandas as pd
     import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
 
     dataset = pd.read_parquet("/lustre/fsw/portfolios/nvr/users/mingjiel/data/swegym/train.parquet")
     instance = dataset.iloc[0]['instance']
@@ -125,7 +286,7 @@ async def test_server():
     instance = instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
     
     requests = []
-    for i in range(2):
+    for i in range(total_jobs):
         cur = instance.copy(deep=True)
         cur.trajectory_id = i
         requests.append(cur)
@@ -140,16 +301,25 @@ async def test_server():
         "temperature": 0.6,
     }
 
-    futures = []
-    server = AsyncOpenHandsServer(llm_server_addresses=[llm_server_address, llm_server_address], max_init_workers=1, max_run_workers=1)
-    await server.start()
-    for instance in requests:
-        future =  server.process(instance, sampling_params)
-        futures.append(future)
-    results = await asyncio.gather(*futures)
-    await server.stop()
+    print("Starting server")
+    server = OpenHandsServer(llm_server_addresses=[llm_server_address, llm_server_address], max_init_workers=max_parallel_jobs, max_run_workers=max_parallel_jobs)
+    server.start()
+    print("Server started")
+
+    print("Job submission started")
+    
+    # Process instances using ThreadPoolExecutor for parallel processing
+    with ThreadPoolExecutor(max_workers=max_parallel_jobs) as executor:
+        futures = [executor.submit(server.process, inst, sampling_params) for inst in requests]
+        results = [future.result() for future in futures]
+    
+    print("Job submission finished")
+    print(results)
+    server.stop()
     return results
 
 if __name__ == "__main__":
-    results = asyncio.run(test_server())
+    start = time.time()
+    results = test_server(total_jobs=4, max_parallel_jobs=4)
     print(results)
+    print(f"Time taken: {time.time() - start}")
