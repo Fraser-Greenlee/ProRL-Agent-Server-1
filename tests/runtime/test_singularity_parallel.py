@@ -397,7 +397,9 @@ def create_test_file_and_copy_to_runtime(test_params):
 
         # print the preview of the content
         if content_obs.exit_code == 0:
-            print(f'[COPY_TO {runtime_id}] File content preview: {content_obs.content.strip()[:100]}')
+            print(
+                f'[COPY_TO {runtime_id}] File content preview: {content_obs.content.strip()[:100]}'
+            )
 
         return {
             'runtime_id': runtime_id,
