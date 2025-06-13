@@ -444,7 +444,7 @@ def test_singularity_runtime_parallel_copy_to(temp_dir):
     print('\n=== TESTING SINGULARITY RUNTIME PARALLEL COPY_TO ===')
     print(f'Workspace: {temp_dir}')
 
-    n_runtimes = 6
+    n_runtimes = 36
     skip_sequential = True
 
     if not skip_sequential:
