@@ -17,6 +17,7 @@ import time
 class JobDetails:
     job_id: str = None
     instance: pd.Series = None
+    max_iterations: int = 2
     llm_config: LLMConfig = None
     runtime: Runtime = None
     metadata: EvalMetadata = None
@@ -143,7 +144,7 @@ class OpenHandsServer:
             job_details = self._job_details[job_id]
             self._active_init_jobs.add(job_id)
             try:
-                runtime, metadata, config = await initialize_agents(job_details.instance, job_details.llm_config, sid=job_id)
+                runtime, metadata, config = await initialize_agents(job_details.instance, job_details.llm_config, sid=job_id, max_iterations=job_details.max_iterations)
                 job_details.runtime = runtime
                 job_details.metadata = metadata
                 job_details.config = config
@@ -320,6 +321,6 @@ def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
 
 if __name__ == "__main__":
     start = time.time()
-    results = test_server(total_jobs=4, max_parallel_jobs=4)
+    results = test_server(total_jobs=64, max_parallel_jobs=64)
     print(results)
     print(f"Time taken: {time.time() - start}")

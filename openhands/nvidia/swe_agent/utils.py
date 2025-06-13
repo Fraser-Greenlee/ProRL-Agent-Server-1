@@ -5,7 +5,6 @@ import os
 import asyncio
 
 from evaluation.benchmarks.swe_bench.run_infer import (
-    get_config,
     initialize_runtime,
     get_instruction,
     complete_runtime,
@@ -95,10 +94,12 @@ def get_config(
         instance_id=instance['instance_id'],
     )
 
+    """
     sandbox_config.runtime_container_image = (
         '/lustre/fsw/portfolios/nvr/users/mingjiel/root/singularity_images/'
         'xingyaoww_sweb.eval.x86_64.getmoto_s_moto-7365.sif'
     )
+    """
 
     config = OpenHandsConfig(
         default_agent=metadata.agent_class,
@@ -140,6 +141,7 @@ async def initialize_agents(
         git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a", 
         dataset:str = "swebench", 
         data_split:str = "train", 
+        max_iterations:int = 1,
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
     # Fall back to a sensible default if the caller does not provide an
     # explicit ``llm_config`` (mirrors the behaviour of the old
@@ -158,7 +160,7 @@ async def initialize_agents(
         agent_class="CodeActAgent",
         llm_config=llm_config,
         agent_config=None,
-        max_iterations=1,
+        max_iterations=max_iterations,
         eval_output_dir=eval_output_dir,
         start_time=time.strftime('%Y-%m-%d %H:%M:%S'),
         git_commit=git_commit,
