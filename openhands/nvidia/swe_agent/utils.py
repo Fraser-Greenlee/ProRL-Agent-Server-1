@@ -134,19 +134,20 @@ def get_config(
     return config
 
 async def initialize_agents(
-        instance:pd.Series, 
-        llm_config:LLMConfig,
+        instance:pd.Series,
+        llm_config: LLMConfig | None = None,
         sid:str = None,
         eval_output_dir:str = "/root",
-        git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a", 
-        dataset:str = "swebench", 
-        data_split:str = "train", 
+        git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a",
+        dataset:str = "swebench",
+        data_split:str = "train",
         max_iterations:int = 1,
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
     # Fall back to a sensible default if the caller does not provide an
     # explicit ``llm_config`` (mirrors the behaviour of the old
     # ``initialize_agents`` implementation that lived in
     # ``scripts/test_local_agent.py``).
+
     if llm_config is None:
         llm_config = LLMConfig(
             model="gpt-4o-mini",
