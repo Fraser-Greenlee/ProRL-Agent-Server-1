@@ -103,11 +103,7 @@ class OpenHandsServer:
         for i in range(self.max_run_workers):
             self._executor.submit(self._run_worker_in_thread, i, False)
 
-        # Submit evaluation workers
-        for i in range(self.max_eval_workers):
-            self._executor.submit(self._run_eval_worker_in_thread, i)
-
-    def process(self, instance, sampling_params):
+    def process(self, instance, sampling_params, job_id=None):
         if len(self.weighted_addresses) == 0:
             raise ValueError("No LLM server addresses added")
 
@@ -115,11 +111,14 @@ class OpenHandsServer:
             raise RuntimeError("Server is not started or has been stopped")
 
         # Create job details
-        llm_config = self.create_llm_config(sampling_params)
-        job_id = self.get_unique_id(instance)
+        if job_id is None:
+            job_id = self.get_unique_id(instance)
         job_details = JobDetails()
         job_details.job_id = job_id
         job_details.instance = instance
+        if 'max_iterations' in sampling_params:
+            job_details.max_iterations = sampling_params.pop('max_iterations')
+        llm_config = self.create_llm_config(sampling_params)
         job_details.llm_config = llm_config
         job_details.start_time = time.time()
         job_details.event = threading.Event()
@@ -179,7 +178,7 @@ class OpenHandsServer:
                 job_details.config = config
                 self.run_queue.put(job_id)
             except Exception as e:
-                job_details.result = "Error in init."
+                job_details.result = f"Error in init. {str(e)[:200]}"
                 job_details.event.set()
             finally:
                 self._active_init_jobs.remove(job_id)
@@ -409,7 +408,7 @@ def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
         results = [future.result() for future in futures]
 
     print("Job submission finished")
-    print(results)
+    #print(results)
     server.stop()
     return results
 
