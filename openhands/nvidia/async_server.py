@@ -22,24 +22,36 @@ class JobDetails:
     runtime: Runtime = None
     metadata: EvalMetadata = None
     config: OpenHandsConfig = None
-    result: str = None
+    patch: str | None = None
+    result: str | dict | None = None
     event: threading.Event = None
     start_time: float = None
     start_run_time: float = None
+    start_eval_time: float = None
     end_time: float = None
 
 class OpenHandsServer:
-    def __init__(self, llm_server_addresses: List[str] = [], max_init_workers:int = 6, max_run_workers:int = 5):
+    def __init__(self, llm_server_addresses: List[str] = [], max_init_workers:int = 6, max_run_workers:int = 5, max_eval_workers:int | None = None):
+        """Create server.
+
+        If *max_eval_workers* is not provided, it defaults to the same value as
+        *max_run_workers*, so you only need to specify one number when you want
+        these two pools to have the same size.
+        """
         self.max_init_workers = max_init_workers
         self.max_run_workers = max_run_workers
+        # If eval workers not specified, mirror run_workers
+        self.max_eval_workers = max_run_workers if max_eval_workers is None else max_eval_workers
 
         self.init_queue = None
         self.run_queue = None
+        self.evaluate_queue = None
         self._init_workers = []
         self._run_workers = []
         self._active_init_jobs = set()  # Track jobs being initialized
         self._active_run_jobs = set()   # Track jobs being run
-        
+        self._active_eval_jobs = set()  # Track jobs being evaluated
+
         # store job detail objects to pass around.
         self._job_details = {}
 
@@ -60,7 +72,7 @@ class OpenHandsServer:
     def create_llm_config(self, sampling_params):
         if len(self.weighted_addresses) == 0:
             raise ValueError("No LLM server addresses added")
-        
+
         address = self.weighted_addresses[0][1]
         self.weighted_addresses[0][0] += 1
         heapq.heapreplace(self.weighted_addresses, self.weighted_addresses[0])
@@ -70,32 +82,38 @@ class OpenHandsServer:
             **sampling_params
         )
         return llm_config
-    
+
     def start(self):
         self.init_queue = queue.Queue()
         self.run_queue = queue.Queue()
-        
-        self._executor = ThreadPoolExecutor(max_workers=self.max_init_workers + self.max_run_workers)
-        
+        self.evaluate_queue = queue.Queue()
+
+        self._executor = ThreadPoolExecutor(max_workers=self.max_init_workers + self.max_run_workers + self.max_eval_workers)
+
         # Initialize worker lists
         self._init_workers = [None] * self.max_init_workers
         self._run_workers = [None] * self.max_run_workers
-        
+        self._eval_workers = [None] * self.max_eval_workers
+
         # Submit init workers
         for i in range(self.max_init_workers):
             self._executor.submit(self._run_worker_in_thread, i, True)
-        
+
         # Submit run workers
         for i in range(self.max_run_workers):
             self._executor.submit(self._run_worker_in_thread, i, False)
 
+        # Submit evaluation workers
+        for i in range(self.max_eval_workers):
+            self._executor.submit(self._run_eval_worker_in_thread, i)
+
     def process(self, instance, sampling_params):
         if len(self.weighted_addresses) == 0:
             raise ValueError("No LLM server addresses added")
-            
+
         if not hasattr(self, 'init_queue') or self.init_queue is None:
             raise RuntimeError("Server is not started or has been stopped")
-        
+
         # Create job details
         llm_config = self.create_llm_config(sampling_params)
         job_id = self.get_unique_id(instance)
@@ -118,28 +136,39 @@ class OpenHandsServer:
         result = copy.deepcopy(job_details.result)
         if job_details.start_run_time:
             init_time_taken = job_details.start_run_time - job_details.start_time
-            run_time_taken = job_details.end_time - job_details.start_run_time
+            if job_details.start_eval_time:
+                run_time_taken = job_details.start_eval_time - job_details.start_run_time
+                evaluate_time_taken = job_details.end_time - job_details.start_eval_time
+            else:
+                run_time_taken = job_details.end_time - job_details.start_run_time
+                evaluate_time_taken = 0
         else:
             init_time_taken = job_details.end_time - job_details.start_time
             run_time_taken = 0
+            evaluate_time_taken = 0
         # Close runtime
         if job_details.runtime:
             job_details.runtime.close()
         # Delete job details
         del self._job_details[job_id]
-        return {'results': result, 'init_time_taken': init_time_taken, 'run_time_taken': run_time_taken}
+        return {
+            'results': result,
+            'init_time_taken': init_time_taken,
+            'run_time_taken': run_time_taken,
+            'evaluate_time_taken': evaluate_time_taken,
+        }
 
     async def _init_worker(self, wid):
         while True:
             print(f"[init-worker-{wid}] Waiting for job")
             job_id = await asyncio.to_thread(self.init_queue.get)
-            
+
             # Check for stop sentinel
             if job_id == "__STOP__":
                 print(f"[init-worker-{wid}] Received stop signal, exiting")
                 self.init_queue.task_done()
                 break
-                
+
             print(f"[init-worker-{wid}] Got job {job_id}")
             job_details = self._job_details[job_id]
             self._active_init_jobs.add(job_id)
@@ -161,27 +190,65 @@ class OpenHandsServer:
         while True:
             print(f"[run-worker-{wid}] Waiting for job")
             job_id = await asyncio.to_thread(self.run_queue.get)
-            
+
             # Check for stop sentinel
             if job_id == "__STOP__":
                 print(f"[run-worker-{wid}] Received stop signal, exiting")
                 self.run_queue.task_done()
                 break
-                
+
             job_details = self._job_details[job_id]
             print(f"[run-worker-{wid}] Got job {job_id}")
             job_details.start_run_time = time.time()
             self._active_run_jobs.add(job_id)
             try:
-                results = await run_agent(job_details.runtime, job_details.metadata, job_details.config, job_details.instance)
-                job_details.result = results
-                job_details.event.set()
+                patch = await run_agent(job_details.runtime, job_details.metadata, job_details.config, job_details.instance)
+                job_details.patch = patch
+                # push to evaluation queue for further processing
+                self.evaluate_queue.put(job_id)
             except Exception as e:
                 job_details.result = "Eror in run."
                 job_details.event.set()
             finally:
                 self._active_run_jobs.remove(job_id)
                 self.run_queue.task_done()
+            await asyncio.sleep(0.1)
+
+    async def _eval_worker(self, wid):
+        """Worker that evaluates the generated patch and produces a report."""
+        # Lazy import to avoid heavy dependency at server startup
+        from openhands.nvidia.swe_agent.utils import _evaluate_agent as _evaluate_patch_async
+
+        while True:
+            print(f"[eval-worker-{wid}] Waiting for job")
+            job_id = await asyncio.to_thread(self.evaluate_queue.get)
+
+            # Check for stop sentinel
+            if job_id == "__STOP__":
+                print(f"[eval-worker-{wid}] Received stop signal, exiting")
+                self.evaluate_queue.task_done()
+                break
+
+            print(f"[eval-worker-{wid}] Got job {job_id}")
+            job_details = self._job_details[job_id]
+            job_details.start_eval_time = time.time()
+            self._active_eval_jobs.add(job_id)
+            try:
+                if job_details.patch is None:
+                    raise ValueError("Patch is None, cannot evaluate")
+                eval_report = await _evaluate_patch_async(job_details.patch, job_details.instance)
+                # Only keep the 'report' field if present
+                if isinstance(eval_report, dict) and 'report' in eval_report:
+                    job_details.result = eval_report['report']
+                else:
+                    job_details.result = eval_report
+                job_details.event.set()
+            except Exception as e:
+                job_details.result = {"error": str(e)}
+                job_details.event.set()
+            finally:
+                self._active_eval_jobs.remove(job_id)
+                self.evaluate_queue.task_done()
             await asyncio.sleep(0.1)
 
     def _run_worker_in_thread(self, worker_id, is_init_worker):
@@ -191,26 +258,33 @@ class OpenHandsServer:
         if is_init_worker:
             loop.run_until_complete(self._init_worker(worker_id))
             self._init_workers[worker_id] = loop
-        else:   
+        else:
             loop.run_until_complete(self._run_worker(worker_id))
             self._run_workers[worker_id] = loop
+
+    def _run_eval_worker_in_thread(self, worker_id):
+        """Start an evaluation worker in its own thread."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self._eval_worker(worker_id))
+        self._eval_workers[worker_id] = loop
 
     def stop(self):
         """Stops the server by shutting down all workers and clearing all queues and jobs."""
         if not hasattr(self, 'init_queue') or self.init_queue is None:
             # Server was never started or already stopped
             return
-        
+
         print(f"Stopping events")
         # Signal all active jobs to complete
         for job_id in list(self._active_init_jobs):
             if job_id in self._job_details:
                 self._job_details[job_id].event.set()
-                
+
         for job_id in list(self._active_run_jobs):
             if job_id in self._job_details:
                 self._job_details[job_id].event.set()
-        
+
         print(f"Stopping queues")
         # Add sentinel values to queues to unblock workers
         for _ in range(self.max_init_workers):
@@ -218,15 +292,21 @@ class OpenHandsServer:
                 self.init_queue.put_nowait("__STOP__")
             except:
                 pass
-                
+
         for _ in range(self.max_run_workers):
             try:
                 self.run_queue.put_nowait("__STOP__")
             except:
                 pass
-        
+
+        for _ in range(self.max_eval_workers):
+            try:
+                self.evaluate_queue.put_nowait("__STOP__")
+            except:
+                pass
+
         # Forced shutdown
-        for loop in self._init_workers + self._run_workers:
+        for loop in self._init_workers + self._run_workers + self._eval_workers:
             try:
                 pending = asyncio.all_tasks(loop)
                 for task in pending:
@@ -237,7 +317,7 @@ class OpenHandsServer:
             finally:
                 if loop:
                     loop.close()
-        
+
         print(f"Shutting down executor")
         # Shutdown the executor with a timeout
         if hasattr(self, '_executor') and self._executor:
@@ -247,12 +327,15 @@ class OpenHandsServer:
         # Clear all state
         self._active_init_jobs.clear()
         self._active_run_jobs.clear()
+        self._active_eval_jobs.clear()
         self._job_details.clear()
         self._init_workers.clear()
         self._run_workers.clear()
+        self._eval_workers.clear()
         # Reset queues
         self.init_queue = None
         self.run_queue = None
+        self.evaluate_queue = None
 
         print(f"Server status: {self.status()}")
 
@@ -266,14 +349,21 @@ class OpenHandsServer:
             run_queue_count = self.run_queue.qsize()
         else:
             run_queue_count = 0
+        if hasattr(self, 'evaluate_queue') and self.evaluate_queue:
+            eval_queue_count = self.evaluate_queue.qsize()
+        else:
+            eval_queue_count = 0
         active_init_count = len(self._active_init_jobs)
         active_run_count = len(self._active_run_jobs)
+        active_eval_count = len(self._active_eval_jobs)
         return {
             'init_queue': init_queue_count,
             'run_queue': run_queue_count,
+            'eval_queue': eval_queue_count,
             'active_init': active_init_count,
             'active_run': active_run_count,
-            'total': init_queue_count + run_queue_count + active_init_count + active_run_count
+            'active_eval': active_eval_count,
+            'total': init_queue_count + run_queue_count + eval_queue_count + active_init_count + active_run_count + active_eval_count,
         }
 
 def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
@@ -285,7 +375,7 @@ def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
     instance = dataset.iloc[0]['instance']
     instance = pd.Series(instance)
     instance = instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
-    
+
     requests = []
     for i in range(total_jobs):
         cur = instance.copy(deep=True)
@@ -303,17 +393,21 @@ def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
     }
 
     print("Starting server")
-    server = OpenHandsServer(llm_server_addresses=[llm_server_address, llm_server_address], max_init_workers=max_parallel_jobs, max_run_workers=max_parallel_jobs)
+    server = OpenHandsServer(
+        llm_server_addresses=[llm_server_address, llm_server_address],
+        max_init_workers=max_parallel_jobs,
+        max_run_workers=max_parallel_jobs,
+    )
     server.start()
     print("Server started")
 
     print("Job submission started")
-    
+
     # Process instances using ThreadPoolExecutor for parallel processing
     with ThreadPoolExecutor(max_workers=max_parallel_jobs) as executor:
         futures = [executor.submit(server.process, inst, sampling_params) for inst in requests]
         results = [future.result() for future in futures]
-    
+
     print("Job submission finished")
     print(results)
     server.stop()
@@ -321,6 +415,6 @@ def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
 
 if __name__ == "__main__":
     start = time.time()
-    results = test_server(total_jobs=64, max_parallel_jobs=64)
+    results = test_server(total_jobs=5, max_parallel_jobs=5)
     print(results)
     print(f"Time taken: {time.time() - start}")
