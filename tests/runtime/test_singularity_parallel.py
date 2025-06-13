@@ -260,14 +260,6 @@ def test_singularity_runtime_parallel_debug(temp_dir):
     print('\n=== DEBUG TEST COMPLETED ===')
 
 
-if __name__ == '__main__':
-    # For manual testing
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        test_singularity_runtime_parallel_debug(temp_dir)
-
-
 def create_test_file_and_copy_to_runtime(test_params):
     """Create a test file and copy it to a SingularityRuntime, then verify.
 

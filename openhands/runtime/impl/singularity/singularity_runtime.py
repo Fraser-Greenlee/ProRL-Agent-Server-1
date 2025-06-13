@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import Callable
 from uuid import UUID
 from pathlib import Path
+import threading
 
 import httpx
 import tenacity
@@ -124,6 +125,7 @@ class SingularityRuntime(ActionExecutionClient):
 
     _shutdown_listener_id: UUID | None = None
     _active_container_pids: set[int] = set()  # Keep for backward compatibility with shutdown
+    _port_allocation_lock = threading.Lock()  # Lock for synchronizing port allocation
 
     def __init__(
         self,
@@ -604,6 +606,8 @@ class SingularityRuntime(ActionExecutionClient):
         Parameters:
         - rm_all_containers (bool): Whether to stop all container processes with the prefix
         """
+
+
         super().close()
 
         if rm_all_containers is None:
@@ -632,12 +636,12 @@ class SingularityRuntime(ActionExecutionClient):
                 logger.debug(f'No PID stored for container {self.container_name}, nothing to stop')
 
     def _find_available_port(self, port_range, max_attempts=5):
-        """Find an available port in the given range."""
-        for _ in range(max_attempts):
-            port = find_available_tcp_port(port_range[0], port_range[1])
-            return port
-        # If no port is found after max_attempts, return the last tried port
-        return port
+        """Find an available port in the given range with proper synchronization."""
+        with SingularityRuntime._port_allocation_lock:
+            for _ in range(max_attempts):
+                port = find_available_tcp_port(port_range[0], port_range[1])
+                return port
+            raise RuntimeError(f'Failed to find available port in range {port_range} after {max_attempts} attempts')
 
     @property
     def vscode_url(self) -> str | None:
