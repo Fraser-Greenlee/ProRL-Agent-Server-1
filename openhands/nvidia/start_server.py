@@ -6,24 +6,32 @@ from openhands.nvidia.async_server import OpenHandsServer
 from fastapi.responses import JSONResponse
 from openhands.nvidia.utils import ServerNotRunningError, NoLLMServerError, JobTimeoutError, ProcessRequest, LLMServerRequest, process_with_timeout, kill_all_singularity_jobs
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import os
 
 app = FastAPI(title="OpenHands Async Server API")
 
 # Global server instance
 server = None
+# Thread pool for submitting jobs
+thread_pool = None
+
 # Global timeout configuration (in seconds)
 DEFAULT_TIMEOUT = 300.0  # 5 minutes
 global_timeout = DEFAULT_TIMEOUT
 
 def init_server(max_init_workers: int = 6, max_run_workers: int = 5, timeout: float = DEFAULT_TIMEOUT):
     print(f"Initializing server with max_init_workers={max_init_workers}, max_run_workers={max_run_workers}, timeout={timeout}")
-    global server, global_timeout
+    global server, global_timeout, thread_pool
     server = OpenHandsServer(
         llm_server_addresses=[],
         max_init_workers=max_init_workers,
         max_run_workers=max_run_workers
     )
     global_timeout = timeout
+    thread_pool_count = min( max_init_workers, os.cpu_count() - 64)
+    print(f"Using {thread_pool_count} threads for the thread pool")
+    thread_pool = ThreadPoolExecutor(max_workers=thread_pool_count)
 
 @app.exception_handler(ServerNotRunningError)
 async def server_not_running_handler(request, exc):
@@ -111,7 +119,7 @@ async def process(request: ProcessRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid instance data: {str(e)}")
     
-    result = await process_with_timeout(server, instance, request.sampling_params, global_timeout)
+    result = await process_with_timeout(server, instance, request.sampling_params, global_timeout, thread_pool)
     return result
 
 def start_api_server(host: str = "0.0.0.0", port: int = 8000):

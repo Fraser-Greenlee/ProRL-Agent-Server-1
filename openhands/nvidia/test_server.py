@@ -118,12 +118,15 @@ if __name__ == "__main__":
 
     asyncio.run(start_server_api())
     import time
+
+    """
     start_time = time.time()
     asyncio.run(process(instance, num_tasks=1))
     end_time = time.time()
     print(f"Time1 taken: {end_time - start_time} seconds")
+    """
 
     start_time = time.time()
-    asyncio.run(process(instance, num_tasks=8))
+    asyncio.run(process(instance, num_tasks=64))
     end_time = time.time()
     print(f"Time2 taken: {end_time - start_time} seconds")

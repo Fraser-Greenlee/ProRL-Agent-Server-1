@@ -3,6 +3,8 @@ from pydantic import BaseModel, Field, validator
 from typing import List, Dict, Any, Optional
 import asyncio
 import pandas as pd
+from concurrent.futures import ThreadPoolExecutor
+
 
 def kill_all_singularity_jobs():
     try:
@@ -67,14 +69,14 @@ async def cleanup_timed_out_job(server, job_id: str):
         if job_id in server._job_details:
             del server._job_details[job_id]
 
-async def process_with_timeout(server, instance: pd.Series, sampling_params: Dict[str, Any], timeout: float, job_id: str = None):
+async def process_with_timeout(server, instance: pd.Series, sampling_params: Dict[str, Any], timeout: float, thread_pool: ThreadPoolExecutor = None, job_id: str = None):
     if job_id is None:
         job_id = server.get_unique_id(instance)
     try:
         # Create a future for the process call
 
         loop = asyncio.get_event_loop()
-        future = loop.run_in_executor(None, lambda: server.process(instance, sampling_params, job_id))
+        future = loop.run_in_executor(thread_pool, lambda: server.process(instance, sampling_params, job_id))
         
         # Wait for the future with timeout
         result = await asyncio.wait_for(future, timeout=timeout)
