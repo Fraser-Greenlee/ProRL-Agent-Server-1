@@ -1,3 +1,21 @@
+"""
+How to run the server:
+
+1. Start the server. This is run in openhands isolated environment seperate (and before) from running verl training loop.
+    python start_server.py --max-init-workers 64 --max-run-workers 64 &
+
+2. A one time initialization is needed to add the LLM server address to the server. Make sure address is collocated with openhands server. 
+They should have same ip but different port. You can add multiple llm addresses to the server. You address should also contain /v1 at the end.
+    add_llm_server(address: str)
+
+3. When calling to generate it is recommended:
+    (1) wake up the server: start_server()
+    (2) send concurrent requests to the server: process_request(instance, sampling_params) 
+    (3) after all requests are sent, sleep the server: stop_server()
+
+4. Iterate step 3 during training loop.
+"""
+
 import aiohttp
 import asyncio
 import json 
