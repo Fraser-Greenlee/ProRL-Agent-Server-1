@@ -113,8 +113,6 @@ def create_and_test_runtime(test_params):
             'connection_time': connection_time,
             'command_output': obs.content.strip(),
             'exit_code': obs.exit_code,
-            'api_url': runtime.api_url,
-            'container_port': runtime._container_port,
             'container_pid': runtime.container_pid,
         }
 
@@ -406,8 +404,6 @@ def create_test_file_and_copy_to_runtime(test_params):
             'content_preview': content_obs.content.strip()[:100]
             if content_obs.exit_code == 0
             else None,
-            'api_url': runtime.api_url,
-            'container_port': runtime._container_port,
             'container_pid': runtime.container_pid,
         }
 
