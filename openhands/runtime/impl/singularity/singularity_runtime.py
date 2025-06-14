@@ -633,6 +633,12 @@ class SingularityRuntime(ActionExecutionClient):
         # Clean up session port information
         self._delete_session_port_info()
 
+        # clean up the socket file
+        if self.config.sandbox.run_as_fakeroot:
+            socket_file = f'/tmp/runtime/{self.sid}.sock'
+            if os.path.exists(socket_file):
+                os.remove(socket_file)
+
         # Stop Singularity processes
         if rm_all_containers:
             stop_all_singularity_containers(CONTAINER_NAME_PREFIX)
