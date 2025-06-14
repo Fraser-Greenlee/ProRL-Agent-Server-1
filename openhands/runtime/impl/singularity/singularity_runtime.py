@@ -40,7 +40,7 @@ from openhands.utils.tenacity_stop import stop_if_should_exit
 
 CONTAINER_NAME_PREFIX = 'openhands-runtime-'
 
-EXECUTION_SERVER_PORT_RANGE = (30000, 39999)
+FILE_VIEWER_PORT_RANGE = (30000, 39999)
 VSCODE_PORT_RANGE = (40000, 49999)
 APP_PORT_RANGE_1 = (50000, 54999)
 APP_PORT_RANGE_2 = (55000, 59999)
@@ -148,15 +148,12 @@ class SingularityRuntime(ActionExecutionClient):
         self.config = config
         self.status_callback = status_callback
 
-        self._host_port = -1
-        self._container_port = -1
         self._vscode_port = -1
+        self._file_viewer_port = -1
         self._app_ports: list[int] = []
 
         # Check if singularity is available
         self._check_singularity_availability()
-
-        self.api_url = f'{self.config.sandbox.local_runtime_url}:{self._container_port}'
 
         self.base_container_image = self.config.sandbox.base_container_image
         self.runtime_container_image = self.config.sandbox.runtime_container_image
@@ -431,27 +428,27 @@ class SingularityRuntime(ActionExecutionClient):
         self.log('debug', 'Preparing to start Singularity container...')
         self.send_status_message('STATUS$PREPARING_CONTAINER')
 
-        self._host_port = self._find_available_port(EXECUTION_SERVER_PORT_RANGE)
-        self._container_port = self._host_port
         # Use the configured vscode_port if provided, otherwise find an available port
         self._vscode_port = (
             self.config.sandbox.vscode_port
             or self._find_available_port(VSCODE_PORT_RANGE)
         )
+        self._file_viewer_port = self._find_available_port(FILE_VIEWER_PORT_RANGE)
+
         self._app_ports = [
             self._find_available_port(APP_PORT_RANGE_1),
             self._find_available_port(APP_PORT_RANGE_2),
         ]
-        self.api_url = f'{self.config.sandbox.local_runtime_url}:{self._container_port}'
 
         # Prepare environment variables
         env_vars = {
-            'port': str(self._container_port),
             'PYTHONUNBUFFERED': '1',
             'VSCODE_PORT': str(self._vscode_port),
+            'FILE_VIEWER_PORT': str(self._file_viewer_port),
             'APP_PORT_1': str(self._app_ports[0]),
             'APP_PORT_2': str(self._app_ports[1]),
             'PIP_BREAK_SYSTEM_PACKAGES': '1',
+            'OPENHANDS_SESSION_ID': self.sid,
         }
         if self.config.debug or DEBUG:
             env_vars['DEBUG'] = 'true'
@@ -487,9 +484,6 @@ class SingularityRuntime(ActionExecutionClient):
             # Add environment variables
             for key, value in env_vars.items():
                 cmd.extend(['--env', f'{key}={value}'])
-
-            # Add session ID for UDS communication
-            cmd.extend(['--env', f'OPENHANDS_SESSION_ID={self.sid}'])
 
             # Add volume mounts
             cmd.extend(mount_args)
@@ -534,19 +528,19 @@ class SingularityRuntime(ActionExecutionClient):
                     f'Stdout: {stdout}\nStderr: {stderr}'
                 )
 
-            # Store session port information for later attachment
+            # Store session information for later attachment
             session_info = {
                 'pid': self.container_pid,
                 'ports': {
-                    'container_port': self._container_port,
                     'vscode_port': self._vscode_port,
+                    'file_viewer_port': self._file_viewer_port,
                     'app_port_1': self._app_ports[0],
                     'app_port_2': self._app_ports[1],
                 }
             }
             self._save_session_port_info(session_info)
 
-            self.log('debug', f'Container started. Server url: {self.api_url}, PID: {self.container_pid}')
+            self.log('debug', f'Container started. PID: {self.container_pid}')
             self.send_status_message('STATUS$CONTAINER_STARTED')
 
         except Exception as e:
@@ -583,15 +577,13 @@ class SingularityRuntime(ActionExecutionClient):
             raise AgentRuntimeNotFoundError(f'Container {self.container_name} has no valid PID.')
 
         # Set up port information from stored data
-        self._container_port = port_info['container_port']
-        self._host_port = self._container_port
         self._vscode_port = port_info['vscode_port']
+        self._file_viewer_port = port_info['file_viewer_port']
         self._app_ports = [port_info['app_port_1'], port_info['app_port_2']]
 
-        self.api_url = f'{self.config.sandbox.local_runtime_url}:{self._container_port}'
         self.log(
             'debug',
-            f'Attached to container: {self.container_name} PID: {self.container_pid} Port: {self._container_port} API: {self.api_url}',
+            f'Attached to container: {self.container_name} PID: {self.container_pid}',
         )
 
     @tenacity.retry(
@@ -703,8 +695,9 @@ class SingularityRuntime(ActionExecutionClient):
             logger.warning(f'Failed to delete container {conversation_id}: {e}')
 
     def get_action_execution_server_startup_command(self):
+        # Use dummy port since we communicate via UDS
         return get_action_execution_server_startup_command(
-            server_port=self._container_port,
+            server_port=0,  # Dummy port - UDS is used for actual communication
             plugins=self.plugins,
             app_config=self.config,
             main_module=self.main_module,

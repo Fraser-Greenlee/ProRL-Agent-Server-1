@@ -65,7 +65,6 @@ from openhands.runtime.browser import browse
 from openhands.runtime.browser.browser_env import BrowserEnv
 from openhands.runtime.file_viewer_server import start_file_viewer_server
 from openhands.runtime.plugins import ALL_PLUGINS, JupyterPlugin, Plugin, VSCodePlugin
-from openhands.runtime.utils import find_available_tcp_port
 from openhands.runtime.utils.async_bash import AsyncBashSession
 from openhands.runtime.utils.bash import BashSession
 from openhands.runtime.utils.files import insert_lines, read_lines
@@ -645,9 +644,11 @@ if __name__ == '__main__':
 
     # Start the file viewer server in a separate thread
     logger.info('Starting file viewer server')
-    _file_viewer_port = find_available_tcp_port(
-        min_port=args.port + 1, max_port=min(args.port + 1024, 65535)
-    )
+    _file_viewer_port_env = os.environ.get('FILE_VIEWER_PORT')
+    if _file_viewer_port_env:
+        _file_viewer_port = int(_file_viewer_port_env)
+    else:
+        raise RuntimeError('FILE_VIEWER_PORT environment variable is not set')
     server_url, _ = start_file_viewer_server(port=_file_viewer_port)
     logger.info(f'File viewer server started at {server_url}')
 
