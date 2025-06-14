@@ -76,7 +76,9 @@ class ActionExecutionClient(Runtime):
         user_id: str | None = None,
         git_provider_tokens: PROVIDER_TOKEN_TYPE | None = None,
     ):
-        self.session = HttpSession()
+        # Create UDS session instead of regular HTTP session
+        socket_path = self._get_uds_socket_path(sid)
+        self.session = HttpSession.create_uds_session(socket_path)
         self.action_semaphore = threading.Semaphore(1)  # Ensure one action at a time
         self._runtime_closed: bool = False
         self._vscode_token: str | None = None  # initial dummy value
@@ -94,9 +96,14 @@ class ActionExecutionClient(Runtime):
             git_provider_tokens,
         )
 
+    def _get_uds_socket_path(self, sid: str) -> str:
+        """Get the UDS socket path for the given session ID."""
+        return f'/tmp/runtime/{sid}.sock'
+
     @property
     def action_execution_server_url(self) -> str:
-        raise NotImplementedError('Action execution server URL is not implemented')
+        # Return a dummy HTTP URL for request routing - UDS transport handles the actual connection
+        return 'http://uds-server'
 
     @retry(
         retry=retry_if_exception(_is_retryable_error),

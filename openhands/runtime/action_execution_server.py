@@ -35,7 +35,8 @@ from openhands_aci.utils.diff import get_diff
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from uvicorn import run
+from uvicorn.config import Config
+from uvicorn.server import Server
 
 from openhands.core.exceptions import BrowserUnavailableException
 from openhands.core.logger import openhands_logger as logger
@@ -1080,4 +1081,20 @@ if __name__ == '__main__':
             return JSONResponse(content=[])
 
     logger.debug(f'Starting action execution API on port {args.port}')
-    run(app, host='0.0.0.0', port=args.port)
+
+    # Create UDS socket path using session_id
+    session_id = os.environ.get('OPENHANDS_SESSION_ID', 'default')
+    socket_dir = '/tmp/runtime'
+    os.makedirs(socket_dir, exist_ok=True)
+    socket_path = f'{socket_dir}/{session_id}.sock'
+
+    # Remove existing socket file if it exists
+    if os.path.exists(socket_path):
+        os.unlink(socket_path)
+
+    logger.info(f'Starting action execution API on UDS socket: {socket_path}')
+
+    # Run with UDS socket instead of TCP
+    config = Config(app=app, uds=socket_path, log_level='error')
+    server = Server(config)
+    server.run()

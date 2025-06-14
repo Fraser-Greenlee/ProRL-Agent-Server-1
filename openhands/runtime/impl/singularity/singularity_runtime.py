@@ -268,7 +268,8 @@ class SingularityRuntime(ActionExecutionClient):
 
     @property
     def action_execution_server_url(self):
-        return self.api_url
+        # Use the base class implementation for UDS
+        return super().action_execution_server_url
 
     async def connect(self):
         # log the headless mode
@@ -480,8 +481,14 @@ class SingularityRuntime(ActionExecutionClient):
             for key, value in env_vars.items():
                 cmd.extend(['--env', f'{key}={value}'])
 
+            # Add session ID for UDS communication
+            cmd.extend(['--env', f'OPENHANDS_SESSION_ID={self.sid}'])
+
             # Add volume mounts
             cmd.extend(mount_args)
+
+            # Add UDS socket directory mount for communication
+            cmd.extend(['--bind', '/tmp/runtime:/tmp/runtime'])
 
             cmd.extend(['--pwd', '/openhands/code'])
 
