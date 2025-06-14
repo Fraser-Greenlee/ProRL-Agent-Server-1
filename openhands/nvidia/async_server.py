@@ -178,7 +178,10 @@ class OpenHandsServer:
                 job_details.config = config
                 self.run_queue.put(job_id)
             except Exception as e:
-                job_details.result = f"Error in init. {str(e)[:200]}"
+                job_details.result = {
+                    "error": str(e),
+                    "stage": "init",
+                }
                 job_details.event.set()
             finally:
                 self._active_init_jobs.remove(job_id)
@@ -201,12 +204,31 @@ class OpenHandsServer:
             job_details.start_run_time = time.time()
             self._active_run_jobs.add(job_id)
             try:
-                patch = await run_agent(job_details.runtime, job_details.metadata, job_details.config, job_details.instance)
+                patch = await run_agent(
+                    job_details.runtime,
+                    job_details.metadata,
+                    job_details.config,
+                    job_details.instance,
+                )
                 job_details.patch = patch
-                # push to evaluation queue for further processing
+
+                # Close runtime right after run finishes (before evaluation)
+                if job_details.runtime:
+                    job_details.runtime.close()
+                    job_details.runtime = None
+
+                # Push to evaluation queue for further processing
                 self.evaluate_queue.put(job_id)
             except Exception as e:
-                job_details.result = "Eror in run."
+                # Ensure runtime is closed even if an exception occurs
+                if job_details.runtime:
+                    job_details.runtime.close()
+                    job_details.runtime = None
+
+                job_details.result = {
+                    "error": str(e),
+                    "stage": "run",
+                }
                 job_details.event.set()
             finally:
                 self._active_run_jobs.remove(job_id)
@@ -243,7 +265,10 @@ class OpenHandsServer:
                     job_details.result = eval_report
                 job_details.event.set()
             except Exception as e:
-                job_details.result = {"error": str(e)}
+                job_details.result = {
+                    "error": str(e),
+                    "stage": "eval",
+                }
                 job_details.event.set()
             finally:
                 self._active_eval_jobs.remove(job_id)
