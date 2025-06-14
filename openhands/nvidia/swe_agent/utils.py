@@ -94,6 +94,9 @@ def get_config(
         instance_id=instance['instance_id'],
     )
 
+    # run as fakeroot
+    sandbox_config.run_as_fakeroot = True
+
     """
     sandbox_config.runtime_container_image = (
         '/lustre/fsw/portfolios/nvr/users/mingjiel/root/singularity_images/'
