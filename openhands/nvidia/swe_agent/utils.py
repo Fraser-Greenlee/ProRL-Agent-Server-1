@@ -224,8 +224,7 @@ async def run_agent(
 
     except Exception as e:
         logger.error(f"Error running agent: {e}")
-        #raise e
-        return ""
+        raise e
     return git_patch
 
 async def run(instance):
@@ -374,6 +373,9 @@ async def _evaluate_agent(git_patch: str, instance: pd.Series):
         test_result = await call_sync_from_async(
             _apply_patch_and_evaluate, runtime, git_patch, instance
         )
+    except Exception as e:
+        logger.error(f"Error evaluating agent: {e}")
+        raise e
     finally:
         if runtime is not None:
             try:
