@@ -62,7 +62,7 @@ class JupyterPlugin(Plugin):
             jupyter_launch_command = (
                 f'cd /d "{code_repo_path}" && '
                 'poetry run jupyter kernelgateway '
-                '--KernelGatewayApp.ip=0.0.0.0 '
+                '--KernelGatewayApp.ip=localhost '
                 f'--KernelGatewayApp.port={self.kernel_gateway_port}'
             )
             logger.debug(f'Jupyter launch command (Windows): {jupyter_launch_command}')
@@ -106,7 +106,7 @@ class JupyterPlugin(Plugin):
                 f"{prefix}/bin/bash << 'EOF'\n"
                 f'{poetry_prefix}'
                 'poetry run jupyter kernelgateway '
-                '--KernelGatewayApp.ip=0.0.0.0 '
+                '--KernelGatewayApp.ip=localhost '
                 f'--KernelGatewayApp.port={self.kernel_gateway_port}\n'
                 'EOF'
             )

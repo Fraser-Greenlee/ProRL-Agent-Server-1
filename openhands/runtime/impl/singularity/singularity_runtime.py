@@ -478,8 +478,10 @@ class SingularityRuntime(ActionExecutionClient):
                 raise RuntimeError(f'Singularity image not found: {image_path}')
 
             # Build the singularity exec command
-            # cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace']
-            cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace', '--bind', '/tmp/runtime:/tmp/runtime', '--network', 'none']
+            cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace']
+
+            # the following cmd has the network disabled, which is good for the runtime to be isolated from the host, use it if not internet is needed
+            # cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace', '--network', 'none']
 
             # Add environment variables
             for key, value in env_vars.items():
