@@ -126,6 +126,7 @@ class SingularityRuntime(ActionExecutionClient):
     _shutdown_listener_id: UUID | None = None
     _active_container_pids: set[int] = set()  # Keep for backward compatibility with shutdown
     _port_allocation_lock = threading.Lock()  # Lock for synchronizing port allocation
+    _runtime_builder_lock = threading.Lock()  # Lock for synchronizing runtime builder
 
     def __init__(
         self,
@@ -335,14 +336,16 @@ class SingularityRuntime(ActionExecutionClient):
                     'Neither runtime container image nor base container image is set'
                 )
             self.send_status_message('STATUS$STARTING_CONTAINER')
-            self.runtime_container_image = build_runtime_image(
-                self.base_container_image,
-                self.runtime_builder,
-                platform=self.config.sandbox.platform,
-                extra_deps=self.config.sandbox.runtime_extra_deps,
-                force_rebuild=self.config.sandbox.force_rebuild_runtime,
-                extra_build_args=self.config.sandbox.runtime_extra_build_args,
-            )
+            # add lock
+            with SingularityRuntime._runtime_builder_lock:
+                self.runtime_container_image = build_runtime_image(
+                    self.base_container_image,
+                    self.runtime_builder,
+                    platform=self.config.sandbox.platform,
+                    extra_deps=self.config.sandbox.runtime_extra_deps,
+                    force_rebuild=self.config.sandbox.force_rebuild_runtime,
+                    extra_build_args=self.config.sandbox.runtime_extra_build_args,
+                )
         else:
             # It has runtime container image in the dockerhub, so we need to pull it
             # Pull the image if it doesn't exist locally
@@ -475,7 +478,8 @@ class SingularityRuntime(ActionExecutionClient):
                 raise RuntimeError(f'Singularity image not found: {image_path}')
 
             # Build the singularity exec command
-            cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace']
+            # cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace']
+            cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace', '--bind', '/tmp/runtime:/tmp/runtime', '--network', 'none']
 
             # Add environment variables
             for key, value in env_vars.items():
