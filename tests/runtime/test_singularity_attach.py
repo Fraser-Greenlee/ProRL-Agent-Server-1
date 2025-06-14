@@ -84,8 +84,6 @@ def run_primary_runtime(temp_dir, duration=30):
         # Store runtime information for the attaching process
         runtime_info = {
             'sid': runtime.sid,
-            'api_url': runtime.api_url,
-            'container_port': runtime._container_port,
             'vscode_port': runtime._vscode_port,
             'container_pid': runtime.container_pid,
             'container_name': runtime.container_name,
@@ -192,7 +190,6 @@ def run_attach_runtime(temp_dir, primary_sid, max_wait=60):
                 'stdout': obs.content,
                 'runtime_info': {
                     'sid': runtime.sid,
-                    'api_url': runtime.api_url,
                     'container_pid': runtime.container_pid,
                 },
             }
