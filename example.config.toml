@@ -199,8 +199,7 @@ model = "hosted_vllm/Qwen3-1.7B"
 # ATTENTION: Based on evaluation, enabling native function calling may lead to worse results
 # in some scenarios. Use with caution and consider testing with your specific use case.
 # https://github.com/All-Hands-AI/OpenHands/pull/4711
-#native_tool_calling = None
-
+native_tool_calling = true
 
 
 [llm.gpt4o-mini]
@@ -333,9 +332,13 @@ base_container_image = "ubuntu:24.04"
 # Multiple mounts can be specified using commas
 # e.g. '/path1:/workspace/path1,/path2:/workspace/path2:ro'
 
+# Isolate network for container runtimes (e.g., Singularity)
+# When true, the container will be run without network access for better security isolation
+#isolate_network = false
+
 # Configure volumes under the [sandbox] section:
 # [sandbox]
-volumes = "/Projects/OpenHands_internal/dir:/workspace:rw"
+# volumes = "/Projects/OpenHands_internal/dir:/workspace:rw"
 
 #################################### Security ###################################
 # Configuration for security features

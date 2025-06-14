@@ -480,8 +480,9 @@ class SingularityRuntime(ActionExecutionClient):
             # Build the singularity exec command
             cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace']
 
-            # the following cmd has the network disabled, which is good for the runtime to be isolated from the host, use it if not internet is needed
-            # cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace', '--network', 'none']
+            # Add network isolation if configured
+            if self.config.sandbox.isolate_network:
+                cmd.extend(['--network', 'none'])
 
             # Add environment variables
             for key, value in env_vars.items():
