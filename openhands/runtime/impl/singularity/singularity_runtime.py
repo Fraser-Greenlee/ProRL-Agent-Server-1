@@ -488,6 +488,10 @@ class SingularityRuntime(ActionExecutionClient):
             # Add volume mounts
             cmd.extend(mount_args)
 
+            # make /tmp/runtime directory if not exists
+            if not os.path.exists('/tmp/runtime'):
+                os.makedirs('/tmp/runtime')
+
             # Add UDS socket directory mount for communication
             cmd.extend(['--bind', '/tmp/runtime:/tmp/runtime'])
 

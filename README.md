@@ -215,5 +215,5 @@ INSTALL_DOCKER=0 make -f Makefile.singularity run
 ## Run unit tests
 Example:
 ```bash
-TEST_RUNTIME=singularity RUN_AS_OPENHANDS=False PYTHONPATH='.' pytest tests/runtime/test_browsing.py -v
+TEST_RUNTIME=singularity RUN_AS_OPENHANDS=False PYTHONPATH='.' pytest tests/runtime/test_browsing.py -v -s
 ```
