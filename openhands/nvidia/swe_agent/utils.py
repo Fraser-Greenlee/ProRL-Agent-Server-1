@@ -182,7 +182,7 @@ async def initialize_agents(
     runtime = create_runtime(config, sid=sid)
 
     await runtime.connect()
-    print(f"Runtime connected {runtime.action_execution_server_url}")
+    print(f"Runtime connected {runtime.sid}")
 
     try:
         initialize_runtime(runtime, instance, metadata)
@@ -363,13 +363,13 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: pd.Series):
 
     return test_result
 
-async def _evaluate_agent(git_patch: str, instance: pd.Series):
+async def _evaluate_agent(git_patch: str, instance: pd.Series, sid: str = None):
 
     from openhands.utils.async_utils import call_sync_from_async
 
     runtime = None
     try:
-        runtime, _, _ = await initialize_agents(instance)
+        runtime, _, _ = await initialize_agents(instance, sid=sid)
         test_result = await call_sync_from_async(
             _apply_patch_and_evaluate, runtime, git_patch, instance
         )

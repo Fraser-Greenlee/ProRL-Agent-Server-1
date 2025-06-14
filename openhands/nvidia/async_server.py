@@ -257,7 +257,7 @@ class OpenHandsServer:
             try:
                 if job_details.patch is None:
                     raise ValueError("Patch is None, cannot evaluate")
-                eval_report = await _evaluate_patch_async(job_details.patch, job_details.instance)
+                eval_report = await _evaluate_patch_async(job_details.patch, job_details.instance, sid=f"eval_{job_id}")
                 # Only keep the 'report' field if present
                 if isinstance(eval_report, dict) and 'report' in eval_report:
                     job_details.result = eval_report['report']
