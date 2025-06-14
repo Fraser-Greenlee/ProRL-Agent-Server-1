@@ -180,11 +180,25 @@ INSTALL_DOCKER=0 make -f Makefile.singularity build
 
 ### Step 3: Start the OpenHands Server
 
-Launch the OpenHands server (both frontend and backend):
+#### Option A: SLURM Environment
+Launch the OpenHands server (both frontend and backend) in a SLURM cluster environment:
 
 ```bash
 INSTALL_DOCKER=0 make -f Makefile.singularity run
 ```
+
+#### Option B: Local Machine (Non-SLURM)
+Launch the OpenHands server on a local machine without SLURM:
+
+```bash
+INSTALL_DOCKER=0 OH_RUNTIME_SINGULARITY_IMAGE_REPO=/local_path/singularity_images/ SANDBOX_RUN_AS_FAKEROOT=true make -f Makefile.singularity run
+```
+
+#### Environment Variables Explained
+
+- **`INSTALL_DOCKER=0`**: Disables Docker installation since we're using Singularity/Apptainer
+- **`OH_RUNTIME_SINGULARITY_IMAGE_REPO`**: Specifies the local directory where Singularity images will be stored
+- **`SANDBOX_RUN_AS_FAKEROOT=true`**: Enables fakeroot privileges for package installations and root-requiring operations (not needed in SLURM environments)
 
 ### Step 4: Configure the Web Interface
 
