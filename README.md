@@ -217,3 +217,23 @@ Example:
 ```bash
 TEST_RUNTIME=singularity RUN_AS_OPENHANDS=False PYTHONPATH='.' pytest tests/runtime/test_browsing.py -v -s
 ```
+
+### Important Environment Variables
+
+#### Image Storage Location
+**`OH_RUNTIME_SINGULARITY_IMAGE_REPO`** - Specifies the directory where Singularity runtime images will be stored.
+```bash
+OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
+```
+
+#### Network Isolation
+**`SANDBOX_ISOLATE_NETWORK`** - Controls whether to run the container in an isolated network environment for enhanced security.
+```bash
+SANDBOX_ISOLATE_NETWORK=true
+```
+
+#### Fakeroot Execution
+**`SANDBOX_RUN_AS_FAKEROOT`** - Enables running the container with fakeroot privileges, allowing processes to appear as root without requiring actual root access on the host system. Note: This is typically not needed when running on SLURM clusters.
+```bash
+SANDBOX_RUN_AS_FAKEROOT=true
+```

@@ -477,6 +477,10 @@ class SingularityRuntime(ActionExecutionClient):
             # Build the singularity exec command
             cmd = ['singularity', 'run', '--pid', '--writable-tmpfs', '--no-mount', 'home,cwd,tmp', '--home', '/root', '--workdir', '/workspace']
 
+            # add --fakeroot if configured
+            if self.config.sandbox.run_as_fakeroot:
+                cmd.extend(['--fakeroot'])
+
             # Add network isolation if configured
             if self.config.sandbox.isolate_network:
                 cmd.extend(['--network', 'none'])

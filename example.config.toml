@@ -332,6 +332,15 @@ base_container_image = "ubuntu:24.04"
 # Multiple mounts can be specified using commas
 # e.g. '/path1:/workspace/path1,/path2:/workspace/path2:ro'
 
+# Run container with fakeroot privileges
+# When true, processes inside the container will appear to run as root (UID 0) without requiring
+# actual root privileges on the host system. This is particularly useful for:
+# - Singularity/Apptainer containers where you need simulated root access
+# - Package installations that require root privileges
+# - Security isolation while maintaining compatibility with root-expecting applications
+# Note: This is typically not needed when running on SLURM clusters
+run_as_fakeroot = true
+
 # Isolate network for container runtimes (e.g., Singularity)
 # When true, the container will be run without network access for better security isolation
 #isolate_network = false
