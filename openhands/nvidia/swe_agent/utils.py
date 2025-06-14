@@ -95,7 +95,8 @@ def get_config(
     )
 
     # run as fakeroot
-    sandbox_config.run_as_fakeroot = True
+    # Currently set to False as some container require GLIBC_2.38
+    sandbox_config.run_as_fakeroot = False
 
     """
     sandbox_config.runtime_container_image = (

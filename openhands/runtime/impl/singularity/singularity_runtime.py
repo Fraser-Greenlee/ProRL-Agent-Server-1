@@ -671,10 +671,10 @@ class SingularityRuntime(ActionExecutionClient):
             self._loopback_ip = None
 
         # clean up the socket file
-        if self.config.sandbox.run_as_fakeroot:
-            socket_file = f'/tmp/runtime/{self.sid}.sock'
-            if os.path.exists(socket_file):
-                os.remove(socket_file)
+        #if self.config.sandbox.run_as_fakeroot:
+        socket_file = f'/tmp/runtime/{self.sid}.sock'
+        if os.path.exists(socket_file):
+            os.remove(socket_file)
 
         # Stop Singularity processes
         if rm_all_containers:
