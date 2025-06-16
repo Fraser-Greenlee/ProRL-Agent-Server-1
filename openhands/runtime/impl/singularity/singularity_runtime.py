@@ -25,6 +25,11 @@ from openhands.runtime.impl.action_execution.action_execution_client import (
 )
 from openhands.runtime.plugins import PluginRequirement
 from openhands.runtime.utils import find_available_tcp_port
+from openhands.runtime.utils.loopback_ip_allocator import (
+    allocate_loopback_ip,
+    release_loopback_ip,
+    get_loopback_ip,
+)
 from openhands.runtime.utils.command import (
     DEFAULT_MAIN_MODULE,
     get_action_execution_server_startup_command,
@@ -151,9 +156,29 @@ class SingularityRuntime(ActionExecutionClient):
         self._vscode_port = -1
         self._file_viewer_port = -1
         self._app_ports: list[int] = []
+        self._loopback_ip: str | None = None
 
         # Check if singularity is available
         self._check_singularity_availability()
+
+        # Allocate unique loopback IP for this runtime instance
+        try:
+            if attach_to_existing:
+                # Try to get existing IP first when attaching
+                existing_ip = get_loopback_ip(sid)
+                if existing_ip:
+                    self._loopback_ip = existing_ip
+                    logger.info(f'Using existing loopback IP {self._loopback_ip} for runtime session {sid}')
+                else:
+                    # No existing IP
+                    raise RuntimeError(f'No existing loopback IP found for runtime session {sid}')
+            else:
+                # Always allocate new IP for new containers
+                self._loopback_ip = allocate_loopback_ip(sid)
+                logger.info(f'Allocated loopback IP {self._loopback_ip} for runtime session {sid}')
+        except Exception as e:
+            logger.warning(f'Failed to allocate loopback IP for session {sid}: {e}')
+            self._loopback_ip = None
 
         self.base_container_image = self.config.sandbox.base_container_image
         self.runtime_container_image = self.config.sandbox.runtime_container_image
@@ -628,10 +653,20 @@ class SingularityRuntime(ActionExecutionClient):
             rm_all_containers = self.config.sandbox.rm_all_containers
 
         if self.config.sandbox.keep_runtime_alive or self.attach_to_existing:
+            # Don't clean up resources when keeping runtime alive or when we only attached
             return
 
         # Clean up session port information
         self._delete_session_port_info()
+
+        # Release the allocated loopback IP (only when actually closing, not when attaching)
+        if self._loopback_ip:
+            try:
+                release_loopback_ip(self.sid)
+                logger.info(f'Released loopback IP {self._loopback_ip} for session {self.sid}')
+            except Exception as e:
+                logger.warning(f'Failed to release loopback IP {self._loopback_ip} for session {self.sid}: {e}')
+            self._loopback_ip = None
 
         # clean up the socket file
         if self.config.sandbox.run_as_fakeroot:
@@ -662,6 +697,11 @@ class SingularityRuntime(ActionExecutionClient):
                 port = find_available_tcp_port(port_range[0], port_range[1])
                 return port
             raise RuntimeError(f'Failed to find available port in range {port_range} after {max_attempts} attempts')
+
+    @property
+    def loopback_ip(self) -> str | None:
+        """Get the unique loopback IP assigned to this runtime instance."""
+        return self._loopback_ip
 
     @property
     def vscode_url(self) -> str | None:
