@@ -14,6 +14,9 @@ from openhands.runtime.utils import find_available_tcp_port
 from openhands.utils.shutdown_listener import should_continue
 
 
+# make sure it has no overlap with other port ranges defined in singularity_runtime.py
+KERNEL_GATEWAY_PORT_RANGE = (45000, 49999)
+
 @dataclass
 class JupyterRequirement(PluginRequirement):
     name: str = 'jupyter'
@@ -29,7 +32,7 @@ class JupyterPlugin(Plugin):
     async def initialize(
         self, username: str, kernel_id: str = 'openhands-default'
     ) -> None:
-        self.kernel_gateway_port = find_available_tcp_port(40000, 49999)
+        self.kernel_gateway_port = find_available_tcp_port(KERNEL_GATEWAY_PORT_RANGE[0], KERNEL_GATEWAY_PORT_RANGE[1])
         self.kernel_id = kernel_id
         is_local_runtime = os.environ.get('LOCAL_RUNTIME_MODE') == '1'
         is_windows = sys.platform == 'win32'
