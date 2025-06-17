@@ -22,9 +22,9 @@ class LoopbackIPAllocator:
     _instance = None
     _lock = threading.Lock()
 
-    # IP range: 127.0.0.1 to 127.255.255.255 (excluding 127.0.0.0 and 127.0.0.1)
-    # We'll use 127.0.1.0 to 127.255.255.255 to avoid conflicts with localhost
-    MIN_IP = (127, 0, 1, 0)
+    # IP range: 127.0.0.1 to 127.255.255.255 (excluding 127.0.0.0)
+    # We'll use 127.0.0.1 to 127.255.255.255 starting from localhost
+    MIN_IP = (127, 0, 0, 1)
     MAX_IP = (127, 255, 255, 255)
 
     def __new__(cls):
@@ -155,7 +155,7 @@ class LoopbackIPAllocator:
                     logger.info(f"Allocated IP {ip_str} for session {session_id}")
                     return ip_str
 
-            raise RuntimeError("No available loopback IPs in range 127.0.1.0 to 127.255.255.255")
+            raise RuntimeError("No available loopback IPs in range 127.0.0.1 to 127.255.255.255")
 
     def release_ip(self, session_id: str) -> None:
         """
