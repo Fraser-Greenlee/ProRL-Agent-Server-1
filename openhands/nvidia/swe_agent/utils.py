@@ -26,9 +26,14 @@ from openhands.core.config import (
     AgentConfig,
     OpenHandsConfig,
 )
+from openhands.core.setup import create_agent
 from openhands.core.main import create_runtime, run_controller
 from openhands.controller.state.state import State
 from openhands.core.logger import openhands_logger as logger
+from openhands.events.action import (
+    Action,
+    AgentFinishAction,
+)
 
 DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'xingyaoww/')
 logger.info(f'Using docker image prefix: {DOCKER_IMAGE_PREFIX}')
@@ -68,6 +73,20 @@ def get_instance_docker_image(instance_id: str) -> str:
         '__', '_s_'
     )  # to comply with docker image naming convention
     return (DOCKER_IMAGE_PREFIX.rstrip('/') + '/' + image_name).lower()
+
+def is_last_action_finish(state: State) -> bool:
+    if state and state.history:
+        last_action = next(
+            (
+                event
+                for event in reversed(state.history)
+                if isinstance(event, Action)
+            ),
+            None,
+        )
+        if isinstance(last_action, AgentFinishAction):
+            return True
+    return False
 
 def get_config(
     instance: pd.Series,
@@ -209,10 +228,12 @@ async def run_agent(
     ) -> str:
     message_action = get_instruction(instance, metadata)
     try:
+        agent = create_agent(config)
         state: State | None = await run_controller(
                 config=config,
                 initial_user_action=message_action,
                 runtime=runtime,
+                agent=agent,
                 fake_user_response_fn=codeact_user_response,
             )
 
@@ -229,7 +250,21 @@ async def run_agent(
     except Exception as e:
         logger.error(f"Error running agent: {e}")
         raise e
-    return git_patch
+
+    # get messages from agent history
+    initial_user_message = agent._get_initial_user_message(state.history)
+    condensed_history = agent.condenser.condensed_history(state)
+    raw_messages = agent._get_messages(condensed_history, initial_user_message)
+    messages = agent.llm.format_messages_for_llm(raw_messages),
+
+    run_results = {
+        "git_patch": git_patch,
+        'success': not bool(state.last_error if state else True),
+        'error': state.last_error if state and state.last_error else None,
+        'finish': is_last_action_finish(state),
+        'messages': messages[0]
+    }
+    return run_results
 
 async def run(instance):
     #agent = initialize_agents(instance)
@@ -367,7 +402,11 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: pd.Series):
 
     return test_result
 
-async def _evaluate_agent(git_patch: str, instance: pd.Series, sid: str = None):
+async def _evaluate_agent(git_patch: str, instance: pd.Series, sid: str = None, allow_skip=True):
+    # skip evaluation if git_patch is None or empty
+    if allow_skip:
+        if git_patch is None or len(git_patch) == 0:
+            return {'resolved': False}
 
     from openhands.utils.async_utils import call_sync_from_async
 

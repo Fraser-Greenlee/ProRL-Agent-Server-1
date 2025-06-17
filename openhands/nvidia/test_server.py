@@ -82,6 +82,8 @@ async def process_request(instance: dict, sampling_params: dict = None):
         async with session.post(url, json=payload) as response:
             if response.status == 200:
                 result = await response.json()
+                # Don't print full messages
+                result['messages'] = len(result['messages'])
                 print("Process completed successfully:", result)
                 return result
             else:

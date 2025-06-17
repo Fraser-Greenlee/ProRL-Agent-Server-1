@@ -20,13 +20,18 @@ thread_pool = None
 DEFAULT_TIMEOUT = 300.0  # 5 minutes
 global_timeout = DEFAULT_TIMEOUT
 
-def init_server(max_init_workers: int = 6, max_run_workers: int = 5, timeout: float = DEFAULT_TIMEOUT):
+def init_server(max_init_workers: int = 6, max_run_workers: int = 5, timeout: float = DEFAULT_TIMEOUT, allow_skip_eval: bool = True):
     print(f"Initializing server with max_init_workers={max_init_workers}, max_run_workers={max_run_workers}, timeout={timeout}")
+    if allow_skip_eval:
+        print("Allowing skipping evaluation if git_patch is None or empty. Please set allow_skip_eval=False for testing.")
+    else:
+        print("Not allowing skipping evaluation if git_patch is None or empty. Please set allow_skip_eval=True for production.")
     global server, global_timeout, thread_pool
     server = OpenHandsServer(
         llm_server_addresses=[],
         max_init_workers=max_init_workers,
-        max_run_workers=max_run_workers
+        max_run_workers=max_run_workers,
+        allow_skip_eval=allow_skip_eval
     )
     global_timeout = timeout
     thread_pool_count = min( max_init_workers, os.cpu_count() - 64)
@@ -137,9 +142,11 @@ def parse_args():
                       help='Host to bind the server to (default: 0.0.0.0)')
     parser.add_argument('--port', type=int, default=8006,
                       help='Port to bind the server to (default: 8006)')
+    parser.add_argument('--allow-skip-eval', type=bool, default=True,
+                      help='Allow skipping evaluation if git_patch is None or empty. Set to False for testing (default: True).')
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = parse_args()
-    init_server(max_init_workers=args.max_init_workers, max_run_workers=args.max_run_workers, timeout=args.timeout)
+    init_server(max_init_workers=args.max_init_workers, max_run_workers=args.max_run_workers, timeout=args.timeout, allow_skip_eval=args.allow_skip_eval)
     start_api_server(host=args.host, port=args.port) 

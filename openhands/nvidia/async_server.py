@@ -22,8 +22,9 @@ class JobDetails:
     runtime: Runtime = None
     metadata: EvalMetadata = None
     config: OpenHandsConfig = None
-    patch: str | None = None
-    result: str | dict | None = None
+    run_results: dict | None = None
+    eval_results: dict | None = None
+    results: dict | None = None
     event: threading.Event = None
     start_time: float = None
     start_run_time: float = None
@@ -31,15 +32,26 @@ class JobDetails:
     end_time: float = None
 
 class OpenHandsServer:
-    def __init__(self, llm_server_addresses: List[str] = [], max_init_workers:int = 6, max_run_workers:int = 5, max_eval_workers:int | None = None):
+    def __init__(
+            self, 
+            llm_server_addresses: List[str] = [],
+            max_init_workers:int = 6,
+            max_run_workers:int = 5,
+            max_eval_workers:int | None = None,
+            allow_skip_eval: bool = True,
+        ):
         """Create server.
 
         If *max_eval_workers* is not provided, it defaults to the same value as
         *max_run_workers*, so you only need to specify one number when you want
         these two pools to have the same size.
+
+        allow_skip_eval: if True, skip evaluation if git_patch is None or empty. 
+        Set to False for testing.
         """
         self.max_init_workers = max_init_workers
         self.max_run_workers = max_run_workers
+        self.allow_skip_eval = allow_skip_eval
         # If eval workers not specified, mirror run_workers
         self.max_eval_workers = max_run_workers if max_eval_workers is None else max_eval_workers
 
@@ -132,7 +144,10 @@ class OpenHandsServer:
         # Wait for job to be finished
         job_details.event.wait()
         job_details.end_time = time.time()
-        result = copy.deepcopy(job_details.result)
+        if job_details.results is None:
+            result = {**job_details.run_results, 'resolved': job_details.eval_results['resolved'], 'critical_error': None}
+        else:
+            result = copy.deepcopy(job_details.results)
         if job_details.start_run_time:
             init_time_taken = job_details.start_run_time - job_details.start_time
             if job_details.start_eval_time:
@@ -151,7 +166,7 @@ class OpenHandsServer:
         # Delete job details
         del self._job_details[job_id]
         return {
-            'results': result,
+            **result,
             'init_time_taken': init_time_taken,
             'run_time_taken': run_time_taken,
             'evaluate_time_taken': evaluate_time_taken,
@@ -172,15 +187,27 @@ class OpenHandsServer:
             job_details = self._job_details[job_id]
             self._active_init_jobs.add(job_id)
             try:
-                runtime, metadata, config = await initialize_agents(job_details.instance, job_details.llm_config, sid=job_id, max_iterations=job_details.max_iterations)
+                runtime, metadata, config = await initialize_agents(
+                    job_details.instance,
+                    job_details.llm_config,
+                    sid=job_id,
+                    max_iterations=job_details.max_iterations
+                    )
                 job_details.runtime = runtime
                 job_details.metadata = metadata
                 job_details.config = config
                 self.run_queue.put(job_id)
             except Exception as e:
-                job_details.result = {
-                    "error": str(e),
-                    "stage": "init",
+                job_details.results = {
+                    'instance_id': job_details.instance.instance_id,
+                    'trajectory_id': job_details.instance.trajectory_id,
+                    'git_patch': None,
+                    'success': False,
+                    "error": f"Error in init: {str(e)}",
+                    'finish': False,
+                    'messages': [],
+                    'resolved': False,
+                    'critical_error': 'init',
                 }
                 job_details.event.set()
             finally:
@@ -204,13 +231,13 @@ class OpenHandsServer:
             job_details.start_run_time = time.time()
             self._active_run_jobs.add(job_id)
             try:
-                patch = await run_agent(
+                run_results = await run_agent(
                     job_details.runtime,
                     job_details.metadata,
                     job_details.config,
                     job_details.instance,
                 )
-                job_details.patch = patch
+                job_details.run_results = run_results
 
                 # Close runtime right after run finishes (before evaluation)
                 if job_details.runtime:
@@ -225,9 +252,16 @@ class OpenHandsServer:
                     job_details.runtime.close()
                     job_details.runtime = None
 
-                job_details.result = {
-                    "error": str(e),
-                    "stage": "run",
+                job_details.results = {
+                    'instance_id': job_details.instance.instance_id,
+                    'trajectory_id': job_details.instance.trajectory_id,
+                    'git_patch': None,
+                    'success': False,
+                    "error": f"Error in run agent: {str(e)}",
+                    'finish': False,
+                    'messages': [],
+                    'resolved': False,
+                    'critical_error': 'run',
                 }
                 job_details.event.set()
             finally:
@@ -255,19 +289,31 @@ class OpenHandsServer:
             job_details.start_eval_time = time.time()
             self._active_eval_jobs.add(job_id)
             try:
-                if job_details.patch is None:
+                if job_details.run_results['git_patch'] is None:
                     raise ValueError("Patch is None, cannot evaluate")
-                eval_report = await _evaluate_patch_async(job_details.patch, job_details.instance, sid=f"eval_{job_id}")
+                eval_report = await _evaluate_patch_async(
+                    job_details.run_results['git_patch'],
+                    job_details.instance,
+                    sid=f"eval_{job_id}",
+                    allow_skip=self.allow_skip_eval
+                    )
                 # Only keep the 'report' field if present
                 if isinstance(eval_report, dict) and 'report' in eval_report:
-                    job_details.result = eval_report['report']
+                    job_details.eval_results = eval_report['report']
                 else:
-                    job_details.result = eval_report
+                    job_details.eval_results = eval_report
                 job_details.event.set()
             except Exception as e:
-                job_details.result = {
-                    "error": str(e),
-                    "stage": "eval",
+                job_details.results = {
+                    'instance_id': job_details.instance.instance_id,
+                    'trajectory_id': job_details.instance.trajectory_id,
+                    'git_patch': job_details.run_results.get('git_patch', None),
+                    'success': job_details.run_results.get('success', False),
+                    "error": f"Error in eval: {str(e)}",
+                    'finish': job_details.run_results.get('finish', False),
+                    'messages': job_details.run_results.get('messages', []),
+                    'resolved': False,
+                    'critical_error': 'eval',
                 }
                 job_details.event.set()
             finally:
@@ -390,7 +436,7 @@ class OpenHandsServer:
             'total': init_queue_count + run_queue_count + eval_queue_count + active_init_count + active_run_count + active_eval_count,
         }
 
-def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
+def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2, allow_skip_eval: bool = False):
     import pandas as pd
     import numpy as np
     from concurrent.futures import ThreadPoolExecutor
@@ -421,6 +467,7 @@ def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
         llm_server_addresses=[llm_server_address, llm_server_address],
         max_init_workers=max_parallel_jobs,
         max_run_workers=max_parallel_jobs,
+        allow_skip_eval=allow_skip_eval,
     )
     server.start()
     print("Server started")
@@ -439,6 +486,9 @@ def test_server(total_jobs: int = 4, max_parallel_jobs: int = 2):
 
 if __name__ == "__main__":
     start = time.time()
-    results = test_server(total_jobs=5, max_parallel_jobs=5)
+    results = test_server(total_jobs=5, max_parallel_jobs=5, allow_skip_eval=False)
+    # Don't print full messages
+    for result in results:
+        result['messages'] = len(result['messages'])
     print(results)
     print(f"Time taken: {time.time() - start}")
