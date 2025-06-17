@@ -139,12 +139,20 @@ if __name__ == "__main__":
     asyncio.run(start_server_api())
     import time
 
+    # Test with 1 task
     start_time = time.time()
-    asyncio.run(process(instance, num_tasks=1))
+    results_single = asyncio.run(process(instance, num_tasks=1))
     end_time = time.time()
     print(f"Time1 taken: {end_time - start_time} seconds")
+    for res in results_single:
+        assert res['critical_error'] is None, f"Critical error in single task: {res}"
 
+    # Test with 64 tasks
     start_time = time.time()
-    asyncio.run(process(instance, num_tasks=64))
+    results_multi = asyncio.run(process(instance, num_tasks=64))
     end_time = time.time()
-    print(f"Time2 taken: {end_time - start_time} seconds")
+    print(f"\nTime2 taken: {end_time - start_time} seconds")
+    for res in results_multi:
+        assert res['critical_error'] is None, f"Critical error in multiple tasks: {res}"
+
+    print("All tests passed")

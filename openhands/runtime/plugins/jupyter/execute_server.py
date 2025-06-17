@@ -123,7 +123,7 @@ class JupyterKernel:
                 self.base_ws_url, url_escape(self.kernel_id)
             )
         )
-        self.ws = await websocket_connect(ws_req)
+        self.ws = await websocket_connect(ws_req, request_timeout=60)
         logging.info('Connected to kernel websocket')
 
         # Setup heartbeat
