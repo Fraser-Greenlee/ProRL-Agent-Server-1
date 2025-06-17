@@ -534,6 +534,7 @@ class SingularityRuntime(ActionExecutionClient):
             cmd.extend(startup_command)
 
             self.log('debug', f'Starting Singularity container with command: {" ".join(cmd)}')
+            #print(" ".join(cmd))
 
             # Start the container process
             self.container_process = subprocess.Popen(
