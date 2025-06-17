@@ -56,13 +56,16 @@ class JupyterPlugin(Plugin):
                 )
             # The correct environment is ensured by the PATH in LocalRuntime.
             poetry_prefix = f'cd {code_repo_path}\n'
+        loopback_ip = os.environ.get('LOOPBACK_IP')
+        if not loopback_ip:
+            raise RuntimeError('LOOPBACK_IP environment variable is not set')
 
         if is_windows:
             # Windows-specific command format
             jupyter_launch_command = (
                 f'cd /d "{code_repo_path}" && '
                 'poetry run jupyter kernelgateway '
-                '--KernelGatewayApp.ip=localhost '
+                f'--KernelGatewayApp.ip={loopback_ip} '
                 f'--KernelGatewayApp.port={self.kernel_gateway_port}'
             )
             logger.debug(f'Jupyter launch command (Windows): {jupyter_launch_command}')
@@ -106,7 +109,7 @@ class JupyterPlugin(Plugin):
                 f"{prefix}/bin/bash << 'EOF'\n"
                 f'{poetry_prefix}'
                 'poetry run jupyter kernelgateway '
-                '--KernelGatewayApp.ip=localhost '
+                f'--KernelGatewayApp.ip={loopback_ip} '
                 f'--KernelGatewayApp.port={self.kernel_gateway_port}\n'
                 'EOF'
             )
@@ -141,6 +144,9 @@ class JupyterPlugin(Plugin):
 
     async def _run(self, action: Action) -> IPythonRunCellObservation:
         """Internal method to run a code cell in the jupyter kernel."""
+        loopback_ip = os.environ.get('LOOPBACK_IP')
+        if not loopback_ip:
+            raise RuntimeError('LOOPBACK_IP environment variable is not set')
         if not isinstance(action, IPythonRunCellAction):
             raise ValueError(
                 f'Jupyter plugin only supports IPythonRunCellAction, but got {action}'
@@ -148,7 +154,7 @@ class JupyterPlugin(Plugin):
 
         if not hasattr(self, 'kernel'):
             self.kernel = JupyterKernel(
-                f'localhost:{self.kernel_gateway_port}', self.kernel_id
+                f'{loopback_ip}:{self.kernel_gateway_port}', self.kernel_id
             )
 
         if not self.kernel.initialized:

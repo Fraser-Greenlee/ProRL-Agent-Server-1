@@ -469,6 +469,7 @@ class SingularityRuntime(ActionExecutionClient):
         env_vars = {
             'PYTHONUNBUFFERED': '1',
             'VSCODE_PORT': str(self._vscode_port),
+            'LOOPBACK_IP': self.loopback_ip,
             'FILE_VIEWER_PORT': str(self._file_viewer_port),
             'APP_PORT_1': str(self._app_ports[0]),
             'APP_PORT_2': str(self._app_ports[1]),
