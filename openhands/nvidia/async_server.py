@@ -115,6 +115,10 @@ class OpenHandsServer:
         for i in range(self.max_run_workers):
             self._executor.submit(self._run_worker_in_thread, i, False)
 
+        # Submit evaluation workers
+        for i in range(self.max_eval_workers):
+            self._executor.submit(self._run_eval_worker_in_thread, i)
+
     def process(self, instance, sampling_params, job_id=None):
         if len(self.weighted_addresses) == 0:
             raise ValueError("No LLM server addresses added")
