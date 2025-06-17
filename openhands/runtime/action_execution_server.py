@@ -64,7 +64,7 @@ from openhands.events.serialization import event_from_dict, event_to_dict
 from openhands.runtime.browser import browse
 from openhands.runtime.browser.browser_env import BrowserEnv
 from openhands.runtime.file_viewer_server import start_file_viewer_server
-from openhands.runtime.plugins import ALL_PLUGINS, JupyterPlugin, Plugin, VSCodePlugin
+from openhands.runtime.plugins import ALL_PLUGINS, DirectJupyterPlugin, Plugin, VSCodePlugin
 from openhands.runtime.utils.async_bash import AsyncBashSession
 from openhands.runtime.utils.bash import BashSession
 from openhands.runtime.utils.files import insert_lines, read_lines
@@ -292,7 +292,7 @@ class ActionExecutor:
         # TODO: refactor AgentSkills to be part of JupyterPlugin
         # AFTER ServerRuntime is deprecated
         logger.debug('Initializing AgentSkills')
-        if 'agent_skills' in self.plugins and 'jupyter' in self.plugins:
+        if 'agent_skills' in self.plugins and 'direct_jupyter' in self.plugins:
             obs = await self.run_ipython(
                 IPythonRunCellAction(
                     code='from openhands.runtime.plugins.agent_skills.agentskills import *\n'
@@ -316,7 +316,7 @@ class ActionExecutor:
         self.plugins[plugin.name] = plugin
         logger.debug(f'Initializing plugin: {plugin.name}')
 
-        if isinstance(plugin, JupyterPlugin):
+        if isinstance(plugin, DirectJupyterPlugin):
             # Escape backslashes in Windows path
             cwd = self.bash_session.cwd.replace('\\', '/')
             await self.run_ipython(
@@ -407,8 +407,8 @@ class ActionExecutor:
 
     async def run_ipython(self, action: IPythonRunCellAction) -> Observation:
         assert self.bash_session is not None
-        if 'jupyter' in self.plugins:
-            _jupyter_plugin: JupyterPlugin = self.plugins['jupyter']  # type: ignore
+        if 'direct_jupyter' in self.plugins:
+            _jupyter_plugin: DirectJupyterPlugin = self.plugins['direct_jupyter']  # type: ignore
             # This is used to make AgentSkills in Jupyter aware of the
             # current working directory in Bash
             jupyter_cwd = getattr(self, '_jupyter_cwd', None)
@@ -439,7 +439,7 @@ class ActionExecutor:
             return obs
         else:
             raise RuntimeError(
-                'JupyterRequirement not found. Unable to run IPython action.'
+                'Direct JupyterRequirement not found. Unable to run IPython action.'
             )
 
     def _resolve_path(self, path: str, working_dir: str) -> str:

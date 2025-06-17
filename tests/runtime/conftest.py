@@ -19,7 +19,7 @@ from openhands.runtime.impl.local.local_runtime import LocalRuntime
 from openhands.runtime.impl.remote.remote_runtime import RemoteRuntime
 from openhands.runtime.impl.runloop.runloop_runtime import RunloopRuntime
 from openhands.runtime.impl.singularity.singularity_runtime import SingularityRuntime
-from openhands.runtime.plugins import AgentSkillsRequirement, JupyterRequirement
+from openhands.runtime.plugins import AgentSkillsRequirement, JupyterRequirement, DirectJupyterRequirement
 from openhands.storage import get_file_store
 from openhands.utils.async_utils import call_async_from_sync
 
@@ -229,7 +229,7 @@ def _load_runtime(
 
     # AgentSkills need to be initialized **before** Jupyter
     # otherwise Jupyter will not access the proper dependencies installed by AgentSkills
-    plugins = [AgentSkillsRequirement(), JupyterRequirement()]
+    plugins = [AgentSkillsRequirement(), DirectJupyterRequirement()]
 
     config = load_openhands_config()
     config.run_as_openhands = run_as_openhands

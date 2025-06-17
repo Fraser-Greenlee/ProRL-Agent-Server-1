@@ -12,7 +12,7 @@ from openhands.runtime.plugins.jupyter.execute_server import JupyterKernel
 from openhands.runtime.plugins.requirement import Plugin, PluginRequirement
 from openhands.runtime.utils import find_available_tcp_port
 from openhands.utils.shutdown_listener import should_continue
-
+from openhands.runtime.plugins.jupyter.direct_jupyter import DirectJupyterRequirement, DirectJupyterPlugin
 
 # make sure it has no overlap with other port ranges defined in singularity_runtime.py
 KERNEL_GATEWAY_PORT_RANGE = (45000, 49999)
