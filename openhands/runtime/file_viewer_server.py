@@ -39,7 +39,9 @@ def create_app() -> FastAPI:
         # Security check: Only allow requests from localhost
         client_host = request.client.host if request.client else None
         # all loopback IPs are allowed
-        if client_host not in ['localhost', '::1'] and not client_host.startswith('127.'):
+        if client_host is not None and client_host not in ['localhost', '::1'] and not client_host.startswith(
+            '127.'
+        ):
             return HTMLResponse(
                 content='<h1>Access Denied</h1><p>This endpoint is only accessible from localhost</p>',
                 status_code=403,

@@ -710,14 +710,14 @@ class SingularityRuntime(ActionExecutionClient):
         if not token:
             return None
 
-        vscode_url = f'http://localhost:{self._vscode_port}/?tkn={token}&folder={self.config.workspace_mount_path_in_sandbox}'
+        vscode_url = f'http://{self.loopback_ip}:{self._vscode_port}/?tkn={token}&folder={self.config.workspace_mount_path_in_sandbox}'
         return vscode_url
 
     @property
     def web_hosts(self):
         hosts: dict[str, int] = {}
 
-        host_addr = 'localhost'  # Singularity typically runs on localhost
+        host_addr = self.loopback_ip  # Singularity typically runs on localhost
         for port in self._app_ports:
             hosts[f'http://{host_addr}:{port}'] = port
 
