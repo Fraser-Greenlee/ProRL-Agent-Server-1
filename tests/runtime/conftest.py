@@ -19,7 +19,10 @@ from openhands.runtime.impl.local.local_runtime import LocalRuntime
 from openhands.runtime.impl.remote.remote_runtime import RemoteRuntime
 from openhands.runtime.impl.runloop.runloop_runtime import RunloopRuntime
 from openhands.runtime.impl.singularity.singularity_runtime import SingularityRuntime
-from openhands.runtime.plugins import AgentSkillsRequirement, JupyterRequirement, DirectJupyterRequirement
+from openhands.runtime.plugins import (
+    AgentSkillsRequirement,
+    DirectJupyterRequirement,
+)
 from openhands.storage import get_file_store
 from openhands.utils.async_utils import call_async_from_sync
 
