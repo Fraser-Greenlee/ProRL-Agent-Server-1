@@ -152,6 +152,7 @@ def get_config(
         condenser=metadata.condenser_config,
         enable_prompt_extensions=False,
         enable_think=False, # not too sure what this does.
+        enable_history_truncation=False, # turn off history truncation
     )
     config.set_agent_config(agent_config)
     return config
