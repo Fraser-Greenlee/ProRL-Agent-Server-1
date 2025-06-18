@@ -257,6 +257,22 @@ async def run_agent(
         initial_user_message = agent._get_initial_user_message(state.history)
         raw_messages = agent._get_messages(state.history, initial_user_message)
         messages = agent.llm.format_messages_for_llm(raw_messages)
+        if messages[-1]['role'] != 'assistant':
+            messages = messages[:-1]
+
+        from openhands.llm.llm_utils import check_tools
+        tools = check_tools(agent.tools, agent.llm.config)
+
+        new_messages = []
+        for message in messages:
+            new_message = {'role': message['role']}
+            if type(message['content']) == str:
+                new_message['content'] = message['content']
+            else:
+                new_message['content'] = message['content'][0]['text']
+            if 'tool_calls' in message:
+                new_message['tool_calls'] = [tool_call['function'] for tool_call in message['tool_calls']]
+            new_messages.append(new_message)
     except Exception as e:
         logger.error(f"Error while running, failed to retrieve agent messages: {e}")
         raise Exception(f"Failed to retrieve agent messages: {str(e)}")
@@ -266,7 +282,8 @@ async def run_agent(
         'success': not bool(state.last_error if state else True),
         'error': state.last_error if state and state.last_error else None,
         'finish': is_last_action_finish(state),
-        'messages': messages
+        'messages': new_messages,
+        'tools': tools
     }
     return run_results
 

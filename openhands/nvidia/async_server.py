@@ -494,6 +494,7 @@ if __name__ == "__main__":
     # Don't print full messages
     for result in results:
         assert type(result['messages']) == list, f"Result is not a list but of type {type(result['messages'])}."
+        assert result['messages'][-1]['role'] == 'assistant', f"Last message is not assistant but of role {result['messages'][-1]['role']}."
         result['messages'] = len(result['messages'])
     print(results)
     print(f"Time taken: {time.time() - start}")
