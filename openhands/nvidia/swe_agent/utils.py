@@ -254,8 +254,8 @@ async def run_agent(
     # get messages from agent history
     try:
         initial_user_message = agent._get_initial_user_message(state.history)
-        raw_messages = agent._get_messages(state.view, initial_user_message)
-        messages = agent.llm.format_messages_for_llm(raw_messages),
+        raw_messages = agent._get_messages(state.history, initial_user_message)
+        messages = agent.llm.format_messages_for_llm(raw_messages)
     except Exception as e:
         logger.error(f"Error while running, failed to retrieve agent messages: {e}")
         raise Exception(f"Failed to retrieve agent messages: {str(e)}")
