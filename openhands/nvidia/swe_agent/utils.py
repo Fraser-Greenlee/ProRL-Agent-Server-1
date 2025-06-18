@@ -266,7 +266,7 @@ async def run_agent(
         'success': not bool(state.last_error if state else True),
         'error': state.last_error if state and state.last_error else None,
         'finish': is_last_action_finish(state),
-        'messages': messages[0]
+        'messages': messages
     }
     return run_results
 

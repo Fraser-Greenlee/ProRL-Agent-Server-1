@@ -493,6 +493,7 @@ if __name__ == "__main__":
     results = test_server(total_jobs=5, max_parallel_jobs=5, allow_skip_eval=False)
     # Don't print full messages
     for result in results:
+        assert type(result['messages']) == list, f"Result is not a list but of type {type(result['messages'])}."
         result['messages'] = len(result['messages'])
     print(results)
     print(f"Time taken: {time.time() - start}")
