@@ -37,6 +37,7 @@ from openhands.runtime.plugins import (
     PluginRequirement,
 )
 from openhands.utils.prompt import PromptManager
+from openhands.core.exceptions import AgentStuckInLoopError
 
 
 class CodeActAgent(Agent):
@@ -163,6 +164,15 @@ class CodeActAgent(Agent):
         latest_user_message = state.get_last_user_message()
         if latest_user_message and latest_user_message.content.strip() == '/exit':
             return AgentFinishAction()
+
+        # check if last thought is properly ended
+        # reuse stuck in loop error to exit agent loop
+        if self.config.ensure_thinking_end_properly:
+            latest_agent_thought = state.get_last_agent_thought()
+            if isinstance(latest_agent_thought, list):
+                latest_agent_thought = latest_agent_thought[0]['text']
+            if latest_agent_thought and '<think>' in latest_agent_thought and '</think>' not in latest_agent_thought:
+                raise AgentStuckInLoopError("LLM does not end properly reasoning properly")
 
         # Condense the events from the state. If we get a view we'll pass those
         # to the conversation manager for processing, but if we get a condensation

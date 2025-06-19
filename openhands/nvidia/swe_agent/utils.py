@@ -153,6 +153,7 @@ def get_config(
         enable_prompt_extensions=False,
         enable_think=False, # not too sure what this does.
         enable_history_truncation=False, # turn off history truncation
+        ensure_thinking_end_properly=True, # set to true. might need to be false for eval other models.
     )
     config.set_agent_config(agent_config)
     return config
@@ -272,6 +273,33 @@ async def run_agent(
                 new_message['content'] = message['content'][0]['text']
             if 'tool_calls' in message:
                 new_message['tool_calls'] = [tool_call['function'] for tool_call in message['tool_calls']]
+
+            # Handle the case where the agent did not end properly reasoning properly
+            # This largely formats the message to be consistent with the expected output from Qwen3 models.
+            if message['role'] == 'assistant' and '<think>' in new_message['content'] and '</think>' not in new_message['content']:
+                if 'tool_calls' in new_message:
+                    tool_calls_message = ""
+                    for tool_call in new_message['tool_calls']:
+                        current_tool_call = []
+                        current_tool_call.append('\n<tool_call>\n{"name": "' + tool_call['name'] + '", "arguments": ')
+                        if isinstance(tool_call['arguments'], str):
+                            current_tool_call.append(tool_call['arguments'])
+                        else:
+                            current_tool_call.append(json.dumps(tool_call['arguments']))
+                        current_tool_call.append("}\n</tool_call>")
+                        tool_calls_message += ''.join(current_tool_call)
+                    new_message['content'] = f"{new_message['content']}\n{tool_calls_message}"
+                    new_message.pop('tool_calls')
+                new_messages.append(new_message)
+                return {
+                    'git_patch': '',
+                    'success': False,
+                    'error': 'LLM did not end properly reasoning properly',
+                    'finish': False,
+                    'messages': new_messages,
+                    'tools': tools
+                }
+
             new_messages.append(new_message)
     except Exception as e:
         logger.error(f"Error while running, failed to retrieve agent messages: {e}")

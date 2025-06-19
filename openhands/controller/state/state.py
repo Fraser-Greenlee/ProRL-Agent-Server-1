@@ -212,6 +212,14 @@ class State:
                 return event
         return None
 
+    def get_last_agent_thought(self) -> str | None:
+        for event in reversed(self.view):
+            if isinstance(event, MessageAction) and event.source == EventSource.AGENT:
+                return event.content
+            if event.source == EventSource.AGENT and event.tool_call_metadata is not None:
+                return event.tool_call_metadata.model_response.choices[0].message.content
+        return None
+
     def to_llm_metadata(self, agent_name: str) -> dict:
         return {
             'session_id': self.session_id,

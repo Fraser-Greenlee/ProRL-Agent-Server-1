@@ -43,6 +43,8 @@ class AgentConfig(BaseModel):
     )
     extended: ExtendedConfig = Field(default_factory=lambda: ExtendedConfig({}))
     """Extended configuration for the agent."""
+    ensure_thinking_end_properly: bool = Field(default=False)
+    """If true agent will raise and error if the thinking content is not properly ended. This should only be used for training."""
 
     model_config = {'extra': 'forbid'}
 
