@@ -76,7 +76,7 @@ async def add_llm_server(address: str):
                 print('Failed to add LLM server:', error)
 
 
-async def process_request(instance: dict, sampling_params: dict = None):
+async def process_request(instance: dict, sampling_params: dict | None = None):
     async with aiohttp.ClientSession() as session:
         url = 'http://localhost:8006/process'
         payload = {'instance': instance, 'sampling_params': sampling_params or {}}

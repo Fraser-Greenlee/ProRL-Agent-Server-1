@@ -161,7 +161,7 @@ def get_config(
 async def initialize_agents(
         instance:pd.Series,
         llm_config: LLMConfig | None = None,
-        sid:str = None,
+        sid:str | None = None,
         eval_output_dir:str = "/root",
         git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a",
         dataset:str = "swebench",
@@ -288,7 +288,7 @@ async def run_agent(
                             current_tool_call.append(json.dumps(tool_call['arguments']))
                         current_tool_call.append("}\n</tool_call>")
                         tool_calls_message += ''.join(current_tool_call)
-                    new_message['content'] = f"{new_message['content']}\n{tool_calls_message}"
+                    new_message['content'] = f"{new_message['content']}\n{tool_calls_message}</think>"
                     new_message.pop('tool_calls')
                 new_messages.append(new_message)
                 return {

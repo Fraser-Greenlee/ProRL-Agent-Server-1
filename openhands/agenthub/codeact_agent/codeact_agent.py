@@ -169,8 +169,6 @@ class CodeActAgent(Agent):
         # reuse stuck in loop error to exit agent loop
         if self.config.ensure_thinking_end_properly:
             latest_agent_thought = state.get_last_agent_thought()
-            if isinstance(latest_agent_thought, list):
-                latest_agent_thought = latest_agent_thought[0]['text']
             if latest_agent_thought and '<think>' in latest_agent_thought and '</think>' not in latest_agent_thought:
                 raise AgentStuckInLoopError("LLM does not end properly reasoning properly")
 

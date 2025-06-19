@@ -44,7 +44,7 @@ class LLMServerRequest(BaseModel):
     address: str
 
 
-async def cleanup_timed_out_job(server, job_id: str):
+async def cleanup_timed_out_job(server, job_id: str | None = None):
     """Clean up a job that has timed out or failed"""
     if job_id is None:
         return
@@ -79,8 +79,8 @@ async def process_with_timeout(
     instance: pd.Series,
     sampling_params: dict[str, Any],
     timeout: float,
-    thread_pool: ThreadPoolExecutor = None,
-    job_id: str = None,
+    thread_pool: ThreadPoolExecutor | None = None,
+    job_id: str | None = None,
 ):
     if job_id is None:
         job_id = server.get_unique_id(instance)
