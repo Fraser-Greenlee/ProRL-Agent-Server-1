@@ -712,7 +712,7 @@ if __name__ == '__main__':
 
             # MCP HTTP server configuration
             LOOPBACK_IP = os.environ.get('LOOPBACK_IP', '127.0.0.1')
-            MCP_HTTP_PORT = int(os.environ.get('APP_PORT_2', '8080'))
+            MCP_HTTP_PORT = int(os.environ.get('MCP_HTTP_PORT', '8080'))
 
             # Start MCP HTTP server in background
             mcp_http_config = Config(
