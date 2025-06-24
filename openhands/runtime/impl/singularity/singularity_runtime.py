@@ -289,11 +289,6 @@ class SingularityRuntime(ActionExecutionClient):
         # No container process or PID available
         return False
 
-    @property
-    def action_execution_server_url(self):
-        # Use the base class implementation for UDS
-        return super().action_execution_server_url
-
     async def connect(self):
         # log the headless mode
         self.send_status_message('STATUS$STARTING_RUNTIME')
@@ -702,6 +697,11 @@ class SingularityRuntime(ActionExecutionClient):
     def loopback_ip(self) -> str | None:
         """Get the unique loopback IP assigned to this runtime instance."""
         return self._loopback_ip
+
+    @property
+    def action_execution_server_url(self) -> str:
+        """Get the action execution server URL assigned to this runtime instance."""
+        return f'http://{self.loopback_ip}:{self._app_ports[1]}'
 
     @property
     def vscode_url(self) -> str | None:
