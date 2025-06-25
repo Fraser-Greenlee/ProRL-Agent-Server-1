@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 import os
 import asyncio
+import json
+import copy
 
 from evaluation.benchmarks.swe_bench.run_infer import (
     initialize_runtime,
@@ -33,6 +35,17 @@ from openhands.core.logger import openhands_logger as logger
 from openhands.events.action import (
     Action,
     AgentFinishAction,
+)
+
+from openhands.nvidia.registry import (
+    JobDetails,
+    register_init_func,
+    register_run_func,
+    register_eval_func,
+    register_init_exception_func,
+    register_run_exception_func,
+    register_eval_exception_func,
+    register_final_result_func,
 )
 
 DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'xingyaoww/')
@@ -158,6 +171,7 @@ def get_config(
     config.set_agent_config(agent_config)
     return config
 
+@register_init_func("swebench")
 async def initialize_agents(
         instance:pd.Series,
         llm_config: LLMConfig | None = None,
@@ -174,13 +188,7 @@ async def initialize_agents(
     # ``scripts/test_local_agent.py``).
 
     if llm_config is None:
-        llm_config = LLMConfig(
-            model="gpt-4o-mini",
-            base_url="https://api.openai.com/v1",
-            api_key=os.environ.get("OPENAI_API_KEY", ""),
-            modify_params=False,
-            log_completions=True,
-        )
+        raise ValueError('LLM config is None, cannot initialize.')
 
     metadata = EvalMetadata(
         agent_class="CodeActAgent",
@@ -222,6 +230,7 @@ async def initialize_agents(
     # return values).
     return runtime, metadata, config
 
+@register_run_func("swebench")
 async def run_agent(
         runtime:Runtime,
         metadata:EvalMetadata,
@@ -451,17 +460,31 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: pd.Series):
 
     return test_result
 
-async def _evaluate_agent(git_patch: str, instance: pd.Series, sid: str = None, allow_skip=True):
+@register_eval_func("swebench")
+async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str = None, allow_skip=True):
     # skip evaluation if git_patch is None or empty
     if allow_skip:
         if git_patch is None or len(git_patch) == 0:
             return {'resolved': False}
+    else:
+        if git_patch is None:
+            raise ValueError('Patch is None, cannot evaluate')
 
     from openhands.utils.async_utils import call_sync_from_async
 
     runtime = None
+
+    # Create a dummy LLM config to avoid the error of no LLM config
+    llm_config = LLMConfig(
+        model="gpt-4o-mini",
+        base_url="https://api.openai.com/v1",
+        api_key=os.environ.get("OPENAI_API_KEY", ""),
+        modify_params=False,
+        log_completions=False,
+    )
+
     try:
-        runtime, _, _ = await initialize_agents(instance, sid=sid)
+        runtime, _, _ = await initialize_agents(instance, llm_config=llm_config, sid=sid)
         test_result = await call_sync_from_async(
             _apply_patch_and_evaluate, runtime, git_patch, instance
         )
@@ -477,6 +500,80 @@ async def _evaluate_agent(git_patch: str, instance: pd.Series, sid: str = None, 
             await call_sync_from_async(runtime.close)
 
     return test_result
+
+@register_init_exception_func("swebench")
+def initialize_exception(job_details: JobDetails, e: Exception):
+    return {
+        'instance_id': job_details.instance.instance_id,
+        'trajectory_id': job_details.instance.trajectory_id,
+        'git_patch': None,
+        'success': False,
+        'error': f'Error in init: {str(e)}',
+        'finish': False,
+        'messages': [],
+        'resolved': False,
+        'critical_error': 'init',
+    }
+
+@register_run_exception_func("swebench")
+def run_exception(job_details: JobDetails, e: Exception):
+    return {
+        'instance_id': job_details.instance.instance_id,
+        'trajectory_id': job_details.instance.trajectory_id,
+        'git_patch': None,
+        'success': False,
+        'error': f'Error in run agent: {str(e)}',
+        'finish': False,
+        'messages': [],
+        'resolved': False,
+        'critical_error': 'run',
+    }
+
+@register_eval_exception_func("swebench")
+def eval_exception(job_details: JobDetails, e: Exception):
+    return {
+        'instance_id': job_details.instance.instance_id,
+        'trajectory_id': job_details.instance.trajectory_id,
+        'git_patch': job_details.run_results.get('git_patch', None),
+        'success': job_details.run_results.get('success', False),
+        'error': f'Error in eval: {str(e)}',
+        'finish': job_details.run_results.get('finish', False),
+        'messages': job_details.run_results.get('messages', []),
+        'resolved': False,
+        'critical_error': 'eval',
+    }
+
+@register_final_result_func("swebench")
+def final_result(job_details: JobDetails):
+    if job_details.results is None:
+        result = {
+            **job_details.run_results,
+            'resolved': job_details.eval_results['resolved'],
+            'critical_error': None,
+        }
+    else:
+        result = copy.deepcopy(job_details.results)
+    if job_details.start_run_time:
+        init_time_taken = job_details.start_run_time - job_details.start_time
+        if job_details.start_eval_time:
+            run_time_taken = (
+                job_details.start_eval_time - job_details.start_run_time
+            )
+            evaluate_time_taken = job_details.end_time - job_details.start_eval_time
+        else:
+            run_time_taken = job_details.end_time - job_details.start_run_time
+            evaluate_time_taken = 0
+    else:
+        init_time_taken = job_details.end_time - job_details.start_time
+        run_time_taken = 0
+        evaluate_time_taken = 0
+
+    return {
+            **result,
+            'init_time_taken': init_time_taken,
+            'run_time_taken': run_time_taken,
+            'evaluate_time_taken': evaluate_time_taken,
+        }
 
 if __name__ == "__main__":
 
@@ -517,7 +614,7 @@ if __name__ == "__main__":
             inst_clone = instance.copy()
             inst_clone["instance_id"] = f"{instance['instance_id']}_{idx}"
             gold_patch = inst_clone['patch']
-            tasks.append(_evaluate_agent(gold_patch, inst_clone))
+            tasks.append(evaluate_agent(gold_patch, inst_clone))
         return await asyncio.gather(*tasks, return_exceptions=True)
 
     try:
@@ -534,7 +631,7 @@ if __name__ == "__main__":
     async def run_sequential_async():
         results = []
         for i in range(2):
-            res = await _evaluate_agent(mock_patch, instance)
+            res = await evaluate_agent(mock_patch, instance)
             print(f"\nBEGIN EVAL REPORT SEQ [{i}]")
             print(res)
             print(f"END EVAL REPORT SEQ [{i}]")

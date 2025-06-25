@@ -7,31 +7,13 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-import pandas as pd
-
-from evaluation.utils.shared import EvalMetadata
-from openhands.core.config import OpenHandsConfig
 from openhands.core.config.llm_config import LLMConfig
-from openhands.nvidia.swe_agent.utils import initialize_agents, run_agent
-from openhands.runtime.base import Runtime
 
-
-class JobDetails:
-    job_id: str = None
-    instance: pd.Series = None
-    max_iterations: int = 2
-    llm_config: LLMConfig = None
-    runtime: Runtime = None
-    metadata: EvalMetadata = None
-    config: OpenHandsConfig = None
-    run_results: dict | None = None
-    eval_results: dict | None = None
-    results: dict | None = None
-    event: threading.Event = None
-    start_time: float = None
-    start_run_time: float = None
-    start_eval_time: float = None
-    end_time: float = None
+from openhands.nvidia.registry import (
+    get_registered_functions,
+    JobDetails,
+    FunctionNotRegisteredError,
+)
 
 
 class OpenHandsServer:
@@ -80,7 +62,7 @@ class OpenHandsServer:
     def get_unique_id(self, instance, max_retries=10):
         for _ in range(max_retries):
             uid = str(uuid.uuid4())
-            uid = f'swebench_{instance.instance_id}_{instance.trajectory_id}_{uid}'
+            uid = f'{instance.instance_id}_{instance.trajectory_id}_{uid}'
             if uid not in self._job_details:
                 return uid
         raise ValueError('Failed to get unique id')
@@ -156,39 +138,21 @@ class OpenHandsServer:
         # Wait for job to be finished
         job_details.event.wait()
         job_details.end_time = time.time()
-        if job_details.results is None:
-            result = {
-                **job_details.run_results,
-                'resolved': job_details.eval_results['resolved'],
-                'critical_error': None,
-            }
+
+        # Get final result
+        dataset_type = getattr(job_details.instance, 'dataset', 'swebench')
+        _final_result_func = get_registered_functions('final_result', dataset_type)
+        if _final_result_func is None:
+            result = {'critical_error': 'final_result', 'error': f'Function not found in registry type final_result for dataset type {dataset_type}'}
         else:
-            result = copy.deepcopy(job_details.results)
-        if job_details.start_run_time:
-            init_time_taken = job_details.start_run_time - job_details.start_time
-            if job_details.start_eval_time:
-                run_time_taken = (
-                    job_details.start_eval_time - job_details.start_run_time
-                )
-                evaluate_time_taken = job_details.end_time - job_details.start_eval_time
-            else:
-                run_time_taken = job_details.end_time - job_details.start_run_time
-                evaluate_time_taken = 0
-        else:
-            init_time_taken = job_details.end_time - job_details.start_time
-            run_time_taken = 0
-            evaluate_time_taken = 0
+            result = _final_result_func(job_details)
+
         # Close runtime
         if job_details.runtime:
             job_details.runtime.close()
         # Delete job details
         del self._job_details[job_id]
-        return {
-            **result,
-            'init_time_taken': init_time_taken,
-            'run_time_taken': run_time_taken,
-            'evaluate_time_taken': evaluate_time_taken,
-        }
+        return result
 
     async def _init_worker(self, wid):
         while True:
@@ -204,8 +168,12 @@ class OpenHandsServer:
             print(f'[init-worker-{wid}] Got job {job_id}')
             job_details = self._job_details[job_id]
             self._active_init_jobs.add(job_id)
+            dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
+            _init_func = get_registered_functions('init', dataset_type)
             try:
-                runtime, metadata, config = await initialize_agents(
+                if _init_func is None:
+                    raise FunctionNotRegisteredError(f"Function '{dataset_type}' not found in registry type 'init'")
+                runtime, metadata, config = await _init_func(
                     job_details.instance,
                     job_details.llm_config,
                     sid=job_id,
@@ -215,23 +183,17 @@ class OpenHandsServer:
                 job_details.metadata = metadata
                 job_details.config = config
                 self.run_queue.put(job_id)
+            except FunctionNotRegisteredError as e:
+                print(f"Critical error: {e}")
+                job_details.results = {'critical_error': 'init'}
+                job_details.event.set()
             except Exception as e:
-                job_details.results = {
-                    'instance_id': job_details.instance.instance_id,
-                    'trajectory_id': job_details.instance.trajectory_id,
-                    'git_patch': None,
-                    'success': False,
-                    'error': f'Error in init: {str(e)}',
-                    'finish': False,
-                    'messages': [],
-                    'resolved': False,
-                    'critical_error': 'init',
-                }
+                _init_exception_func = get_registered_functions('init_exception', dataset_type)
+                job_details.results = _init_exception_func(job_details, e)
                 job_details.event.set()
             finally:
                 self._active_init_jobs.remove(job_id)
                 self.init_queue.task_done()
-            await asyncio.sleep(0.1)
 
     async def _run_worker(self, wid):
         while True:
@@ -248,8 +210,12 @@ class OpenHandsServer:
             print(f'[run-worker-{wid}] Got job {job_id}')
             job_details.start_run_time = time.time()
             self._active_run_jobs.add(job_id)
+            dataset_type = getattr(job_details.instance, 'dataset', 'swebench')
+            _run_func = get_registered_functions('run', dataset_type)
             try:
-                run_results = await run_agent(
+                if _run_func is None:
+                    raise FunctionNotRegisteredError(f"Function '{dataset_type}' not found in registry type 'run'")
+                run_results = await _run_func(
                     job_details.runtime,
                     job_details.metadata,
                     job_details.config,
@@ -264,36 +230,25 @@ class OpenHandsServer:
 
                 # Push to evaluation queue for further processing
                 self.evaluate_queue.put(job_id)
+            except FunctionNotRegisteredError as e:
+                print(f"Critical error: {e}")
+                job_details.results = {'critical_error': 'run'}
+                job_details.event.set()
             except Exception as e:
                 # Ensure runtime is closed even if an exception occurs
                 if job_details.runtime:
                     job_details.runtime.close()
                     job_details.runtime = None
 
-                job_details.results = {
-                    'instance_id': job_details.instance.instance_id,
-                    'trajectory_id': job_details.instance.trajectory_id,
-                    'git_patch': None,
-                    'success': False,
-                    'error': f'Error in run agent: {str(e)}',
-                    'finish': False,
-                    'messages': [],
-                    'resolved': False,
-                    'critical_error': 'run',
-                }
+                _run_exception_func = get_registered_functions('run_exception', dataset_type)
+                job_details.results = _run_exception_func(job_details, e)
                 job_details.event.set()
             finally:
                 self._active_run_jobs.remove(job_id)
                 self.run_queue.task_done()
-            await asyncio.sleep(0.1)
 
     async def _eval_worker(self, wid):
         """Worker that evaluates the generated patch and produces a report."""
-        # Lazy import to avoid heavy dependency at server startup
-        from openhands.nvidia.swe_agent.utils import (
-            _evaluate_agent as _evaluate_patch_async,
-        )
-
         while True:
             print(f'[eval-worker-{wid}] Waiting for job')
             job_id = await asyncio.to_thread(self.evaluate_queue.get)
@@ -308,10 +263,12 @@ class OpenHandsServer:
             job_details = self._job_details[job_id]
             job_details.start_eval_time = time.time()
             self._active_eval_jobs.add(job_id)
+            dataset_type = getattr(job_details.instance, 'dataset', 'swebench')
+            _eval_func = get_registered_functions('eval', dataset_type)
             try:
-                if job_details.run_results['git_patch'] is None:
-                    raise ValueError('Patch is None, cannot evaluate')
-                eval_report = await _evaluate_patch_async(
+                if _eval_func is None:
+                    raise FunctionNotRegisteredError(f"Function '{dataset_type}' not found in registry type 'eval'")
+                eval_report = await _eval_func(
                     job_details.run_results['git_patch'],
                     job_details.instance,
                     sid=f'eval_{job_id}',
@@ -323,23 +280,17 @@ class OpenHandsServer:
                 else:
                     job_details.eval_results = eval_report
                 job_details.event.set()
+            except FunctionNotRegisteredError as e:
+                print(f"Critical error: {e}")
+                job_details.results = {'critical_error': 'eval'}
+                job_details.event.set()
             except Exception as e:
-                job_details.results = {
-                    'instance_id': job_details.instance.instance_id,
-                    'trajectory_id': job_details.instance.trajectory_id,
-                    'git_patch': job_details.run_results.get('git_patch', None),
-                    'success': job_details.run_results.get('success', False),
-                    'error': f'Error in eval: {str(e)}',
-                    'finish': job_details.run_results.get('finish', False),
-                    'messages': job_details.run_results.get('messages', []),
-                    'resolved': False,
-                    'critical_error': 'eval',
-                }
+                _eval_exception_func = get_registered_functions('eval_exception', dataset_type)
+                job_details.results = _eval_exception_func(job_details, e)
                 job_details.event.set()
             finally:
                 self._active_eval_jobs.remove(job_id)
                 self.evaluate_queue.task_done()
-            await asyncio.sleep(0.1)
 
     def _run_worker_in_thread(self, worker_id, is_init_worker):
         """Run a worker in its own thread with its own event loop. Run until the worker is stopped."""
@@ -491,8 +442,9 @@ def test_server(
         'api_key': 'mykey',
         'modify_params': False,
         'log_completions': True,
-        'native_tool_calling': False,
+        'native_tool_calling': True,
         'temperature': 0.6,
+        'max_iterations': 2,
     }
 
     print('Starting server')
