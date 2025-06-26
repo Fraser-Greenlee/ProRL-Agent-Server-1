@@ -49,6 +49,7 @@ FILE_VIEWER_PORT_RANGE = (30000, 39999)
 VSCODE_PORT_RANGE = (40000, 44999)
 APP_PORT_RANGE_1 = (50000, 54999)
 APP_PORT_RANGE_2 = (55000, 59999)
+MCP_HTTP_PORT_RANGE = (60000, 64999)
 
 
 def kill_process_tree(pid):
@@ -156,6 +157,7 @@ class SingularityRuntime(ActionExecutionClient):
         self._vscode_port = -1
         self._file_viewer_port = -1
         self._app_ports: list[int] = []
+        self._mcp_http_port = -1
         self._loopback_ip: str | None = None
 
         # Check if singularity is available
@@ -464,6 +466,7 @@ class SingularityRuntime(ActionExecutionClient):
             self._find_available_port(APP_PORT_RANGE_1),
             self._find_available_port(APP_PORT_RANGE_2),
         ]
+        self._mcp_http_port = self._find_available_port(MCP_HTTP_PORT_RANGE)
 
         # Prepare environment variables
         env_vars = {
@@ -473,6 +476,7 @@ class SingularityRuntime(ActionExecutionClient):
             'FILE_VIEWER_PORT': str(self._file_viewer_port),
             'APP_PORT_1': str(self._app_ports[0]),
             'APP_PORT_2': str(self._app_ports[1]),
+            'MCP_HTTP_PORT': str(self._mcp_http_port),
             'PIP_BREAK_SYSTEM_PACKAGES': '1',
             'OPENHANDS_SESSION_ID': self.sid,
         }
@@ -571,6 +575,7 @@ class SingularityRuntime(ActionExecutionClient):
                     'file_viewer_port': self._file_viewer_port,
                     'app_port_1': self._app_ports[0],
                     'app_port_2': self._app_ports[1],
+                    'mcp_http_port': self._mcp_http_port,
                 }
             }
             self._save_session_port_info(session_info)
@@ -615,7 +620,7 @@ class SingularityRuntime(ActionExecutionClient):
         self._vscode_port = port_info['vscode_port']
         self._file_viewer_port = port_info['file_viewer_port']
         self._app_ports = [port_info['app_port_1'], port_info['app_port_2']]
-
+        self._mcp_http_port = port_info['mcp_http_port']
         self.log(
             'debug',
             f'Attached to container: {self.container_name} PID: {self.container_pid}',
@@ -703,6 +708,11 @@ class SingularityRuntime(ActionExecutionClient):
     def loopback_ip(self) -> str | None:
         """Get the unique loopback IP assigned to this runtime instance."""
         return self._loopback_ip
+
+    @property
+    def action_execution_server_url(self) -> str:
+        """Get the action execution server URL assigned to this runtime instance."""
+        return f'http://{self.loopback_ip}:{self._mcp_http_port}'
 
     @property
     def vscode_url(self) -> str | None:

@@ -9,7 +9,6 @@ import argparse
 import asyncio
 import base64
 import json
-import logging
 import mimetypes
 import os
 import shutil
@@ -666,13 +665,14 @@ if __name__ == '__main__':
 
     client: ActionExecutor | None = None
     mcp_router: MCPRouter | None = None
+    mcp_http_server: Server | None = None
     MCP_ROUTER_PROFILE_PATH = os.path.join(
         os.path.dirname(__file__), 'mcp', 'config.json'
     )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        global client, mcp_router
+        global client, mcp_router, mcp_http_server
         logger.info('Initializing ActionExecutor...')
         client = ActionExecutor(
             plugins_to_load,
@@ -687,10 +687,11 @@ if __name__ == '__main__':
         # Check if we're on Windows
         is_windows = sys.platform == 'win32'
 
-        # Initialize and mount MCP Router (skip on Windows)
+        # Initialize MCP Router and start separate HTTP server (skip on Windows)
         if is_windows:
             logger.info('Skipping MCP Router initialization on Windows')
             mcp_router = None
+            mcp_http_server = None
         else:
             logger.info('Initializing MCP Router...')
             mcp_router = MCPRouter(
@@ -705,36 +706,56 @@ if __name__ == '__main__':
                 allow_origins=allowed_origins, include_lifespan=False
             )
 
-        # Only mount SSE app if MCP Router is initialized (not on Windows)
-        if mcp_router is not None:
-            # Check for route conflicts before mounting
-            main_app_routes = {route.path for route in app.routes}
-            sse_app_routes = {route.path for route in sse_app.routes}
-            conflicting_routes = main_app_routes.intersection(sse_app_routes)
+            # Create separate HTTP server for MCP SSE
+            mcp_http_app = FastAPI()
+            mcp_http_app.mount('/', sse_app)
 
-            if conflicting_routes:
-                logger.error(f'Route conflicts detected: {conflicting_routes}')
-                raise RuntimeError(
-                    f'Cannot mount SSE app - conflicting routes found: {conflicting_routes}'
-                )
+            # MCP HTTP server configuration
+            LOOPBACK_IP = os.environ.get('LOOPBACK_IP', '127.0.0.1')
+            MCP_HTTP_PORT = int(os.environ.get('MCP_HTTP_PORT', '8080'))
 
-            app.mount('/', sse_app)
+            # Start MCP HTTP server in background
+            mcp_http_config = Config(
+                app=mcp_http_app,
+                host=LOOPBACK_IP,
+                port=MCP_HTTP_PORT,
+                log_level='error',
+            )
+            mcp_http_server = Server(mcp_http_config)
+
+            # Start the MCP HTTP server in a background task
+            async def start_mcp_http_server():
+                try:
+                    if mcp_http_server is not None:
+                        logger.info('MCP HTTP server task starting...')
+                        await mcp_http_server.serve()
+                except Exception as e:
+                    logger.error(f'MCP HTTP server failed to start: {e}', exc_info=True)
+
+            # Create task but don't await it - let it run in background
+            mcp_http_task = asyncio.create_task(start_mcp_http_server())
             logger.info(
-                f'Mounted MCP Router SSE app at root path with allowed origins: {allowed_origins}'
+                f'Started MCP HTTP server task at http://{LOOPBACK_IP}:{MCP_HTTP_PORT}'
             )
 
-            # Additional debug logging
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug('Main app routes:')
-                for route in main_app_routes:
-                    logger.debug(f'  {route}')
-                logger.debug('MCP SSE server app routes:')
-                for route in sse_app_routes:
-                    logger.debug(f'  {route}')
+            # Give the server a moment to start up
+            await asyncio.sleep(0.1)
+            logger.info('Lifespan initialization complete, yielding control...')
 
         yield
 
         # Clean up & release the resources
+        logger.info('Shutting down MCP HTTP server...')
+        mcp_http_task.cancel()
+        if mcp_http_server:
+            try:
+                mcp_http_server.should_exit = True
+                logger.info('MCP HTTP server shutdown successfully.')
+            except Exception as e:
+                logger.error(f'Error shutting down MCP HTTP server: {e}', exc_info=True)
+        else:
+            logger.info('MCP HTTP server instance not found for shutdown.')
+
         logger.info('Shutting down MCP Router...')
         if mcp_router:
             try:

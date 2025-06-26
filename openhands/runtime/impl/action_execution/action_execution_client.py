@@ -439,13 +439,16 @@ class ActionExecutionClient(Runtime):
             self.log('debug', 'No new stdio servers to update')
 
         if len(self._last_updated_mcp_stdio_servers) > 0:
-            # We should always include the runtime as an MCP server whenever there's > 0 stdio servers
+            # Add the runtime as an SSE server using the dedicated MCP HTTP endpoint
+            mcp_sse_url = f"{self.action_execution_server_url}/sse"
+
             updated_mcp_config.sse_servers.append(
                 MCPSSEServerConfig(
-                    url=self.action_execution_server_url.rstrip('/') + '/sse',
+                    url=mcp_sse_url,
                     api_key=self.session_api_key,
                 )
             )
+            self.log('debug', f'Added runtime MCP SSE server at {mcp_sse_url}')
 
         return updated_mcp_config
 
