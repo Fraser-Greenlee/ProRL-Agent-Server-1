@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import heapq
 import queue
 import threading
@@ -8,13 +7,15 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from openhands.core.config.llm_config import LLMConfig
-
 from openhands.nvidia.registry import (
-    get_registered_functions,
-    JobDetails,
     FunctionNotRegisteredError,
+    JobDetails,
+    get_registered_functions,
 )
 
+from openhands.nvidia import register_swe_agent_functions
+
+register_swe_agent_functions()
 
 class OpenHandsServer:
     def __init__(
@@ -143,7 +144,10 @@ class OpenHandsServer:
         dataset_type = getattr(job_details.instance, 'dataset', 'swebench')
         _final_result_func = get_registered_functions('final_result', dataset_type)
         if _final_result_func is None:
-            result = {'critical_error': 'final_result', 'error': f'Function not found in registry type final_result for dataset type {dataset_type}'}
+            result = {
+                'critical_error': 'final_result',
+                'error': f'Function not found in registry type final_result for dataset type {dataset_type}',
+            }
         else:
             result = _final_result_func(job_details)
 
@@ -172,7 +176,9 @@ class OpenHandsServer:
             _init_func = get_registered_functions('init', dataset_type)
             try:
                 if _init_func is None:
-                    raise FunctionNotRegisteredError(f"Function '{dataset_type}' not found in registry type 'init'")
+                    raise FunctionNotRegisteredError(
+                        f"Function '{dataset_type}' not found in registry type 'init'"
+                    )
                 runtime, metadata, config = await _init_func(
                     job_details.instance,
                     job_details.llm_config,
@@ -184,11 +190,13 @@ class OpenHandsServer:
                 job_details.config = config
                 self.run_queue.put(job_id)
             except FunctionNotRegisteredError as e:
-                print(f"Critical error: {e}")
+                print(f'Critical error: {e}')
                 job_details.results = {'critical_error': 'init'}
                 job_details.event.set()
             except Exception as e:
-                _init_exception_func = get_registered_functions('init_exception', dataset_type)
+                _init_exception_func = get_registered_functions(
+                    'init_exception', dataset_type
+                )
                 job_details.results = _init_exception_func(job_details, e)
                 job_details.event.set()
             finally:
@@ -214,7 +222,9 @@ class OpenHandsServer:
             _run_func = get_registered_functions('run', dataset_type)
             try:
                 if _run_func is None:
-                    raise FunctionNotRegisteredError(f"Function '{dataset_type}' not found in registry type 'run'")
+                    raise FunctionNotRegisteredError(
+                        f"Function '{dataset_type}' not found in registry type 'run'"
+                    )
                 run_results = await _run_func(
                     job_details.runtime,
                     job_details.metadata,
@@ -231,7 +241,7 @@ class OpenHandsServer:
                 # Push to evaluation queue for further processing
                 self.evaluate_queue.put(job_id)
             except FunctionNotRegisteredError as e:
-                print(f"Critical error: {e}")
+                print(f'Critical error: {e}')
                 job_details.results = {'critical_error': 'run'}
                 job_details.event.set()
             except Exception as e:
@@ -240,7 +250,9 @@ class OpenHandsServer:
                     job_details.runtime.close()
                     job_details.runtime = None
 
-                _run_exception_func = get_registered_functions('run_exception', dataset_type)
+                _run_exception_func = get_registered_functions(
+                    'run_exception', dataset_type
+                )
                 job_details.results = _run_exception_func(job_details, e)
                 job_details.event.set()
             finally:
@@ -267,7 +279,9 @@ class OpenHandsServer:
             _eval_func = get_registered_functions('eval', dataset_type)
             try:
                 if _eval_func is None:
-                    raise FunctionNotRegisteredError(f"Function '{dataset_type}' not found in registry type 'eval'")
+                    raise FunctionNotRegisteredError(
+                        f"Function '{dataset_type}' not found in registry type 'eval'"
+                    )
                 eval_report = await _eval_func(
                     job_details.run_results['git_patch'],
                     job_details.instance,
@@ -281,11 +295,13 @@ class OpenHandsServer:
                     job_details.eval_results = eval_report
                 job_details.event.set()
             except FunctionNotRegisteredError as e:
-                print(f"Critical error: {e}")
+                print(f'Critical error: {e}')
                 job_details.results = {'critical_error': 'eval'}
                 job_details.event.set()
             except Exception as e:
-                _eval_exception_func = get_registered_functions('eval_exception', dataset_type)
+                _eval_exception_func = get_registered_functions(
+                    'eval_exception', dataset_type
+                )
                 job_details.results = _eval_exception_func(job_details, e)
                 job_details.event.set()
             finally:

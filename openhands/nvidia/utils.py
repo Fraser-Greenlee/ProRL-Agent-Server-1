@@ -21,6 +21,19 @@ def kill_all_singularity_jobs():
     except subprocess.CalledProcessError:
         print('No Singularity processes found.')
 
+    try:
+        # List all openhands processes
+        result = subprocess.run(
+            ['pgrep', '-f', 'openhands'], stdout=subprocess.PIPE, text=True, check=True
+        )
+        pids = result.stdout.strip().split('\n')
+        for pid in pids:
+            if pid.strip():
+                subprocess.run(['kill', '-9', pid])
+                print(f'Killed Openhands process with PID: {pid}')
+    except subprocess.CalledProcessError:
+        print('No Openhands processes found.')
+
 
 # Custom exceptions
 class ServerNotRunningError(Exception):
