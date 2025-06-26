@@ -53,23 +53,47 @@ MCP_HTTP_PORT_RANGE = (60000, 64999)
 
 
 def kill_process_tree(pid):
-    """Kill a specific process, not the entire process group."""
+    """Kill a process group containing the container processes."""
     try:
-        # Kill the specific process with SIGTERM first
-        os.kill(pid, signal.SIGTERM)
-        time.sleep(2)
-
-        # Check if still alive, then force kill
+        # Since we start the container with start_new_session=True,
+        # we can kill the entire process group
         try:
-            os.kill(pid, 0)  # Test if process exists
-            os.kill(pid, signal.SIGKILL)
-            logger.info(f'Force killed process {pid}')
-        except ProcessLookupError:
-            logger.info(f'Process {pid} already dead')
-    except ProcessLookupError:
-        logger.info(f'Process {pid} already dead')
+            # Get the process group ID and kill the entire group
+            pgid = os.getpgid(pid)
+            logger.info(f'Killing process group {pgid} for process {pid}')
+
+            # Try SIGTERM first for graceful shutdown
+            os.killpg(pgid, signal.SIGTERM)
+            time.sleep(3)  # Give processes time to shut down gracefully
+
+            # Check if any processes in the group are still alive
+            try:
+                os.killpg(pgid, 0)  # Test if process group exists
+                # If we get here, some processes are still alive - force kill them
+                logger.info(f'Force killing process group {pgid}')
+                os.killpg(pgid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                logger.info(f'Process group {pgid} terminated successfully')
+
+        except (OSError, ProcessLookupError) as e:
+            # Process or process group doesn't exist, try individual process kill as fallback
+            logger.info(f'Process group kill failed ({e}), trying individual process kill')
+            try:
+                os.kill(pid, signal.SIGTERM)
+                time.sleep(2)
+
+                # Check if still alive, then force kill
+                try:
+                    os.kill(pid, 0)  # Test if process exists
+                    os.kill(pid, signal.SIGKILL)
+                    logger.info(f'Force killed individual process {pid}')
+                except ProcessLookupError:
+                    logger.info(f'Process {pid} terminated successfully')
+            except ProcessLookupError:
+                logger.info(f'Process {pid} already dead')
+
     except Exception as e:
-        logger.info(f'Failed to kill process {pid}: {e}')
+        logger.warning(f'Failed to kill process tree {pid}: {e}')
 
 
 def _is_retryablewait_until_alive_error(exception):
@@ -533,15 +557,15 @@ class SingularityRuntime(ActionExecutionClient):
             cmd.extend(startup_command)
 
             self.log('debug', f'Starting Singularity container with command: {" ".join(cmd)}')
-            #print(" ".join(cmd))
 
-            # Start the container process
+            # Start the container process in a new process group for easier cleanup
             self.container_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env=dict(os.environ, **env_vars)
+                env=dict(os.environ, **env_vars),
+                start_new_session=True  # Creates a new session and process group
             )
 
             # Save the container PID and add to active registry
