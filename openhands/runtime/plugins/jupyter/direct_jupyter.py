@@ -3,25 +3,20 @@ import os
 import re
 import sys
 import time
+import traceback
+import io
+import contextlib
 from dataclasses import dataclass
 from typing import Any, Dict, List
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import matplotlib.pyplot as plt
+import base64
 
-# Use a simpler import strategy that's more compatible
-try:
-    # Try the most common imports first
-    from jupyter_client.manager import AsyncKernelManager
-    from jupyter_client.asynchronous.client import AsyncKernelClient
-except ImportError:
-    try:
-        # Alternative import for different versions
-        from jupyter_client import AsyncKernelManager
-        from jupyter_client.asynchronous import AsyncKernelClient
-    except ImportError:
-        # Final fallback - use synchronous versions with asyncio wrappers
-        from jupyter_client import KernelManager
-        AsyncKernelManager = KernelManager  # type: ignore
-        from jupyter_client import KernelClient
-        AsyncKernelClient = KernelClient  # type: ignore
+# Import IPython components for magic command support
+from IPython.terminal.interactiveshell import TerminalInteractiveShell
+from IPython.core.interactiveshell import InteractiveShell
+from IPython.utils.capture import capture_output
 
 from openhands.core.logger import openhands_logger as logger
 from openhands.events.action import Action, IPythonRunCellAction
@@ -41,217 +36,138 @@ class DirectJupyterRequirement(PluginRequirement):
     name: str = 'direct_jupyter'
 
 
-class DirectJupyterKernel:
-    """Direct Jupyter kernel connection without network overhead."""
+class DirectIPythonExecutor:
+    """Direct IPython executor with magic command support but no network communication."""
 
-    def __init__(self, kernel_id: str, lang: str = 'python') -> None:
-        self.lang = lang
+    def __init__(self, kernel_id: str) -> None:
         self.kernel_id = kernel_id
-        self.kernel_manager: Any = None  # Use Any for better compatibility
-        self.kernel_client: Any = None   # Use Any for better compatibility
+        self.shell: InteractiveShell | None = None
         self.initialized = False
-        logger.info(f'Direct Jupyter kernel created for {kernel_id}')
+        logger.info(f'Direct IPython executor created for {kernel_id}')
 
     async def initialize(self) -> None:
-        """Initialize the kernel manager and client."""
+        """Initialize the IPython execution environment."""
         try:
-            # Create and start kernel manager
-            self.kernel_manager = AsyncKernelManager(kernel_name=self.lang)
+            # Create IPython shell instance
+            # Use get_ipython() first, and if it doesn't exist, create one
+            self.shell = InteractiveShell.instance()
+            if self.shell is None:
+                # Create a new InteractiveShell instance
+                self.shell = TerminalInteractiveShell.instance()
 
-            # Handle both async and sync kernel managers
-            if hasattr(self.kernel_manager, 'start_kernel'):
-                if asyncio.iscoroutinefunction(self.kernel_manager.start_kernel):
-                    await self.kernel_manager.start_kernel()
-                else:
-                    self.kernel_manager.start_kernel()
+            # Configure the shell
+            self.shell.colors = 'NoColor'  # Disable colored output
+            self.shell.xmode = 'Plain'     # Simple exception format
 
-            # Get client and start channels
-            self.kernel_client = self.kernel_manager.client()
-            if hasattr(self.kernel_client, 'start_channels'):
-                self.kernel_client.start_channels()
+            # Disable matplotlib interactive mode
+            self.shell.run_cell("import matplotlib; matplotlib.use('Agg')")
+            self.shell.run_cell("import matplotlib.pyplot as plt; plt.ioff()")
 
-            # Wait for kernel to be ready
-            if hasattr(self.kernel_client, 'wait_for_ready'):
-                if asyncio.iscoroutinefunction(self.kernel_client.wait_for_ready):
-                    await self.kernel_client.wait_for_ready(timeout=30)
-                else:
-                    self.kernel_client.wait_for_ready(timeout=30)
-
-            # Initialize with no colors (same as original plugin)
-            await self.execute(r'%colors nocolor')
-
-            # pre-defined tools (same as original plugin)
-            self.tools_to_run: list[str] = [
-                # TODO: You can add code for your pre-defined tools here
+            # Pre-load common libraries
+            common_imports = [
+                "import sys",
+                "import os",
+                "import numpy as np",
+                "import pandas as pd",
+                "import matplotlib.pyplot as plt"
             ]
-            for tool in self.tools_to_run:
-                res = await self.execute(tool)
-                logger.info(f'Tool [{tool}] initialized:\n{res}')
+
+            for import_stmt in common_imports:
+                try:
+                    self.shell.run_cell(import_stmt)
+                    logger.debug(f"Loaded: {import_stmt}")
+                except Exception as e:
+                    logger.warning(f"Failed to load {import_stmt}: {e}")
 
             self.initialized = True
-            logger.info('Direct Jupyter kernel initialized successfully')
+            logger.info('Direct IPython executor initialized successfully')
 
         except Exception as e:
-            logger.error(f'Failed to initialize Direct Jupyter kernel: {e}')
+            logger.error(f'Failed to initialize Direct IPython executor: {e}')
             raise
 
-    async def execute(
-        self, code: str, timeout: int = 120
-    ) -> Dict[str, Any]:
-        """Execute code in the kernel and return structured output."""
-        if not self.kernel_client or not self.kernel_manager:
-            raise RuntimeError('Kernel not initialized')
+    async def execute(self, code: str, timeout: int = 120) -> Dict[str, Any]:
+        """Execute IPython code with magic command support and return structured output."""
+        if not self.initialized or self.shell is None:
+            raise RuntimeError('Executor not initialized')
 
         try:
-            # Execute the code
-            msg_id = self.kernel_client.execute(
-                code,
-                silent=False,
-                store_history=False,
-                user_expressions={},
-                allow_stdin=False
-            )
+            # Clean up any existing matplotlib figures
+            plt.close('all')
 
-            logger.info(f'Executed code in direct jupyter kernel: {code[:100]}...')
+            # Handle empty code
+            code = code.strip()
+            if not code:
+                return {'text': '', 'images': []}
 
-            outputs: List[Dict[str, str]] = []
-            execution_done = False
-            start_time = time.time()
+            # Use IPython's capture_output to capture stdout/stderr
+            with capture_output() as captured:
+                # Execute the code using IPython's run_cell
+                # This handles both regular Python code and magic commands
+                result = self.shell.run_cell(code)
 
-            # Collect messages until execution is complete
-            while not execution_done and (time.time() - start_time) < timeout:
-                try:
-                    # Get messages with a short timeout to allow for overall timeout checking
-                    if hasattr(self.kernel_client, 'get_iopub_msg'):
-                        if asyncio.iscoroutinefunction(self.kernel_client.get_iopub_msg):
-                            msg = await asyncio.wait_for(
-                                self.kernel_client.get_iopub_msg(),
-                                timeout=1.0
-                            )
-                        else:
-                            # For sync version, run in executor
-                            msg = await asyncio.get_event_loop().run_in_executor(
-                                None,
-                                lambda: self.kernel_client.get_iopub_msg(timeout=1.0)
-                            )
-                    else:
-                        await asyncio.sleep(0.1)
-                        continue
+            # Get captured output text
+            output_text = ""
+            if captured.stdout:
+                output_text += captured.stdout
+            if captured.stderr:
+                if output_text:
+                    output_text += "\n"
+                output_text += captured.stderr
 
-                    # Only process messages from our execution
-                    if msg['parent_header'].get('msg_id') != msg_id:
-                        continue
+            # Handle execution result and errors
+            if result.error_before_exec:
+                output_text += f"\nError before execution: {result.error_before_exec}"
+            elif result.error_in_exec:
+                output_text += f"\nError during execution: {result.error_in_exec}"
+            elif result.result is not None:
+                # If there's a result and no other output, show the result
+                if not output_text.strip():
+                    output_text = str(result.result)
 
-                    msg_type = msg['msg_type']
-                    content = msg.get('content', {})
-
-                    if os.environ.get('DEBUG'):
-                        logger.info(
-                            f'MSG TYPE: {msg_type.upper()} DONE:{execution_done}\nCONTENT: {content}'
-                        )
-
-                    if msg_type == 'error':
-                        # Handle execution errors
-                        traceback_lines = content.get('traceback', [])
-                        # Remove ANSI codes from traceback
-                        clean_traceback = [strip_ansi(line) for line in traceback_lines]
-                        traceback_text = '\n'.join(clean_traceback)
-                        outputs.append({'type': 'text', 'content': traceback_text})
-                        execution_done = True
-
-                    elif msg_type == 'stream':
-                        # Handle stdout/stderr streams
-                        stream_text = content.get('text', '')
-                        outputs.append({'type': 'text', 'content': stream_text})
-
-                    elif msg_type in ['execute_result', 'display_data']:
-                        # Handle execution results and display data
-                        data = content.get('data', {})
-
-                        # Handle text output
-                        if 'text/plain' in data:
-                            text_content = data['text/plain']
-                            outputs.append({'type': 'text', 'content': text_content})
-
-                        # Handle image output (PNG)
-                        if 'image/png' in data:
-                            image_data = data['image/png']
-                            image_url = f'data:image/png;base64,{image_data}'
-                            outputs.append({'type': 'image', 'content': image_url})
-
-                    elif msg_type == 'status':
-                        # Check if execution is idle (complete)
-                        if content.get('execution_state') == 'idle':
-                            execution_done = True
-
-                except asyncio.TimeoutError:
-                    # Continue the loop to check overall timeout
-                    continue
-                except Exception as e:
-                    logger.error(f'Error processing kernel message: {e}')
-                    continue
-
-            # Handle timeout
-            if not execution_done:
-                try:
-                    # Try to interrupt the kernel
-                    if self.kernel_manager and hasattr(self.kernel_manager, 'interrupt_kernel'):
-                        if asyncio.iscoroutinefunction(self.kernel_manager.interrupt_kernel):
-                            await self.kernel_manager.interrupt_kernel()
-                        else:
-                            self.kernel_manager.interrupt_kernel()
-                        logger.info('Kernel interrupted due to timeout')
-                except Exception as e:
-                    logger.error(f'Failed to interrupt kernel: {e}')
-
-                return {'text': f'[Execution timed out ({timeout} seconds).]', 'images': []}
-
-            # Process collected outputs
-            text_outputs = []
+            # Capture any matplotlib figures
             image_outputs = []
+            for fig_num in plt.get_fignums():
+                fig = plt.figure(fig_num)
+                img_buffer = io.BytesIO()
+                fig.savefig(img_buffer, format='png', bbox_inches='tight', dpi=100)
+                img_buffer.seek(0)
+                img_data = base64.b64encode(img_buffer.read()).decode('utf-8')
+                image_url = f'data:image/png;base64,{img_data}'
+                image_outputs.append(image_url)
+                img_buffer.close()
 
-            for output in outputs:
-                if output['type'] == 'text':
-                    text_outputs.append(output['content'])
-                elif output['type'] == 'image':
-                    image_outputs.append(output['content'])
+            # Close figures to free memory
+            plt.close('all')
 
-            # Format final text content
-            if not text_outputs and execution_done:
-                text_content = '[Code executed successfully with no output]'
-            else:
-                text_content = ''.join(text_outputs)
+            # Clean ANSI escape sequences
+            output_text = strip_ansi(output_text)
 
-            # Remove ANSI escape sequences
-            text_content = strip_ansi(text_content)
+            if not output_text and not image_outputs:
+                output_text = '[Code executed successfully with no output]'
 
-            return {'text': text_content, 'images': image_outputs}
+            return {'text': output_text, 'images': image_outputs}
 
         except Exception as e:
-            logger.error(f'Error executing code in direct kernel: {e}')
-            return {'text': f'[Error executing code: {str(e)}]', 'images': []}
+            # Capture the full traceback
+            error_traceback = traceback.format_exc()
+            logger.error(f'Error executing code: {error_traceback}')
+            return {'text': f'Error: {str(e)}\n{error_traceback}', 'images': []}
 
     async def shutdown_async(self) -> None:
-        """Clean shutdown of kernel resources."""
+        """Clean shutdown of executor resources."""
         try:
-            if self.kernel_client and hasattr(self.kernel_client, 'stop_channels'):
-                self.kernel_client.stop_channels()
-                self.kernel_client = None
-
-            if self.kernel_manager and hasattr(self.kernel_manager, 'shutdown_kernel'):
-                if asyncio.iscoroutinefunction(self.kernel_manager.shutdown_kernel):
-                    await self.kernel_manager.shutdown_kernel(now=True)
-                else:
-                    self.kernel_manager.shutdown_kernel(now=True)
-                self.kernel_manager = None
-
-            logger.info('Direct Jupyter kernel shut down successfully')
+            plt.close('all')  # Close all matplotlib figures
+            if self.shell:
+                # Clear the namespace
+                self.shell.reset(new_session=False)
+            logger.info('Direct IPython executor shut down successfully')
         except Exception as e:
-            logger.error(f'Error shutting down Direct Jupyter kernel: {e}')
+            logger.error(f'Error shutting down Direct IPython executor: {e}')
 
 
 class DirectJupyterPlugin(Plugin):
-    """Direct Jupyter plugin that eliminates network overhead while maintaining compatibility."""
+    """Direct Jupyter plugin with IPython magic command support but no network overhead."""
 
     name: str = 'direct_jupyter'
     kernel_id: str
@@ -285,11 +201,11 @@ class DirectJupyterPlugin(Plugin):
 
         logger.debug('Direct Jupyter plugin initialization started')
 
-        # Initialize the kernel directly (no network setup needed)
-        self.kernel = DirectJupyterKernel(self.kernel_id)
-        await self.kernel.initialize()
+        # Initialize the direct IPython executor (no network communication)
+        self.executor = DirectIPythonExecutor(self.kernel_id)
+        await self.executor.initialize()
 
-        # Get Python interpreter path (same as original plugin)
+        # Get Python interpreter path
         _obs = await self.run(
             IPythonRunCellAction(code='import sys; print(sys.executable)')
         )
@@ -298,21 +214,21 @@ class DirectJupyterPlugin(Plugin):
         logger.debug(f'Direct Jupyter plugin initialized with Python: {self.python_interpreter_path}')
 
     async def _run(self, action: Action) -> IPythonRunCellObservation:
-        """Internal method to run a code cell in the direct jupyter kernel."""
+        """Internal method to run a code cell in the direct IPython executor."""
         if not isinstance(action, IPythonRunCellAction):
             raise ValueError(
                 f'Direct Jupyter plugin only supports IPythonRunCellAction, but got {action}'
             )
 
-        if not hasattr(self, 'kernel') or not self.kernel.initialized:
-            raise RuntimeError('Direct Jupyter kernel not initialized')
+        if not hasattr(self, 'executor') or not self.executor.initialized:
+            raise RuntimeError('Direct IPython executor not initialized')
 
         # Execute the code and get structured output
         timeout = action.timeout if action.timeout is not None else 120
         if isinstance(timeout, float):
             timeout = int(timeout)
 
-        output = await self.kernel.execute(action.code, timeout=timeout)
+        output = await self.executor.execute(action.code, timeout=timeout)
 
         # Extract text content and image URLs from the structured output
         text_content = output.get('text', '')
@@ -331,5 +247,5 @@ class DirectJupyterPlugin(Plugin):
 
     async def cleanup(self) -> None:
         """Clean up plugin resources."""
-        if hasattr(self, 'kernel'):
-            await self.kernel.shutdown_async()
+        if hasattr(self, 'executor'):
+            await self.executor.shutdown_async()
