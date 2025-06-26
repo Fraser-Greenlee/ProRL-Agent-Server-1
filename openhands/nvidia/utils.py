@@ -1,10 +1,19 @@
 import asyncio
+import queue
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel
+
+
+def clear_queue(q: queue.Queue):
+    while not q.empty():
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            break
 
 
 def kill_all_singularity_jobs():
@@ -66,7 +75,7 @@ async def cleanup_timed_out_job(server, job_id: str | None = None):
         job_details = server._job_details[job_id]
 
         # Set the event to unblock any waiting threads
-        if job_details.event:
+        if job_details.event is not None:
             job_details.event.set()
 
         # Remove from active jobs sets

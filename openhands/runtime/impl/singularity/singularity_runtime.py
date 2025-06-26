@@ -291,11 +291,6 @@ class SingularityRuntime(ActionExecutionClient):
         # No container process or PID available
         return False
 
-    @property
-    def action_execution_server_url(self):
-        # Use the base class implementation for UDS
-        return super().action_execution_server_url
-
     async def connect(self):
         # log the headless mode
         self.send_status_message('STATUS$STARTING_RUNTIME')

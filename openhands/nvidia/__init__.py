@@ -10,6 +10,7 @@ def register_swe_agent_functions():
         run_agent,
         run_exception,
     )
+
     # Return the functions if needed elsewhere
     return {
         'eval_exception': eval_exception,

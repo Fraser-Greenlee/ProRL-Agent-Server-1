@@ -1,5 +1,6 @@
 import threading
 from dataclasses import dataclass
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -11,25 +12,25 @@ from openhands.runtime.base import Runtime
 
 @dataclass
 class JobDetails:
-    job_id: str = None
-    instance: pd.Series = None
+    job_id: str | None = None
+    instance: pd.Series | None = None
     max_iterations: int = 2
-    llm_config: LLMConfig = None
-    runtime: Runtime = None
-    metadata: EvalMetadata = None
-    config: OpenHandsConfig = None
+    llm_config: LLMConfig | None = None
+    runtime: Runtime | None = None
+    metadata: EvalMetadata | None = None
+    config: OpenHandsConfig | None = None
     run_results: dict | None = None
     eval_results: dict | None = None
     results: dict | None = None
-    event: threading.Event = None
-    start_time: float = None
-    start_run_time: float = None
-    start_eval_time: float = None
-    end_time: float = None
+    event: threading.Event | None = None
+    start_time: float | None = None
+    start_run_time: float | None = None
+    start_eval_time: float | None = None
+    end_time: float | None = None
 
 
 # Registry for different types of agent functions
-_registries = {
+_registries: dict[str, dict[str, Callable[..., Any]]] = {
     'init': {},
     'run': {},
     'eval': {},

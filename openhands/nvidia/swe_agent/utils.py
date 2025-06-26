@@ -122,7 +122,7 @@ def get_config(
     # Add platform to the sandbox config to solve issue 4401
     sandbox_config.platform = 'linux/amd64'
     sandbox_config.remote_runtime_resource_factor = get_instance_resource_factor(
-        dataset_name=metadata.dataset,
+        dataset_name=metadata.dataset or "swebench",
         instance_id=instance['instance_id'],
     )
 
@@ -207,8 +207,8 @@ async def initialize_agents(
 
     config = get_config(instance, metadata)
 
-    metadata.details['runtime_failure_count'] = 0
-    metadata.details['remote_runtime_resource_factor'] = (
+    metadata.details['runtime_failure_count'] = 0  # type: ignore[index]
+    metadata.details['remote_runtime_resource_factor'] = (  # type: ignore[index]
         config.sandbox.remote_runtime_resource_factor
     )
 
@@ -236,7 +236,7 @@ async def run_agent(
         metadata:EvalMetadata,
         config:OpenHandsConfig,
         instance:pd.Series
-    ) -> str:
+    ) -> dict[str, object]:
     message_action = get_instruction(instance, metadata)
     try:
         agent = create_agent(config)
@@ -249,6 +249,8 @@ async def run_agent(
             )
 
          # if fatal error, throw EvalError to trigger re-run
+        if state is None:
+            raise EvalException('Final state is None')
         if is_fatal_evaluation_error(state.last_error):
             raise EvalException('Fatal error detected: ' + state.last_error)
 
@@ -264,8 +266,8 @@ async def run_agent(
 
     # get messages from agent history
     try:
-        initial_user_message = agent._get_initial_user_message(state.history)
-        raw_messages = agent._get_messages(state.history, initial_user_message)
+        initial_user_message = agent._get_initial_user_message(state.history) # type: ignore
+        raw_messages = agent._get_messages(state.history, initial_user_message) # type: ignore
         messages = agent.llm.format_messages_for_llm(raw_messages)
         if messages[-1]['role'] != 'assistant':
             messages = messages[:-1]
@@ -461,7 +463,7 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: pd.Series):
     return test_result
 
 @register_eval_func("swebench")
-async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str = None, allow_skip=True):
+async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str | None = None, allow_skip=True):
     # skip evaluation if git_patch is None or empty
     if allow_skip:
         if git_patch is None or len(git_patch) == 0:
@@ -503,9 +505,11 @@ async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str = 
 
 @register_init_exception_func("swebench")
 def initialize_exception(job_details: JobDetails, e: Exception):
+    instance_id = job_details.instance.instance_id if job_details.instance is not None else None
+    trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
     return {
-        'instance_id': job_details.instance.instance_id,
-        'trajectory_id': job_details.instance.trajectory_id,
+        'instance_id': instance_id,
+        'trajectory_id': trajectory_id,
         'git_patch': None,
         'success': False,
         'error': f'Error in init: {str(e)}',
@@ -517,9 +521,11 @@ def initialize_exception(job_details: JobDetails, e: Exception):
 
 @register_run_exception_func("swebench")
 def run_exception(job_details: JobDetails, e: Exception):
+    instance_id = job_details.instance.instance_id if job_details.instance is not None else None
+    trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
     return {
-        'instance_id': job_details.instance.instance_id,
-        'trajectory_id': job_details.instance.trajectory_id,
+        'instance_id': instance_id,
+        'trajectory_id': trajectory_id,
         'git_patch': None,
         'success': False,
         'error': f'Error in run agent: {str(e)}',
@@ -531,14 +537,20 @@ def run_exception(job_details: JobDetails, e: Exception):
 
 @register_eval_exception_func("swebench")
 def eval_exception(job_details: JobDetails, e: Exception):
+    instance_id = job_details.instance.instance_id if job_details.instance is not None else None
+    trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
+    git_patch = job_details.run_results.get('git_patch', None) if job_details.run_results is not None else None
+    success = job_details.run_results.get('success', False) if job_details.run_results is not None else False
+    finish = job_details.run_results.get('finish', False) if job_details.run_results is not None else False
+    messages = job_details.run_results.get('messages', []) if job_details.run_results is not None else []
     return {
-        'instance_id': job_details.instance.instance_id,
-        'trajectory_id': job_details.instance.trajectory_id,
-        'git_patch': job_details.run_results.get('git_patch', None),
-        'success': job_details.run_results.get('success', False),
+        'instance_id': instance_id,
+        'trajectory_id': trajectory_id,
+        'git_patch': git_patch,
+        'success': success,
         'error': f'Error in eval: {str(e)}',
-        'finish': job_details.run_results.get('finish', False),
-        'messages': job_details.run_results.get('messages', []),
+        'finish': finish,
+        'messages': messages,
         'resolved': False,
         'critical_error': 'eval',
     }
@@ -546,14 +558,24 @@ def eval_exception(job_details: JobDetails, e: Exception):
 @register_final_result_func("swebench")
 def final_result(job_details: JobDetails):
     if job_details.results is None:
-        result = {
-            **job_details.run_results,
-            'resolved': job_details.eval_results['resolved'],
-            'critical_error': None,
-        }
+        if job_details.run_results is None:
+            result = {
+                'resolved': job_details.eval_results['resolved'] if job_details.eval_results is not None else False,
+                'critical_error': None,
+            }
+        else:
+            result = {
+                **job_details.run_results,
+                'resolved': job_details.eval_results['resolved'] if job_details.eval_results is not None else False,
+                'critical_error': None,
+            }
     else:
         result = copy.deepcopy(job_details.results)
     if job_details.start_run_time:
+        if job_details.start_time is None:
+            job_details.start_time = job_details.start_run_time
+        if job_details.end_time is None:
+            job_details.end_time = job_details.start_run_time
         init_time_taken = job_details.start_run_time - job_details.start_time
         if job_details.start_eval_time:
             run_time_taken = (
@@ -564,7 +586,10 @@ def final_result(job_details: JobDetails):
             run_time_taken = job_details.end_time - job_details.start_run_time
             evaluate_time_taken = 0
     else:
-        init_time_taken = job_details.end_time - job_details.start_time
+        if job_details.start_time is None or job_details.end_time is None:
+            init_time_taken = 0
+        else:
+            init_time_taken = job_details.end_time - job_details.start_time
         run_time_taken = 0
         evaluate_time_taken = 0
 

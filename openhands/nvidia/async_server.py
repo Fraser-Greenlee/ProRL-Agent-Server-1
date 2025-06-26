@@ -7,20 +7,21 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from openhands.core.config.llm_config import LLMConfig
+from openhands.nvidia import register_swe_agent_functions
 from openhands.nvidia.registry import (
     FunctionNotRegisteredError,
     JobDetails,
     get_registered_functions,
 )
-
-from openhands.nvidia import register_swe_agent_functions
+from openhands.nvidia.utils import clear_queue
 
 register_swe_agent_functions()
+
 
 class OpenHandsServer:
     def __init__(
         self,
-        llm_server_addresses: list[str] = None,
+        llm_server_addresses: list[str] | None = None,
         max_init_workers: int = 6,
         max_run_workers: int = 5,
         max_eval_workers: int | None = None,
@@ -45,17 +46,20 @@ class OpenHandsServer:
             max_run_workers if max_eval_workers is None else max_eval_workers
         )
 
-        self.init_queue = None
-        self.run_queue = None
-        self.evaluate_queue = None
-        self._init_workers = []
-        self._run_workers = []
-        self._active_init_jobs = set()  # Track jobs being initialized
-        self._active_run_jobs = set()  # Track jobs being run
-        self._active_eval_jobs = set()  # Track jobs being evaluated
+        self.init_queue: queue.Queue[str] = queue.Queue()
+        self.run_queue: queue.Queue[str] = queue.Queue()
+        self.evaluate_queue: queue.Queue[str] = queue.Queue()
+        self._init_workers: list[asyncio.AbstractEventLoop | None] = []
+        self._run_workers: list[asyncio.AbstractEventLoop | None] = []
+        self._eval_workers: list[asyncio.AbstractEventLoop | None] = []
+        self._active_init_jobs: set[str] = set()  # Track jobs being initialized
+        self._active_run_jobs: set[str] = set()  # Track jobs being run
+        self._active_eval_jobs: set[str] = set()  # Track jobs being evaluated
+
+        self._server_running: bool = False
 
         # store job detail objects to pass around.
-        self._job_details = {}
+        self._job_details: dict[str, JobDetails] = {}
 
         self.weighted_addresses = [[0, address] for address in llm_server_addresses]
         heapq.heapify(self.weighted_addresses)
@@ -76,16 +80,16 @@ class OpenHandsServer:
             raise ValueError('No LLM server addresses added')
 
         address = self.weighted_addresses[0][1]
-        self.weighted_addresses[0][0] += 1
+        self.weighted_addresses[0][0] += 1  # type: ignore
         heapq.heapreplace(self.weighted_addresses, self.weighted_addresses[0])
 
         llm_config = LLMConfig(base_url=address, **sampling_params)
         return llm_config
 
     def start(self):
-        self.init_queue = queue.Queue()
-        self.run_queue = queue.Queue()
-        self.evaluate_queue = queue.Queue()
+        if self._server_running:
+            raise RuntimeError('Server is already running')
+        self._server_running = True
 
         self._executor = ThreadPoolExecutor(
             max_workers=self.max_init_workers
@@ -111,11 +115,11 @@ class OpenHandsServer:
             self._executor.submit(self._run_eval_worker_in_thread, i)
 
     def process(self, instance, sampling_params, job_id=None):
+        if not self._server_running:
+            raise RuntimeError('Server is not running')
+
         if len(self.weighted_addresses) == 0:
             raise ValueError('No LLM server addresses added')
-
-        if not hasattr(self, 'init_queue') or self.init_queue is None:
-            raise RuntimeError('Server is not started or has been stopped')
 
         # Create job details
         if job_id is None:
@@ -192,13 +196,15 @@ class OpenHandsServer:
             except FunctionNotRegisteredError as e:
                 print(f'Critical error: {e}')
                 job_details.results = {'critical_error': 'init'}
-                job_details.event.set()
+                if job_details.event is not None:
+                    job_details.event.set()
             except Exception as e:
                 _init_exception_func = get_registered_functions(
                     'init_exception', dataset_type
                 )
                 job_details.results = _init_exception_func(job_details, e)
-                job_details.event.set()
+                if job_details.event is not None:
+                    job_details.event.set()
             finally:
                 self._active_init_jobs.remove(job_id)
                 self.init_queue.task_done()
@@ -243,7 +249,8 @@ class OpenHandsServer:
             except FunctionNotRegisteredError as e:
                 print(f'Critical error: {e}')
                 job_details.results = {'critical_error': 'run'}
-                job_details.event.set()
+                if job_details.event is not None:
+                    job_details.event.set()
             except Exception as e:
                 # Ensure runtime is closed even if an exception occurs
                 if job_details.runtime:
@@ -254,7 +261,8 @@ class OpenHandsServer:
                     'run_exception', dataset_type
                 )
                 job_details.results = _run_exception_func(job_details, e)
-                job_details.event.set()
+                if job_details.event is not None:
+                    job_details.event.set()
             finally:
                 self._active_run_jobs.remove(job_id)
                 self.run_queue.task_done()
@@ -283,7 +291,9 @@ class OpenHandsServer:
                         f"Function '{dataset_type}' not found in registry type 'eval'"
                     )
                 eval_report = await _eval_func(
-                    job_details.run_results['git_patch'],
+                    job_details.run_results['git_patch']
+                    if job_details.run_results is not None
+                    else '',
                     job_details.instance,
                     sid=f'eval_{job_id}',
                     allow_skip=self.allow_skip_eval,
@@ -293,17 +303,20 @@ class OpenHandsServer:
                     job_details.eval_results = eval_report['report']
                 else:
                     job_details.eval_results = eval_report
-                job_details.event.set()
+                if job_details.event is not None:
+                    job_details.event.set()
             except FunctionNotRegisteredError as e:
                 print(f'Critical error: {e}')
                 job_details.results = {'critical_error': 'eval'}
-                job_details.event.set()
+                if job_details.event is not None:
+                    job_details.event.set()
             except Exception as e:
                 _eval_exception_func = get_registered_functions(
                     'eval_exception', dataset_type
                 )
                 job_details.results = _eval_exception_func(job_details, e)
-                job_details.event.set()
+                if job_details.event is not None:
+                    job_details.event.set()
             finally:
                 self._active_eval_jobs.remove(job_id)
                 self.evaluate_queue.task_done()
@@ -328,19 +341,24 @@ class OpenHandsServer:
 
     def stop(self):
         """Stops the server by shutting down all workers and clearing all queues and jobs."""
-        if not hasattr(self, 'init_queue') or self.init_queue is None:
-            # Server was never started or already stopped
+        if not self._server_running:
             return
-
         print('Stopping events')
         # Signal all active jobs to complete
         for job_id in list(self._active_init_jobs):
-            if job_id in self._job_details:
-                self._job_details[job_id].event.set()
+            job = self._job_details.get(job_id)
+            if job is not None and job.event is not None:
+                job.event.set()
 
         for job_id in list(self._active_run_jobs):
-            if job_id in self._job_details:
-                self._job_details[job_id].event.set()
+            job = self._job_details.get(job_id)
+            if job is not None and job.event is not None:
+                job.event.set()
+
+        for job_id in list(self._active_eval_jobs):
+            job = self._job_details.get(job_id)
+            if job is not None and job.event is not None:
+                job.event.set()
 
         print('Stopping queues')
         # Add sentinel values to queues to unblock workers
@@ -362,25 +380,10 @@ class OpenHandsServer:
             except Exception as e:
                 print(f'Warning: Failed to put stop signal in eval queue: {e}')
 
-        # Forced shutdown
-        for loop in self._init_workers + self._run_workers + self._eval_workers:
-            try:
-                pending = asyncio.all_tasks(loop)
-                for task in pending:
-                    task.cancel()
-                loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
-            except Exception:
-                pass
-            finally:
-                if loop:
-                    loop.close()
-
         print('Shutting down executor')
-        # Shutdown the executor with a timeout
+        # Shutdown the executor with a timeout - this is the main fix
         if hasattr(self, '_executor') and self._executor:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+            self._executor.shutdown(wait=True, cancel_futures=True)
 
         print('Clearing active jobs')
         # Clear all state
@@ -392,26 +395,19 @@ class OpenHandsServer:
         self._run_workers.clear()
         self._eval_workers.clear()
         # Reset queues
-        self.init_queue = None
-        self.run_queue = None
-        self.evaluate_queue = None
+        clear_queue(self.init_queue)
+        clear_queue(self.run_queue)
+        clear_queue(self.evaluate_queue)
 
+        self._server_running = False
         print(f'Server status: {self.status()}')
 
     def status(self):
         """Returns the number of jobs currently being processed in both queues and workers."""
-        if self.init_queue:
-            init_queue_count = self.init_queue.qsize()
-        else:
-            init_queue_count = 0
-        if self.run_queue:
-            run_queue_count = self.run_queue.qsize()
-        else:
-            run_queue_count = 0
-        if hasattr(self, 'evaluate_queue') and self.evaluate_queue:
-            eval_queue_count = self.evaluate_queue.qsize()
-        else:
-            eval_queue_count = 0
+        init_queue_count = self.init_queue.qsize()
+        run_queue_count = self.run_queue.qsize()
+        eval_queue_count = self.evaluate_queue.qsize()
+
         active_init_count = len(self._active_init_jobs)
         active_run_count = len(self._active_run_jobs)
         active_eval_count = len(self._active_eval_jobs)

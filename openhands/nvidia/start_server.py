@@ -56,7 +56,12 @@ def init_server(
         allow_skip_eval=allow_skip_eval,
     )
     global_timeout = timeout
-    thread_pool_count = min(max_init_workers, os.cpu_count() - 64)
+    cpu_count = os.cpu_count()
+    if cpu_count is None:
+        # Fallback to a reasonable default if CPU count is undetermined
+        thread_pool_count = max_init_workers
+    else:
+        thread_pool_count = min(max_init_workers, cpu_count - 64)
     print(f'Using {thread_pool_count} threads for the thread pool')
     thread_pool = ThreadPoolExecutor(max_workers=thread_pool_count)
 
@@ -88,7 +93,11 @@ async def job_timeout_handler(request, exc):
 async def start_server():
     kill_all_singularity_jobs()
     global server
-    if hasattr(server, 'init_queue') and server.init_queue is not None:
+    if server is None:
+        raise HTTPException(
+            status_code=500, detail='Server is not initialized. This should not happen.'
+        )
+    if server._server_running:
         raise HTTPException(status_code=400, detail='Server is already running')
 
     try:
@@ -101,7 +110,11 @@ async def start_server():
 @app.post('/stop')
 async def stop_server():
     global server
-    if not hasattr(server, 'init_queue') or server.init_queue is None:
+    if server is None:
+        raise HTTPException(
+            status_code=500, detail='Server is not initialized. This should not happen.'
+        )
+    if not server._server_running:
         raise ServerNotRunningError()
     try:
         # Run the stop operation in a thread pool to avoid blocking the event loop
@@ -118,7 +131,11 @@ async def stop_server():
 @app.get('/status')
 async def get_status():
     global server
-    if not hasattr(server, 'init_queue') or server.init_queue is None:
+    if server is None:
+        raise HTTPException(
+            status_code=500, detail='Server is not initialized. This should not happen.'
+        )
+    if not server._server_running:
         raise ServerNotRunningError()
 
     try:
@@ -133,6 +150,10 @@ async def get_status():
 @app.post('/add_llm_server')
 async def add_llm_server(request: LLMServerRequest):
     global server
+    if server is None:
+        raise HTTPException(
+            status_code=500, detail='Server is not initialized. This should not happen.'
+        )
     try:
         server.add_llm_server_address(request.address)
         return {'status': f'Added LLM server address: {request.address}'}
@@ -145,7 +166,11 @@ async def add_llm_server(request: LLMServerRequest):
 @app.post('/process')
 async def process(request: ProcessRequest):
     global server
-    if not hasattr(server, 'init_queue') or server.init_queue is None:
+    if server is None:
+        raise HTTPException(
+            status_code=500, detail='Server is not initialized. This should not happen.'
+        )
+    if not server._server_running:
         raise ServerNotRunningError()
 
     if len(server.weighted_addresses) == 0:
