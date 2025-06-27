@@ -2,7 +2,9 @@
 Migrated test script originally from openhands.nvidia.async_server
 """
 
-from openhands.nvidia.async_server import *
+import time
+
+from openhands.nvidia.async_server import OpenHandsServer
 
 
 def test_server(

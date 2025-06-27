@@ -2,7 +2,13 @@
 Migrated test script originally from openhands.nvidia.swe_agent.utils
 """
 
-from openhands.nvidia.swe_agent.utils import *
+import asyncio
+
+import numpy as np
+import pandas as pd
+
+from openhands.core.logger import openhands_logger as logger
+from openhands.nvidia.swe_agent.utils import evaluate_agent
 
 if __name__ == '__main__':
     dataset = pd.read_parquet(
