@@ -46,11 +46,15 @@ def parquet_to_instance_ids(parquet_path: Path) -> Iterable[str]:
         df = pd.read_parquet(parquet_path, columns=["instance"])
         for inst in df["instance"]:
             if isinstance(inst, dict):
-                yield inst.get("instance_id")
+                instance_id = inst.get("instance_id")
+                if instance_id is not None:
+                    yield instance_id
             else:
                 try:
                     d = json.loads(inst)
-                    yield d.get("instance_id")
+                    instance_id = d.get("instance_id")
+                    if instance_id is not None:
+                        yield instance_id
                 except Exception:
                     continue
     except Exception:

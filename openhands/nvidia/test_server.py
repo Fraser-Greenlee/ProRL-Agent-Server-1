@@ -107,7 +107,7 @@ async def process(instance, num_tasks: int = 4):
     tasks = []
     for i in range(num_tasks):
         sampling_params = {
-            'model': 'openai/Qwen/Qwen3-8B',
+            'model': 'hosted_vllm/Qwen/Qwen3-8B',
             'api_key': 'mykey',
             'modify_params': False,
             'log_completions': False,

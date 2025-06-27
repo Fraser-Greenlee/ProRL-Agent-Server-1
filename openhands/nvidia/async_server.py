@@ -450,7 +450,7 @@ def test_server(
 
     llm_server_address = 'http://127.0.0.1:8000/v1'
     sampling_params = {
-        'model': 'openai/Qwen/Qwen3-8B',
+        'model': 'hosted_vllm/Qwen/Qwen3-8B',
         'api_key': 'mykey',
         'modify_params': False,
         'log_completions': True,
