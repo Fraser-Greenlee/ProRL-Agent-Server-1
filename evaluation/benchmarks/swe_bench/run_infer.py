@@ -1,3 +1,4 @@
+# type: ignore
 import asyncio
 import copy
 import json
@@ -76,7 +77,7 @@ def _get_swebench_workspace_dir_name(instance: pd.Series) -> str:
 
 def get_instruction(instance: pd.Series, metadata: EvalMetadata) -> MessageAction:
     workspace_dir_name = _get_swebench_workspace_dir_name(instance)
-    mode = metadata.details['mode']
+    mode = metadata.details['mode'] if metadata.details else 'default'  # type: ignore
     if mode.startswith('swt'):
         test_instructions = (
             f'The following command can be used to run the tests: `{list(MAP_REPO_TO_TEST_FRAMEWORK_VERBOSE[instance.repo].values())[0]}`. Make sure they fail in the expected way.\n'
@@ -222,9 +223,9 @@ def get_config(
     metadata: EvalMetadata,
 ) -> OpenHandsConfig:
     # We use a different instance image for the each instance of swe-bench eval
-    use_swebench_official_image = 'swe-gym' not in metadata.dataset.lower()
+    use_swebench_official_image = 'swe-gym' not in (metadata.dataset or '').lower()  # type: ignore
     base_container_image = get_instance_docker_image(
-        instance['instance_id'],
+        instance['instance_id'],  # type: ignore
         swebench_official_image=use_swebench_official_image,
     )
     logger.info(
@@ -240,8 +241,8 @@ def get_config(
     # Add platform to the sandbox config to solve issue 4401
     sandbox_config.platform = 'linux/amd64'
     sandbox_config.remote_runtime_resource_factor = get_instance_resource_factor(
-        dataset_name=metadata.dataset,
-        instance_id=instance['instance_id'],
+        dataset_name=metadata.dataset or 'swebench',  # type: ignore
+        instance_id=instance['instance_id'],  # type: ignore
     )
 
     config = OpenHandsConfig(

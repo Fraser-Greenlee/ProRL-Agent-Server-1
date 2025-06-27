@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from evaluation.utils.shared import EvalMetadata
+from evaluation.utils.shared import EvalMetadata  # type: ignore
 from openhands.core.config import OpenHandsConfig
 from openhands.core.config.llm_config import LLMConfig
 from openhands.runtime.base import Runtime

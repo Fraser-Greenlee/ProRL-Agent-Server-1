@@ -1,3 +1,4 @@
+# type: ignore
 import time
 import pandas as pd
 import numpy as np
@@ -6,7 +7,7 @@ import asyncio
 import json
 import copy
 
-from evaluation.benchmarks.swe_bench.run_infer import (
+from evaluation.benchmarks.swe_bench.run_infer import (  # type: ignore
     initialize_runtime,
     get_instruction,
     complete_runtime,
@@ -14,7 +15,7 @@ from evaluation.benchmarks.swe_bench.run_infer import (
     codeact_user_response,
     EvalException
 )
-from evaluation.utils.shared import (
+from evaluation.utils.shared import (  # type: ignore
     EvalMetadata,
     get_default_sandbox_config_for_eval,
     update_llm_config_for_completions_logging,
@@ -45,13 +46,13 @@ logger.info(f'Using docker image prefix: {DOCKER_IMAGE_PREFIX}')
 RUN_WITH_BROWSING = os.environ.get('RUN_WITH_BROWSING', 'false').lower() == 'true'
 
 
-from evaluation.benchmarks.swe_bench.eval_infer import (
+from evaluation.benchmarks.swe_bench.eval_infer import (  # type: ignore
     process_instance as _eval_process_instance,
     process_git_patch as _process_git_patch,
     ConditionalImports as _EvalConditionalImports,
     ConditionalImports as ConditionalImports,
 )
-from evaluation.utils.shared import EvalMetadata
+from evaluation.utils.shared import EvalMetadata  # type: ignore
 from openhands.core.config import LLMConfig
 import pandas as pd
 
