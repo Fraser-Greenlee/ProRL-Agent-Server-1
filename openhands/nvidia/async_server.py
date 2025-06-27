@@ -12,6 +12,7 @@ from openhands.nvidia.registry import (
     FunctionNotRegisteredError,
     JobDetails,
     get_registered_functions,
+    is_registered_handler,
 )
 from openhands.nvidia.utils import clear_queue
 
@@ -121,6 +122,12 @@ class OpenHandsServer:
         if len(self.weighted_addresses) == 0:
             raise ValueError('No LLM server addresses added')
 
+        dataset_type = getattr(instance, 'data_source', 'swebench')
+        if not is_registered_handler(dataset_type):
+            raise FunctionNotRegisteredError(
+                f'Dataset type {dataset_type} is not registered'
+            )
+
         # Create job details
         if job_id is None:
             job_id = self.get_unique_id(instance)
@@ -145,7 +152,6 @@ class OpenHandsServer:
         job_details.end_time = time.time()
 
         # Get final result
-        dataset_type = getattr(job_details.instance, 'dataset', 'swebench')
         _final_result_func = get_registered_functions('final_result', dataset_type)
         if _final_result_func is None:
             result = {
@@ -193,11 +199,6 @@ class OpenHandsServer:
                 job_details.metadata = metadata
                 job_details.config = config
                 self.run_queue.put(job_id)
-            except FunctionNotRegisteredError as e:
-                print(f'Critical error: {e}')
-                job_details.results = {'critical_error': 'init'}
-                if job_details.event is not None:
-                    job_details.event.set()
             except Exception as e:
                 _init_exception_func = get_registered_functions(
                     'init_exception', dataset_type
@@ -224,7 +225,7 @@ class OpenHandsServer:
             print(f'[run-worker-{wid}] Got job {job_id}')
             job_details.start_run_time = time.time()
             self._active_run_jobs.add(job_id)
-            dataset_type = getattr(job_details.instance, 'dataset', 'swebench')
+            dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
             _run_func = get_registered_functions('run', dataset_type)
             try:
                 if _run_func is None:
@@ -246,11 +247,6 @@ class OpenHandsServer:
 
                 # Push to evaluation queue for further processing
                 self.evaluate_queue.put(job_id)
-            except FunctionNotRegisteredError as e:
-                print(f'Critical error: {e}')
-                job_details.results = {'critical_error': 'run'}
-                if job_details.event is not None:
-                    job_details.event.set()
             except Exception as e:
                 # Ensure runtime is closed even if an exception occurs
                 if job_details.runtime:
@@ -283,7 +279,7 @@ class OpenHandsServer:
             job_details = self._job_details[job_id]
             job_details.start_eval_time = time.time()
             self._active_eval_jobs.add(job_id)
-            dataset_type = getattr(job_details.instance, 'dataset', 'swebench')
+            dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
             _eval_func = get_registered_functions('eval', dataset_type)
             try:
                 if _eval_func is None:
@@ -291,10 +287,7 @@ class OpenHandsServer:
                         f"Function '{dataset_type}' not found in registry type 'eval'"
                     )
                 eval_report = await _eval_func(
-                    job_details.run_results['git_patch']
-                    if job_details.run_results is not None
-                    else '',
-                    job_details.instance,
+                    job_details,
                     sid=f'eval_{job_id}',
                     allow_skip=self.allow_skip_eval,
                 )
@@ -303,11 +296,6 @@ class OpenHandsServer:
                     job_details.eval_results = eval_report['report']
                 else:
                     job_details.eval_results = eval_report
-                if job_details.event is not None:
-                    job_details.event.set()
-            except FunctionNotRegisteredError as e:
-                print(f'Critical error: {e}')
-                job_details.results = {'critical_error': 'eval'}
                 if job_details.event is not None:
                     job_details.event.set()
             except Exception as e:

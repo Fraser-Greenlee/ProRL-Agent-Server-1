@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from openhands.nvidia.async_server import OpenHandsServer
+from openhands.nvidia.registry import FunctionNotRegisteredError
 from openhands.nvidia.utils import (
     JobTimeoutError,
     LLMServerRequest,
@@ -87,6 +88,16 @@ async def no_llm_server_handler(request, exc):
 @app.exception_handler(JobTimeoutError)
 async def job_timeout_handler(request, exc):
     return JSONResponse(status_code=504, content={'detail': str(exc)})
+
+
+@app.exception_handler(FunctionNotRegisteredError)
+async def function_not_registered_handler(request, exc):
+    return JSONResponse(
+        status_code=400,
+        content={
+            'detail': f'Invalid dataset type or function not registered: {str(exc)}'
+        },
+    )
 
 
 @app.post('/start')

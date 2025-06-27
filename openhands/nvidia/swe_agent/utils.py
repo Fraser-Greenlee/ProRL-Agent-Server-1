@@ -37,16 +37,7 @@ from openhands.events.action import (
     AgentFinishAction,
 )
 
-from openhands.nvidia.registry import (
-    JobDetails,
-    register_init_func,
-    register_run_func,
-    register_eval_func,
-    register_init_exception_func,
-    register_run_exception_func,
-    register_eval_exception_func,
-    register_final_result_func,
-)
+from openhands.nvidia.registry import JobDetails
 
 DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'xingyaoww/')
 logger.info(f'Using docker image prefix: {DOCKER_IMAGE_PREFIX}')
@@ -171,7 +162,6 @@ def get_config(
     config.set_agent_config(agent_config)
     return config
 
-@register_init_func("swebench")
 async def initialize_agents(
         instance:pd.Series,
         llm_config: LLMConfig | None = None,
@@ -230,7 +220,6 @@ async def initialize_agents(
     # return values).
     return runtime, metadata, config
 
-@register_run_func("swebench")
 async def run_agent(
         runtime:Runtime,
         metadata:EvalMetadata,
@@ -462,7 +451,6 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: pd.Series):
 
     return test_result
 
-@register_eval_func("swebench")
 async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str | None = None, allow_skip=True):
     # skip evaluation if git_patch is None or empty
     if allow_skip:
@@ -503,7 +491,6 @@ async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str | 
 
     return test_result
 
-@register_init_exception_func("swebench")
 def initialize_exception(job_details: JobDetails, e: Exception):
     instance_id = job_details.instance.instance_id if job_details.instance is not None else None
     trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
@@ -519,7 +506,6 @@ def initialize_exception(job_details: JobDetails, e: Exception):
         'critical_error': 'init',
     }
 
-@register_run_exception_func("swebench")
 def run_exception(job_details: JobDetails, e: Exception):
     instance_id = job_details.instance.instance_id if job_details.instance is not None else None
     trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
@@ -535,7 +521,6 @@ def run_exception(job_details: JobDetails, e: Exception):
         'critical_error': 'run',
     }
 
-@register_eval_exception_func("swebench")
 def eval_exception(job_details: JobDetails, e: Exception):
     instance_id = job_details.instance.instance_id if job_details.instance is not None else None
     trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
@@ -555,7 +540,6 @@ def eval_exception(job_details: JobDetails, e: Exception):
         'critical_error': 'eval',
     }
 
-@register_final_result_func("swebench")
 def final_result(job_details: JobDetails):
     if job_details.results is None:
         if job_details.run_results is None:

@@ -1,4 +1,5 @@
 import threading
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -29,6 +30,71 @@ class JobDetails:
     end_time: float | None = None
 
 
+class AgentHandler(ABC):
+    """Abstract base class defining the interface for agent handlers."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """The name identifier for this agent handler."""
+        pass
+
+    @abstractmethod
+    async def init(
+        self,
+        instance: pd.Series,
+        llm_config: LLMConfig | None = None,
+        sid: str | None = None,
+        max_iterations: int = 1,
+    ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
+        """Initialize the agent with instance and config."""
+        pass
+
+    @abstractmethod
+    async def run(
+        self,
+        runtime: Runtime,
+        metadata: EvalMetadata,
+        config: OpenHandsConfig,
+        instance: pd.Series,
+    ) -> dict[str, object]:
+        """Run the agent with runtime and instance."""
+        pass
+
+    @abstractmethod
+    async def eval(
+        self, job_details: JobDetails, sid: str | None = None, allow_skip: bool = True
+    ) -> dict[str, Any]:
+        """Evaluate the agent results."""
+        pass
+
+    @abstractmethod
+    def init_exception(
+        self, job_details: JobDetails, exception: Exception
+    ) -> dict[str, Any]:
+        """Handle exceptions during initialization."""
+        pass
+
+    @abstractmethod
+    def run_exception(
+        self, job_details: JobDetails, exception: Exception
+    ) -> dict[str, Any]:
+        """Handle exceptions during run."""
+        pass
+
+    @abstractmethod
+    def eval_exception(
+        self, job_details: JobDetails, exception: Exception
+    ) -> dict[str, Any]:
+        """Handle exceptions during evaluation."""
+        pass
+
+    @abstractmethod
+    def final_result(self, job_details: JobDetails) -> dict[str, Any]:
+        """Process final results."""
+        pass
+
+
 # Registry for different types of agent functions
 _registries: dict[str, dict[str, Callable[..., Any]]] = {
     'init': {},
@@ -40,28 +106,7 @@ _registries: dict[str, dict[str, Callable[..., Any]]] = {
     'final_result': {},
 }
 
-
-def _create_register_decorator(registry_type):
-    """Factory function to create registration decorators."""
-
-    def register_func(name):
-        def decorator(func):
-            _registries[registry_type][name] = func
-            return func
-
-        return decorator
-
-    return register_func
-
-
-# Create registration decorators
-register_init_func = _create_register_decorator('init')
-register_run_func = _create_register_decorator('run')
-register_eval_func = _create_register_decorator('eval')
-register_init_exception_func = _create_register_decorator('init_exception')
-register_run_exception_func = _create_register_decorator('run_exception')
-register_eval_exception_func = _create_register_decorator('eval_exception')
-register_final_result_func = _create_register_decorator('final_result')
+_registered_handlers: set[str] = set()
 
 
 class FunctionNotRegisteredError(Exception):
@@ -75,15 +120,18 @@ def get_registered_functions(registry_type, name):
     return _registries.get(registry_type, {}).get(name)
 
 
-def clear_registry(registry_type=None):
-    """Clear one or all registries."""
-    if registry_type:
-        _registries[registry_type].clear()
-    else:
-        for registry in _registries.values():
-            registry.clear()
+def is_registered_handler(name):
+    """Check if a handler is registered correctly."""
+    return name in _registered_handlers
 
 
-def is_registered(name, registry_type):
-    """Check if a function is registered in a specific registry."""
-    return name in _registries.get(registry_type, {})
+def register_agent_handler(handler: AgentHandler):
+    """Register all methods of an AgentHandler instance to their corresponding registries."""
+    _registered_handlers.add(handler.name)
+    _registries['init'][handler.name] = handler.init
+    _registries['run'][handler.name] = handler.run
+    _registries['eval'][handler.name] = handler.eval
+    _registries['init_exception'][handler.name] = handler.init_exception
+    _registries['run_exception'][handler.name] = handler.run_exception
+    _registries['eval_exception'][handler.name] = handler.eval_exception
+    _registries['final_result'][handler.name] = handler.final_result
