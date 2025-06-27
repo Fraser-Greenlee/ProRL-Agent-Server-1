@@ -543,7 +543,11 @@ def eval_exception(job_details: JobDetails, e: Exception):
 def final_result(job_details: JobDetails):
     if job_details.results is None:
         if job_details.run_results is None:
+            instance_id = job_details.instance.instance_id if job_details.instance is not None else None
+            trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
             result = {
+                'instance_id': instance_id,
+                'trajectory_id': trajectory_id,
                 'resolved': job_details.eval_results['resolved'] if job_details.eval_results is not None else False,
                 'critical_error': None,
             }
