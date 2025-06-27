@@ -83,7 +83,9 @@ python start_server.py [OPTIONS]
       "native_tool_calling": "bool",  // If LLM supports tool calling (recommend: true for Qwen3)
       "temperature": "float",         // Sampling temperature
       "top_p": "float",              // Sampling top_p
-      "max_iteration": "int"          // Maximum iterations for OpenHands agent
+      "max_output_tokens": "int",    // max output tokens for each iteration. max_model_len is handled by LLM server not openhands server (recommend: 4096)
+      "max_iteration": "int",          // Maximum iterations for OpenHands agent
+      // ... additional sampling params supported by LLMConfig in openhands.core.config.llm_config
     }
   }
   ```
