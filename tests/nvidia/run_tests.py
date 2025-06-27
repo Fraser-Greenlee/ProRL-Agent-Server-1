@@ -3,14 +3,20 @@
 Test runner script for SWE-bench utils tests.
 
 This script allows running different types of tests:
-- Unit tests (fast, mocked)
+- Unit tests (fast, mocked) - includes SweAgentHandler tests
 - Integration tests (with real data if available)
 - Full end-to-end tests
+
+Test Files:
+- test_swebench_utils.py - Comprehensive SWE-bench utility tests
+- test_swebench_utils_integration.py - Integration tests with real data
+- test_swe_agent_handler.py - SweAgentHandler class unit tests
 
 Usage:
     python run_tests.py --unit                    # Run only unit tests
     python run_tests.py --integration            # Run integration tests
     python run_tests.py --real-data             # Run tests with real data
+    python run_tests.py --swe-agent-handler     # Run SweAgentHandler tests only
     python run_tests.py --all                   # Run all tests
     python run_tests.py --main-examples         # Test main examples specifically
 """
@@ -38,7 +44,7 @@ def check_real_data_available():
     return os.path.exists(parquet_file)
 
 
-def run_pytest_command(markers=None, verbose=True, extra_args=None):
+def run_pytest_command(markers=None, verbose=True, extra_args=None, test_files=None):
     """Run pytest with specified markers and options"""
     cmd = ['python', '-m', 'pytest']
 
@@ -54,8 +60,11 @@ def run_pytest_command(markers=None, verbose=True, extra_args=None):
     if extra_args:
         cmd.extend(extra_args)
 
-    # Add the test directory
-    cmd.append('tests/nvidia/')
+    # Add the test files or directory
+    if test_files:
+        cmd.extend(test_files)
+    else:
+        cmd.append('tests/nvidia/')
 
     print(f'Running: {" ".join(cmd)}')
     return subprocess.run(cmd, cwd=Path(__file__).parent.parent.parent)
@@ -115,6 +124,11 @@ def main():
     parser.add_argument(
         '--real-data', action='store_true', help='Run tests requiring real data'
     )
+    parser.add_argument(
+        '--swe-agent-handler',
+        action='store_true',
+        help='Run SweAgentHandler tests only',
+    )
     parser.add_argument('--all', action='store_true', help='Run all tests')
     parser.add_argument(
         '--main-examples', action='store_true', help='Test main examples'
@@ -139,6 +153,7 @@ def main():
     # Determine which tests to run
     markers = []
     extra_args = []
+    test_files = None
 
     if args.coverage:
         extra_args.extend(['--cov=openhands.nvidia', '--cov-report=term-missing'])
@@ -151,10 +166,13 @@ def main():
         if not has_real_data:
             print('⚠ Warning: Real data not available, some tests will be skipped')
         markers.append('real_data')
+    elif args.swe_agent_handler:
+        print('Running SweAgentHandler tests only...')
+        test_files = ['tests/nvidia/test_swe_agent_handler.py']
     elif args.fast:
         markers.append('not slow')
     elif args.all:
-        # Run all tests
+        # Run all tests (includes test_swebench_utils.py, test_swebench_utils_integration.py, and test_swe_agent_handler.py)
         pass
     else:
         # Default: run unit tests
@@ -164,7 +182,10 @@ def main():
 
     # Run the tests
     result = run_pytest_command(
-        markers=marker_str, verbose=args.verbose, extra_args=extra_args
+        markers=marker_str,
+        verbose=args.verbose,
+        extra_args=extra_args,
+        test_files=test_files,
     )
 
     return result.returncode

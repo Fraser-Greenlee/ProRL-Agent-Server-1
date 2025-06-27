@@ -15,6 +15,7 @@ This directory contains comprehensive tests for the SWE-bench utilities, includi
 
 - `test_swebench_utils.py` - Original comprehensive unit tests + new real data tests
 - `test_swebench_utils_integration.py` - Integration tests using real examples
+- `test_swe_agent_handler.py` - Unit tests for the SweAgentHandler class
 - `conftest.py` - Pytest fixtures and configuration
 - `pytest.ini` - Pytest configuration and markers
 - `run_tests.py` - Test runner script with different options
@@ -55,6 +56,9 @@ pytest -m real_data tests/nvidia/
 # Skip slow tests
 pytest -m "not slow" tests/nvidia/
 
+# Run SweAgentHandler tests specifically
+pytest tests/nvidia/test_swe_agent_handler.py -v
+
 # Run with coverage
 pytest --cov=openhands.nvidia --cov-report=term-missing tests/nvidia/
 ```
@@ -75,6 +79,50 @@ The real data tests require access to the SWE-bench dataset:
 4. **Sequential Evaluation**: Tests the sequential evaluation pattern
 5. **Docker Image Generation**: Tests with real instance IDs
 6. **Configuration**: Tests configuration generation with real data
+
+## SweAgentHandler Tests
+
+The `test_swe_agent_handler.py` file contains comprehensive unit tests for the `SweAgentHandler` class, which provides the integration layer for SWE-bench evaluation:
+
+### Test Coverage
+
+1. **Basic Functionality Tests**:
+   - Name property verification
+   - Method signature validation
+   - Inheritance from AgentHandler
+
+2. **Initialization Tests (`init` method)**:
+   - Successful initialization with various parameters
+   - Default parameter handling
+   - Exception propagation
+
+3. **Run Tests (`run` method)**:
+   - Successful execution
+   - Exception handling and propagation
+
+4. **Evaluation Tests (`eval` method)**:
+   - Evaluation with git patches
+   - Evaluation without patches (None run_results)
+   - Evaluation with empty git patches
+   - Missing git_patch key handling (KeyError)
+   - Exception propagation
+
+5. **Exception Handlers**:
+   - `init_exception`, `run_exception`, `eval_exception`
+   - Proper delegation to utils functions
+
+6. **Integration Tests**: Tests with real data when available
+
+7. **Edge Cases**:
+   - None values handling
+   - Concurrent operations
+   - Missing keys in run_results
+
+### Test Categories
+
+- **Unit Tests**: Fast tests using mocks for all external dependencies
+- **Integration Tests**: Tests using real data structures (marked with `@pytest.mark.real_data`)
+- **Edge Cases**: Tests for error conditions and boundary cases
 
 ## Test Examples from __main__
 
@@ -199,4 +247,40 @@ async def test_async_pattern(real_instance, mock_runtime):
         mock_func.return_value = expected_result
         result = await my_async_function(real_instance)
         assert result == expected_result
+```
+
+### Testing SweAgentHandler
+
+```python
+@pytest.mark.asyncio
+@patch('openhands.nvidia.swe_agent.swe_agent_handler.initialize_agents')
+async def test_handler_init(mock_initialize_agents, minimal_llm_config):
+    """Test SweAgentHandler initialization"""
+    mock_initialize_agents.return_value = (Mock(), Mock(), Mock())
+
+    handler = SweAgentHandler()
+    instance = pd.Series({'instance_id': 'test'})
+
+    result = await handler.init(instance=instance, llm_config=minimal_llm_config)
+    assert len(result) == 3  # runtime, metadata, config
+```
+
+### Testing with JobDetails
+
+```python
+@pytest.mark.asyncio
+@patch('openhands.nvidia.swe_agent.swe_agent_handler.evaluate_agent')
+async def test_handler_eval(mock_evaluate_agent):
+    """Test SweAgentHandler evaluation"""
+    mock_evaluate_agent.return_value = {'resolved': True}
+
+    handler = SweAgentHandler()
+    job_details = JobDetails(
+        job_id='test',
+        instance=pd.Series({'instance_id': 'test'}),
+        run_results={'git_patch': 'test_patch'}
+    )
+
+    result = await handler.eval(job_details=job_details)
+    assert result['resolved'] is True
 ```
