@@ -208,14 +208,14 @@ def parse_args():
     parser.add_argument(
         '--max-init-workers',
         type=int,
-        default=6,
-        help='Maximum number of initialization workers (default: 6)',
+        default=64,
+        help='Maximum number of initialization workers (default: 64)',
     )
     parser.add_argument(
         '--max-run-workers',
         type=int,
-        default=5,
-        help='Maximum number of run workers (default: 5)',
+        default=64,
+        help='Maximum number of run workers (default: 64)',
     )
     parser.add_argument(
         '--timeout',
