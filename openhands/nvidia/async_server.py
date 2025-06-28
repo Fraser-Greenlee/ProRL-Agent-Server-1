@@ -65,6 +65,7 @@ class OpenHandsServer:
         # THREAD SAFETY: Add locks to protect shared data structures
         self._state_lock = threading.RLock()  # Reentrant lock for active job sets
         self._job_details_lock = threading.RLock()  # Separate lock for job details dict
+        self._address_lock = threading.RLock()  # Separate lock for address list
 
     def get_unique_id(self, instance, max_retries=10):
         for _ in range(max_retries):
@@ -76,15 +77,26 @@ class OpenHandsServer:
         raise ValueError('Failed to get unique id')
 
     def add_llm_server_address(self, llm_server_address: str):
-        heapq.heappush(self.weighted_addresses, [0, llm_server_address])
+        with self._address_lock:
+            # Check if address already exists
+            for weight, addr in self.weighted_addresses:
+                if addr == llm_server_address:
+                    print(
+                        f'Warning: LLM server address {llm_server_address} already exists'
+                    )
+                    return
+
+            heapq.heappush(self.weighted_addresses, [0, llm_server_address])
+            print(f'Added LLM server address: {llm_server_address}')
 
     def create_llm_config(self, sampling_params):
-        if len(self.weighted_addresses) == 0:
-            raise ValueError('No LLM server addresses added')
+        with self._address_lock:
+            if len(self.weighted_addresses) == 0:
+                raise ValueError('No LLM server addresses added')
 
-        address = self.weighted_addresses[0][1]
-        self.weighted_addresses[0][0] += 1  # type: ignore
-        heapq.heapreplace(self.weighted_addresses, self.weighted_addresses[0])
+            address = self.weighted_addresses[0][1]
+            self.weighted_addresses[0][0] += 1  # type: ignore
+            heapq.heapreplace(self.weighted_addresses, self.weighted_addresses[0])
 
         llm_config = LLMConfig(base_url=address, **sampling_params)
         return llm_config
@@ -121,8 +133,9 @@ class OpenHandsServer:
         if not self._server_running:
             raise RuntimeError('Server is not running')
 
-        if len(self.weighted_addresses) == 0:
-            raise ValueError('No LLM server addresses added')
+        with self._address_lock:
+            if len(self.weighted_addresses) == 0:
+                raise ValueError('No LLM server addresses added')
 
         dataset_type = getattr(instance, 'data_source', 'swebench')
         if not is_registered_handler(dataset_type):
@@ -184,7 +197,14 @@ class OpenHandsServer:
                 break
 
             print(f'[init-worker-{wid}] Got job {job_id}')
-            job_details = self._job_details[job_id]
+            # Thread-safe job details retrieval
+            with self._job_details_lock:
+                job_details = self._job_details.get(job_id)
+                if job_details is None:
+                    print(f'[init-worker-{wid}] Job {job_id} not found, skipping')
+                    self.init_queue.task_done()
+                    continue
+
             # Thread-safe active jobs tracking
             with self._state_lock:
                 self._active_init_jobs.add(job_id)
@@ -231,7 +251,14 @@ class OpenHandsServer:
                 self.run_queue.task_done()
                 break
 
-            job_details = self._job_details[job_id]
+            # Thread-safe job details retrieval
+            with self._job_details_lock:
+                job_details = self._job_details.get(job_id)
+                if job_details is None:
+                    print(f'[run-worker-{wid}] Job {job_id} not found, skipping')
+                    self.run_queue.task_done()
+                    continue
+
             print(f'[run-worker-{wid}] Got job {job_id}')
             job_details.start_run_time = time.time()
 
@@ -292,7 +319,14 @@ class OpenHandsServer:
                 break
 
             print(f'[eval-worker-{wid}] Got job {job_id}')
-            job_details = self._job_details[job_id]
+            # Thread-safe job details retrieval
+            with self._job_details_lock:
+                job_details = self._job_details.get(job_id)
+                if job_details is None:
+                    print(f'[eval-worker-{wid}] Job {job_id} not found, skipping')
+                    self.evaluate_queue.task_done()
+                    continue
+
             job_details.start_eval_time = time.time()
 
             # Thread-safe active jobs tracking
