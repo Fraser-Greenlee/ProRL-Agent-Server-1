@@ -124,6 +124,7 @@ class MyAgentHandler(AgentHandler):
 
 2. **Register the handler**:
 
+Register agent handler in __init__.py
 ```python
 from openhands.nvidia.registry import register_agent_handler
 register_agent_handler(MyAgentHandler())
@@ -546,7 +547,7 @@ class CustomAgentHandler(AgentHandler):
 
     # Implement required methods...
 
-# 2. Register handler
+# 2. Register handler in __init__.py
 from openhands.nvidia.registry import register_agent_handler
 register_agent_handler(CustomAgentHandler())
 

@@ -7,7 +7,6 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from openhands.core.config.llm_config import LLMConfig
-from openhands.nvidia import register_swe_agent_functions
 from openhands.nvidia.registry import (
     FunctionNotRegisteredError,
     JobDetails,
@@ -15,8 +14,6 @@ from openhands.nvidia.registry import (
     is_registered_handler,
 )
 from openhands.nvidia.utils import clear_queue
-
-register_swe_agent_functions()
 
 
 class OpenHandsServer:
