@@ -6,7 +6,7 @@ import os
 import asyncio
 import json
 import copy
-
+import traceback
 from evaluation.benchmarks.swe_bench.run_infer import (  # type: ignore
     initialize_runtime,
     get_instruction,
@@ -493,6 +493,7 @@ async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str | 
     return test_result
 
 def initialize_exception(job_details: JobDetails, e: Exception):
+    tb = traceback.format_exc()
     instance_id = job_details.instance.instance_id if job_details.instance is not None else None
     trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
     return {
@@ -501,6 +502,7 @@ def initialize_exception(job_details: JobDetails, e: Exception):
         'git_patch': None,
         'success': False,
         'error': f'Error in init: {str(e)}',
+        'traceback': tb,
         'finish': False,
         'messages': [],
         'resolved': False,
@@ -508,6 +510,7 @@ def initialize_exception(job_details: JobDetails, e: Exception):
     }
 
 def run_exception(job_details: JobDetails, e: Exception):
+    tb = traceback.format_exc()
     instance_id = job_details.instance.instance_id if job_details.instance is not None else None
     trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
     return {
@@ -516,6 +519,7 @@ def run_exception(job_details: JobDetails, e: Exception):
         'git_patch': None,
         'success': False,
         'error': f'Error in run agent: {str(e)}',
+        'traceback': tb,
         'finish': False,
         'messages': [],
         'resolved': False,
@@ -523,6 +527,7 @@ def run_exception(job_details: JobDetails, e: Exception):
     }
 
 def eval_exception(job_details: JobDetails, e: Exception):
+    tb = traceback.format_exc()
     instance_id = job_details.instance.instance_id if job_details.instance is not None else None
     trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
     git_patch = job_details.run_results.get('git_patch', None) if job_details.run_results is not None else None
@@ -535,6 +540,7 @@ def eval_exception(job_details: JobDetails, e: Exception):
         'git_patch': git_patch,
         'success': success,
         'error': f'Error in eval: {str(e)}',
+        'traceback': tb,
         'finish': finish,
         'messages': messages,
         'resolved': False,
