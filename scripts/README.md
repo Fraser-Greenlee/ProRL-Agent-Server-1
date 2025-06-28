@@ -42,7 +42,7 @@ python start_server.py [OPTIONS]
 - **Output:** `{"status": "Server started successfully"}`
 - **Notes:** Automatically kills existing Singularity jobs before starting
 
-#### `POST /stop` 
+#### `POST /stop`
 - **Purpose:** Stop the OpenHands server
 - **Input:** No request body required
 - **Output:** `{"status": "Server stopped successfully"}` or `{"status": "Force killed all singularity jobs."}`
@@ -55,7 +55,7 @@ python start_server.py [OPTIONS]
 
 #### `POST /add_llm_server`
 - **Purpose:** Add LLM server address for load balancing
-- **Input:** 
+- **Input:**
   ```json
   {
     "address": "http://llm-server:port/v1"
@@ -74,7 +74,7 @@ python start_server.py [OPTIONS]
       "trajectory_id": "int",
       "data_source": "string", // Must match registered type in openhands.nvidia.async_server (default: "swebench")
       // ... other benchmark-specific fields
-    }, 
+    },
     "sampling_params": {
       "model": "string",              // Model name (e.g., "hosted_vllm/Qwen/Qwen3-8B")
       "api_key": "string",            // API key (use any string if not required, e.g., "mykey")
@@ -91,7 +91,7 @@ python start_server.py [OPTIONS]
   ```
 
 - **Output Response Format:**
-  
+
   **Generic Response:**
   ```json
   {
@@ -108,7 +108,7 @@ python start_server.py [OPTIONS]
     "trajectory_id": "string",
     "critical_error": "string",  // Pipeline error stage (null indicates success)
     "resolved": "bool",          // Whether agent resolved the issue
-    
+
     // Fields included for successful pipeline runs:
     "git_patch": "string",       // Agent-submitted patch
     "success": "bool",          // Whether OpenHands agent state is not fatal error
@@ -117,7 +117,7 @@ python start_server.py [OPTIONS]
   }
   ```
 
-- **Important Notes:** 
+- **Important Notes:**
   - Requests are automatically load-balanced across configured LLM servers in round-robin fashion
   - The `data_source` field must match registered benchmark types in the server
   - Response format varies by benchmark type (SWE-Bench example shown above). Will update to rewards in future.
@@ -142,7 +142,7 @@ python start_server.py [OPTIONS]
 - **Worker Configuration:**
   - `max-init-workers` should be ≥ `max-run-workers` (recommended: keep them equal)
   - `max-run-workers` should be carefully calculated based on your LLM infrastructure
-  
+
 - **Calculating max-run-workers:**
   - **Formula:** `(Number of LLM servers) × (Concurrent requests per server)`
   - **Example:** 4 LLM servers × 4 concurrent requests each = 16 max-run-workers
@@ -194,3 +194,50 @@ python pull_swe_images.py [OPTIONS]
 - `EVAL_DOCKER_IMAGE_PREFIX`: Default Docker image prefix
 - `DEST_DIR`: Override destination directory
 - `TEMP_BASE`: Override temporary build directory
+
+### `run_swe.py`
+
+A convenience script for bulk evaluation of SWE-Bench instances using the OpenHands asynchronous server. It launches the server, streams evaluation requests, and collects the results in a single command-line call.
+
+**Purpose:**
+- Automates end-to-end evaluation on SWE-Bench parquet datasets
+- Spawns `start_server.py` as a background subprocess and waits until it is ready
+- Sends instances to the server with adjustable concurrency and sampling parameters
+- Supports round-robin load balancing across multiple LLM endpoints
+- Persists results to a newline-delimited JSON (`.jsonl`) file
+- Provides graceful shutdown and error handling for interrupted runs
+
+**Key Features:**
+- Asynchronous HTTP client built on `aiohttp` with semaphore-controlled concurrency
+- Simple progress logging every 50 completed instances
+- Flexible sampling parameter overrides via JSON string
+- Optional sub-sampling of the dataset for quick testing
+- Automatic cleanup of server process on completion or error
+
+**Usage:**
+```bash
+python run_swe.py [OPTIONS]
+```
+
+**Optional Arguments:**
+- `--dataset-path`: Path to a SWE-Bench parquet file (default shown in script)
+- `--output`: Path to save evaluation results (`.jsonl`) (default: `eval_results.jsonl`)
+- `--llm-addresses`: One or more LLM HTTP endpoint base URLs (default: `http://127.0.0.1:8000/v1`)
+- `--host`: Host where the OpenHands async server will listen (default: `localhost`)
+- `--port`: Port for the async server (default: `8006`)
+- `--concurrency`: Maximum concurrent evaluation requests (default: `32`)
+- `--num-instances`: Limit number of instances to evaluate (useful for debugging)
+- `--sampling-params`: JSON string merged into default sampling parameters
+
+**Output Format:**
+Each line of the output file is a JSON object mirroring the response schema documented in `start_server.py`, including fields such as `instance_id`, `trajectory_id`, and benchmark-specific keys (e.g., `resolved`, `critical_error`).
+
+**Example:**
+```bash
+python run_swe.py \
+  --dataset-path /path/to/train.parquet \
+  --output swe_results.jsonl \
+  --llm-addresses http://10.0.0.2:8000/v1 http://10.0.0.3:8000/v1 \
+  --concurrency 64 \
+  --sampling-params '{"temperature": 0.3, "top_p": 0.95}'
+```
