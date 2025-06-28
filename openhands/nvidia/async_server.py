@@ -62,12 +62,17 @@ class OpenHandsServer:
         self.weighted_addresses = [[0, address] for address in llm_server_addresses]
         heapq.heapify(self.weighted_addresses)
 
+        # THREAD SAFETY: Add locks to protect shared data structures
+        self._state_lock = threading.RLock()  # Reentrant lock for active job sets
+        self._job_details_lock = threading.RLock()  # Separate lock for job details dict
+
     def get_unique_id(self, instance, max_retries=10):
         for _ in range(max_retries):
             uid = str(uuid.uuid4())
             uid = f'{instance.instance_id}_{instance.trajectory_id}_{uid}'
-            if uid not in self._job_details:
-                return uid
+            with self._job_details_lock:
+                if uid not in self._job_details:
+                    return uid
         raise ValueError('Failed to get unique id')
 
     def add_llm_server_address(self, llm_server_address: str):
@@ -137,7 +142,8 @@ class OpenHandsServer:
         job_details.llm_config = llm_config
         job_details.start_time = time.time()
         job_details.event = threading.Event()
-        self._job_details[job_id] = job_details
+        with self._job_details_lock:
+            self._job_details[job_id] = job_details
         print(f'Job {job_id} added to job details')
 
         # Add job to init queue
@@ -162,7 +168,8 @@ class OpenHandsServer:
         if job_details.runtime:
             job_details.runtime.close()
         # Delete job details
-        del self._job_details[job_id]
+        with self._job_details_lock:
+            del self._job_details[job_id]
         return result
 
     async def _init_worker(self, wid):
@@ -178,7 +185,9 @@ class OpenHandsServer:
 
             print(f'[init-worker-{wid}] Got job {job_id}')
             job_details = self._job_details[job_id]
-            self._active_init_jobs.add(job_id)
+            # Thread-safe active jobs tracking
+            with self._state_lock:
+                self._active_init_jobs.add(job_id)
             dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
             _init_func = get_registered_functions('init', dataset_type)
             try:
@@ -204,7 +213,11 @@ class OpenHandsServer:
                 if job_details.event is not None:
                     job_details.event.set()
             finally:
-                self._active_init_jobs.remove(job_id)
+                # Thread-safe cleanup
+                with self._state_lock:
+                    self._active_init_jobs.discard(
+                        job_id
+                    )  # discard won't raise KeyError
                 self.init_queue.task_done()
 
     async def _run_worker(self, wid):
@@ -221,7 +234,11 @@ class OpenHandsServer:
             job_details = self._job_details[job_id]
             print(f'[run-worker-{wid}] Got job {job_id}')
             job_details.start_run_time = time.time()
-            self._active_run_jobs.add(job_id)
+
+            # Thread-safe active jobs tracking
+            with self._state_lock:
+                self._active_run_jobs.add(job_id)
+
             dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
             _run_func = get_registered_functions('run', dataset_type)
             try:
@@ -257,7 +274,9 @@ class OpenHandsServer:
                 if job_details.event is not None:
                     job_details.event.set()
             finally:
-                self._active_run_jobs.remove(job_id)
+                # Thread-safe cleanup
+                with self._state_lock:
+                    self._active_run_jobs.discard(job_id)
                 self.run_queue.task_done()
 
     async def _eval_worker(self, wid):
@@ -275,7 +294,11 @@ class OpenHandsServer:
             print(f'[eval-worker-{wid}] Got job {job_id}')
             job_details = self._job_details[job_id]
             job_details.start_eval_time = time.time()
-            self._active_eval_jobs.add(job_id)
+
+            # Thread-safe active jobs tracking
+            with self._state_lock:
+                self._active_eval_jobs.add(job_id)
+
             dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
             _eval_func = get_registered_functions('eval', dataset_type)
             try:
@@ -303,7 +326,9 @@ class OpenHandsServer:
                 if job_details.event is not None:
                     job_details.event.set()
             finally:
-                self._active_eval_jobs.remove(job_id)
+                # Thread-safe cleanup
+                with self._state_lock:
+                    self._active_eval_jobs.discard(job_id)
                 self.evaluate_queue.task_done()
 
     def _run_worker_in_thread(self, worker_id, is_init_worker):
@@ -329,21 +354,21 @@ class OpenHandsServer:
         if not self._server_running:
             return
         print('Stopping events')
-        # Signal all active jobs to complete
-        for job_id in list(self._active_init_jobs):
-            job = self._job_details.get(job_id)
-            if job is not None and job.event is not None:
-                job.event.set()
 
-        for job_id in list(self._active_run_jobs):
-            job = self._job_details.get(job_id)
-            if job is not None and job.event is not None:
-                job.event.set()
+        # Thread-safe iteration and event setting
+        with self._state_lock:
+            active_jobs = (
+                list(self._active_init_jobs)
+                + list(self._active_run_jobs)
+                + list(self._active_eval_jobs)
+            )
 
-        for job_id in list(self._active_eval_jobs):
-            job = self._job_details.get(job_id)
-            if job is not None and job.event is not None:
-                job.event.set()
+        # Signal all active jobs to complete (outside the lock to avoid deadlock)
+        for job_id in active_jobs:
+            with self._job_details_lock:
+                job = self._job_details.get(job_id)
+                if job is not None and job.event is not None:
+                    job.event.set()
 
         print('Stopping queues')
         # Add sentinel values to queues to unblock workers
@@ -371,11 +396,15 @@ class OpenHandsServer:
             self._executor.shutdown(wait=True, cancel_futures=True)
 
         print('Clearing active jobs')
-        # Clear all state
-        self._active_init_jobs.clear()
-        self._active_run_jobs.clear()
-        self._active_eval_jobs.clear()
-        self._job_details.clear()
+        # Thread-safe cleanup
+        with self._state_lock:
+            self._active_init_jobs.clear()
+            self._active_run_jobs.clear()
+            self._active_eval_jobs.clear()
+
+        with self._job_details_lock:
+            self._job_details.clear()
+
         self._init_workers.clear()
         self._run_workers.clear()
         self._eval_workers.clear()
@@ -393,9 +422,12 @@ class OpenHandsServer:
         run_queue_count = self.run_queue.qsize()
         eval_queue_count = self.evaluate_queue.qsize()
 
-        active_init_count = len(self._active_init_jobs)
-        active_run_count = len(self._active_run_jobs)
-        active_eval_count = len(self._active_eval_jobs)
+        # Thread-safe status reading
+        with self._state_lock:
+            active_init_count = len(self._active_init_jobs)
+            active_run_count = len(self._active_run_jobs)
+            active_eval_count = len(self._active_eval_jobs)
+
         return {
             'init_queue': init_queue_count,
             'run_queue': run_queue_count,
