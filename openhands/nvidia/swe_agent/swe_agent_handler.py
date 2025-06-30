@@ -32,7 +32,7 @@ class SweAgentHandler(AgentHandler):
 
     async def init(
         self,
-        instance: pd.Series,
+        instance: dict,
         llm_config: LLMConfig | None = None,
         sid: str | None = None,
         max_iterations: int = 1
@@ -50,7 +50,7 @@ class SweAgentHandler(AgentHandler):
         runtime: Runtime,
         metadata: EvalMetadata,
         config: OpenHandsConfig,
-        instance: pd.Series
+        instance: dict
     ) -> dict[str, object]:
         """Run the SWE Agent with runtime and instance using utils functions."""
         return await run_agent(

@@ -54,7 +54,6 @@ from evaluation.benchmarks.swe_bench.eval_infer import (  # type: ignore
 )
 from evaluation.utils.shared import EvalMetadata  # type: ignore
 from openhands.core.config import LLMConfig
-import pandas as pd
 
 try:
     from swegym.harness.grading import get_eval_report  # type: ignore
@@ -94,7 +93,7 @@ def is_last_action_finish(state: State) -> bool:
     return False
 
 def get_config(
-    instance: pd.Series,
+    instance: dict,
     metadata: EvalMetadata,
 ) -> OpenHandsConfig:
     # We use a different instance image for the each instance of swe-bench eval
@@ -164,7 +163,7 @@ def get_config(
     return config
 
 async def initialize_agents(
-        instance:pd.Series,
+        instance: dict,
         llm_config: LLMConfig | None = None,
         sid:str | None = None,
         eval_output_dir:str = "/root",
@@ -225,7 +224,7 @@ async def run_agent(
         runtime:Runtime,
         metadata:EvalMetadata,
         config:OpenHandsConfig,
-        instance:pd.Series
+        instance:dict,
     ) -> dict[str, object]:
     message_action = get_instruction(instance, metadata)
     try:
@@ -247,7 +246,7 @@ async def run_agent(
         return_val = complete_runtime(runtime, instance)
         git_patch = return_val['git_patch']
         logger.info(
-            f'Got git diff for instance {instance.instance_id}:\n--------\n{git_patch}\n--------'
+            f'Got git diff for instance {instance['instance_id']}:\n--------\n{git_patch}\n--------'
         )
 
     except Exception as e:
@@ -325,7 +324,7 @@ async def run(instance):
     return results
 
 
-def _apply_patch_and_evaluate(runtime, git_patch: str, instance: pd.Series):
+def _apply_patch_and_evaluate(runtime, git_patch: str, instance: dict):
 
     from openhands.events.action import CmdRunAction
     from openhands.events.observation import CmdOutputObservation
@@ -334,7 +333,7 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: pd.Series):
     instance_id: str = instance["instance_id"]
 
     try:
-        test_spec = make_test_spec(instance.to_dict())
+        test_spec = make_test_spec(instance)
     except Exception:
         from swebench.harness.utils import load_swebench_dataset
 
@@ -452,7 +451,7 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: pd.Series):
 
     return test_result
 
-async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str | None = None, allow_skip=True):
+async def evaluate_agent(git_patch: str | None, instance: dict, sid: str | None = None, allow_skip=True):
     # skip evaluation if git_patch is None or empty
     if allow_skip:
         if git_patch is None or len(git_patch) == 0:
@@ -494,8 +493,8 @@ async def evaluate_agent(git_patch: str | None, instance: pd.Series, sid: str | 
 
 def initialize_exception(job_details: JobDetails, e: Exception):
     tb = traceback.format_exc()
-    instance_id = job_details.instance.instance_id if job_details.instance is not None else None
-    trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
+    instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
+    trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
     return {
         'instance_id': instance_id,
         'trajectory_id': trajectory_id,
@@ -511,8 +510,8 @@ def initialize_exception(job_details: JobDetails, e: Exception):
 
 def run_exception(job_details: JobDetails, e: Exception):
     tb = traceback.format_exc()
-    instance_id = job_details.instance.instance_id if job_details.instance is not None else None
-    trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
+    instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
+    trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
     return {
         'instance_id': instance_id,
         'trajectory_id': trajectory_id,
@@ -528,8 +527,8 @@ def run_exception(job_details: JobDetails, e: Exception):
 
 def eval_exception(job_details: JobDetails, e: Exception):
     tb = traceback.format_exc()
-    instance_id = job_details.instance.instance_id if job_details.instance is not None else None
-    trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
+    instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
+    trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
     git_patch = job_details.run_results.get('git_patch', None) if job_details.run_results is not None else None
     success = job_details.run_results.get('success', False) if job_details.run_results is not None else False
     finish = job_details.run_results.get('finish', False) if job_details.run_results is not None else False
@@ -550,8 +549,8 @@ def eval_exception(job_details: JobDetails, e: Exception):
 def final_result(job_details: JobDetails):
     if job_details.results is None:
         if job_details.run_results is None:
-            instance_id = job_details.instance.instance_id if job_details.instance is not None else None
-            trajectory_id = job_details.instance.trajectory_id if job_details.instance is not None else None
+            instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
+            trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
             result = {
                 'instance_id': instance_id,
                 'trajectory_id': trajectory_id,

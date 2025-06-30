@@ -3,7 +3,6 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 
-import pandas as pd
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -189,7 +188,7 @@ async def process(request: ProcessRequest):
 
     # Convert instance dict to pandas Series
     try:
-        instance = pd.Series(request.instance)
+        instance = request.instance
     except Exception as e:
         raise HTTPException(status_code=400, detail=f'Invalid instance data: {str(e)}')
 

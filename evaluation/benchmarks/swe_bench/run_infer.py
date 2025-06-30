@@ -71,16 +71,16 @@ AGENT_CLS_TO_FAKE_USER_RESPONSE_FN = {
 }
 
 
-def _get_swebench_workspace_dir_name(instance: pd.Series) -> str:
-    return f'{instance.repo}__{instance.version}'.replace('/', '__')
+def _get_swebench_workspace_dir_name(instance: pd.Series | dict) -> str:
+    return f'{instance['repo']}__{instance['version']}'.replace('/', '__')
 
 
-def get_instruction(instance: pd.Series, metadata: EvalMetadata) -> MessageAction:
+def get_instruction(instance: pd.Series | dict, metadata: EvalMetadata) -> MessageAction:
     workspace_dir_name = _get_swebench_workspace_dir_name(instance)
     mode = metadata.details['mode'] if metadata.details else 'default'  # type: ignore
     if mode.startswith('swt'):
         test_instructions = (
-            f'The following command can be used to run the tests: `{list(MAP_REPO_TO_TEST_FRAMEWORK_VERBOSE[instance.repo].values())[0]}`. Make sure they fail in the expected way.\n'
+            f'The following command can be used to run the tests: `{list(MAP_REPO_TO_TEST_FRAMEWORK_VERBOSE[instance['repo']].values())[0]}`. Make sure they fail in the expected way.\n'
             if mode.endswith('ci')
             else ''
         )
@@ -91,7 +91,7 @@ def get_instruction(instance: pd.Series, metadata: EvalMetadata) -> MessageActio
 I've uploaded a python code repository in the directory {workspace_dir_name}. Consider the following issue description:
 
 <issue_description>
-{instance.problem_statement}
+{instance['problem_statement']}
 </issue_description>
 
 
@@ -114,7 +114,7 @@ Follow these steps to reproduce the issue:
 I've uploaded a python code repository in the directory {workspace_dir_name}. Consider the following issue description:
 
 <issue_description>
-{instance.problem_statement}
+{instance['problem_statement']}
 </issue_description>
 
 Can you help me implement the necessary changes to the repository so that the requirements specified in the <issue_description> are met?
@@ -219,7 +219,7 @@ def get_instance_docker_image(
 
 
 def get_config(
-    instance: pd.Series,
+    instance: pd.Series | dict,
     metadata: EvalMetadata,
 ) -> OpenHandsConfig:
     # We use a different instance image for the each instance of swe-bench eval
@@ -274,7 +274,7 @@ def get_config(
 
 def initialize_runtime(
     runtime: Runtime,
-    instance: pd.Series,  # this argument is not required
+    instance: pd.Series | dict,  # this argument is not required
     metadata: EvalMetadata,
 ):
     """Initialize the runtime for the agent.
@@ -437,7 +437,7 @@ def initialize_runtime(
 
 def complete_runtime(
     runtime: Runtime,
-    instance: pd.Series,  # this argument is not required, but it is used to get the workspace_dir_name
+    instance: pd.Series | dict,  # this argument is not required, but it is used to get the workspace_dir_name
 ) -> dict[str, Any]:
     """Complete the runtime for the agent.
 
@@ -605,7 +605,7 @@ def complete_runtime(
 
 
 def process_instance(
-    instance: pd.Series,
+    instance: pd.Series | dict,
     metadata: EvalMetadata,
     reset_logger: bool = True,
     runtime_failure_count: int = 0,
@@ -615,9 +615,9 @@ def process_instance(
     # Setup the logger properly, so you can run multi-processing to parallelize the evaluation
     if reset_logger:
         log_dir = os.path.join(metadata.eval_output_dir, 'infer_logs')
-        reset_logger_for_multiprocessing(logger, instance.instance_id, log_dir)
+        reset_logger_for_multiprocessing(logger, instance['instance_id'], log_dir)
     else:
-        logger.info(f'Starting evaluation for instance {instance.instance_id}.')
+        logger.info(f'Starting evaluation for instance {instance['instance_id']}.')
 
     # Increase resource_factor with increasing attempt_id
     if runtime_failure_count > 0:
@@ -626,7 +626,7 @@ def process_instance(
             8,
         )
         logger.warning(
-            f'This is the {runtime_failure_count + 1}th attempt for instance {instance.instance_id}, setting resource factor to {config.sandbox.remote_runtime_resource_factor}'
+            f'This is the {runtime_failure_count + 1}th attempt for instance {instance['instance_id']}, setting resource factor to {config.sandbox.remote_runtime_resource_factor}'
         )
 
     metadata = copy.deepcopy(metadata)
@@ -664,7 +664,7 @@ def process_instance(
         return_val = complete_runtime(runtime, instance)
         git_patch = return_val['git_patch']
         logger.info(
-            f'Got git diff for instance {instance.instance_id}:\n--------\n{git_patch}\n--------'
+            f'Got git diff for instance {instance['instance_id']}:\n--------\n{git_patch}\n--------'
         )
     finally:
         runtime.close()
@@ -693,9 +693,9 @@ def process_instance(
             '\n\n<image_urls>' + '\n'.join(message_action.image_urls) + '</image_urls>'
         )
     output = EvalOutput(
-        instance_id=instance.instance_id,
+        instance_id=instance['instance_id'],
         instruction=instruction,
-        instance=instance.to_dict(),  # SWE Bench specific
+        instance=instance,  # SWE Bench specific
         test_result=test_result,
         metadata=metadata,
         history=histories,

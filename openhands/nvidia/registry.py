@@ -3,8 +3,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable
 
-import pandas as pd
-
 from evaluation.utils.shared import EvalMetadata  # type: ignore
 from openhands.core.config import OpenHandsConfig
 from openhands.core.config.llm_config import LLMConfig
@@ -14,7 +12,7 @@ from openhands.runtime.base import Runtime
 @dataclass
 class JobDetails:
     job_id: str | None = None
-    instance: pd.Series | None = None
+    instance: dict | None = None
     max_iterations: int = 2
     llm_config: LLMConfig | None = None
     runtime: Runtime | None = None
@@ -42,7 +40,7 @@ class AgentHandler(ABC):
     @abstractmethod
     async def init(
         self,
-        instance: pd.Series,
+        instance: dict,
         llm_config: LLMConfig | None = None,
         sid: str | None = None,
         max_iterations: int = 1,
@@ -56,7 +54,7 @@ class AgentHandler(ABC):
         runtime: Runtime,
         metadata: EvalMetadata,
         config: OpenHandsConfig,
-        instance: pd.Series,
+        instance: dict,
     ) -> dict[str, object]:
         """Run the agent with runtime and instance."""
         pass
