@@ -76,6 +76,7 @@ if __name__ == '__main__':
             f'Last message is not assistant but of role {result["messages"][-1]["role"]}.'
         )
         result['messages'] = len(result['messages'])
+        result['tools'] = len(result['tools'])
     print(results)
     print(f'Time taken: {time.time() - start}')
     print('All tests passed!')

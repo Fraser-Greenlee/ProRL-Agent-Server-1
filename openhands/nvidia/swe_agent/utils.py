@@ -39,6 +39,7 @@ from openhands.events.action import (
 )
 
 from openhands.nvidia.registry import JobDetails
+from openhands.nvidia.utils import process_messages_from_agent_state
 
 DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'xingyaoww/')
 logger.info(f'Using docker image prefix: {DOCKER_IMAGE_PREFIX}')
@@ -255,65 +256,18 @@ async def run_agent(
 
     # get messages from agent history
     try:
-        initial_user_message = agent._get_initial_user_message(state.history) # type: ignore
-        raw_messages = agent._get_messages(state.history, initial_user_message) # type: ignore
-        messages = agent.llm.format_messages_for_llm(raw_messages)
-        if messages[-1]['role'] != 'assistant':
-            messages = messages[:-1]
-
-        from openhands.llm.llm_utils import check_tools
-        tools = check_tools(agent.tools, agent.llm.config)
-
-        new_messages = []
-        for message in messages:
-            new_message = {'role': message['role']}
-            if type(message['content']) == str:
-                new_message['content'] = message['content']
-            else:
-                new_message['content'] = message['content'][0]['text']
-            if 'tool_calls' in message:
-                new_message['tool_calls'] = [tool_call['function'] for tool_call in message['tool_calls']]
-
-            # Handle the case where the agent did not end properly reasoning properly
-            # This largely formats the message to be consistent with the expected output from Qwen3 models.
-            if message['role'] == 'assistant' and '<think>' in new_message['content'] and '</think>' not in new_message['content']:
-                if 'tool_calls' in new_message:
-                    tool_calls_message = ""
-                    for tool_call in new_message['tool_calls']:
-                        current_tool_call = []
-                        current_tool_call.append('\n<tool_call>\n{"name": "' + tool_call['name'] + '", "arguments": ')
-                        if isinstance(tool_call['arguments'], str):
-                            current_tool_call.append(tool_call['arguments'])
-                        else:
-                            current_tool_call.append(json.dumps(tool_call['arguments']))
-                        current_tool_call.append("}\n</tool_call>")
-                        tool_calls_message += ''.join(current_tool_call)
-                    new_message['content'] = f"{new_message['content']}\n{tool_calls_message}</think>"
-                    new_message.pop('tool_calls')
-                new_messages.append(new_message)
-                return {
-                    'git_patch': '',
-                    'success': False,
-                    'error': 'LLM did not end properly reasoning properly',
-                    'finish': False,
-                    'messages': new_messages,
-                    'tools': tools
-                }
-
-            new_messages.append(new_message)
+        run_results = process_messages_from_agent_state(agent, state) # type: ignore
     except Exception as e:
         logger.error(f"Error while running, failed to retrieve agent messages: {e}")
         raise Exception(f"Failed to retrieve agent messages: {str(e)}")
 
-    run_results = {
-        "git_patch": git_patch,
+    return {
+        "git_patch": git_patch if run_results['end_properly'] else "",
         'success': not bool(state.last_error if state else True),
         'error': state.last_error if state and state.last_error else None,
         'finish': is_last_action_finish(state),
-        'messages': new_messages,
-        'tools': tools
+        **run_results,
     }
-    return run_results
 
 async def run(instance):
     #agent = initialize_agents(instance)

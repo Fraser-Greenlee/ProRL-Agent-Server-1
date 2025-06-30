@@ -1,4 +1,5 @@
 import asyncio
+import json
 import queue
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -6,6 +7,9 @@ from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel
+
+from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
+from openhands.controller.state.state import State
 
 
 def clear_queue(q: queue.Queue):
@@ -125,3 +129,87 @@ async def process_with_timeout(
         # Clean up on any other error
         await cleanup_timed_out_job(server, job_id)
         raise
+
+
+def process_messages_from_agent_state(
+    agent: CodeActAgent, state: State
+) -> dict[str, Any]:
+    """
+    Process the messages from the agent state. We reuse logic from CodeActAgent to process state.history into litellm messages.
+    We then format the messages for the LLM back to huggingface format (recognized by hf tokenizer).
+    Currently Qwen3 models expect the assistant message to have a <think> tag and a </think> tag, but sometimes the agent does not end properly reasoning properly.
+    We then format the message to be consistent with the expected output from Qwen3 models.
+
+    Example of Qwen3 model that did not end properly reasoning properly:
+    <think>
+    <tool_call>
+    {tool_call}
+    </tool_call>
+    ...
+
+    We obtains the following message: {'role': 'assistant', 'content': '<think>\n', 'tool_calls': [tool_call]}
+
+    The above breaks the hf tokenizer because it does not recognize the <think> tag.
+    We thus compress all tool calls into content and append a </think> tag: {'role': 'assistant', 'content': '<think>\n{tool_call}\n{tool_call}\n</tool_call>\n</think>'}
+    """
+    initial_user_message = agent._get_initial_user_message(state.history)
+    raw_messages = agent._get_messages(state.history, initial_user_message)
+    messages = agent.llm.format_messages_for_llm(raw_messages)
+    if messages[-1]['role'] != 'assistant':
+        messages = messages[:-1]
+
+    from openhands.llm.llm_utils import check_tools
+
+    tools = check_tools(agent.tools, agent.llm.config)
+
+    new_messages = []
+    for message in messages:
+        new_message = {'role': message['role']}
+        if isinstance(message['content'], str):
+            new_message['content'] = message['content']
+        else:
+            new_message['content'] = message['content'][0]['text']
+        if 'tool_calls' in message:
+            new_message['tool_calls'] = [
+                tool_call['function'] for tool_call in message['tool_calls']
+            ]
+
+        # Handle the case where the agent did not end properly reasoning properly
+        # This largely formats the message to be consistent with the expected output from Qwen3 models.
+        if (
+            message['role'] == 'assistant'
+            and '<think>' in new_message['content']
+            and '</think>' not in new_message['content']
+        ):
+            if 'tool_calls' in new_message:
+                tool_calls_message = ''
+                for tool_call in new_message['tool_calls']:
+                    current_tool_call = []
+                    current_tool_call.append(
+                        '\n<tool_call>\n{"name": "'
+                        + tool_call['name']
+                        + '", "arguments": '
+                    )
+                    if isinstance(tool_call['arguments'], str):
+                        current_tool_call.append(tool_call['arguments'])
+                    else:
+                        current_tool_call.append(json.dumps(tool_call['arguments']))
+                    current_tool_call.append('}\n</tool_call>')
+                    tool_calls_message += ''.join(current_tool_call)
+                new_message['content'] = (
+                    f'{new_message["content"]}\n{tool_calls_message}</think>'
+                )
+                new_message.pop('tool_calls')
+            new_messages.append(new_message)
+            return {
+                'messages': new_messages,
+                'tools': tools,
+                'end_properly': False,
+            }
+
+        new_messages.append(new_message)
+    return {
+        'messages': new_messages,
+        'tools': tools,
+        'end_properly': True,
+    }
