@@ -571,9 +571,10 @@ class TestExceptionHandlers:
     def test_initialize_exception(self):
         """Test initialize exception handler"""
         job_details = Mock()
-        job_details.instance = Mock()
-        job_details.instance.instance_id = 'test_id'
-        job_details.instance.trajectory_id = 'test_trajectory'
+        job_details.instance = {
+            'instance_id': 'test_id',
+            'trajectory_id': 'test_trajectory',
+        }
 
         exception = Exception('Test error')
         result = initialize_exception(job_details, exception)
@@ -587,9 +588,10 @@ class TestExceptionHandlers:
     def test_run_exception(self):
         """Test run exception handler"""
         job_details = Mock()
-        job_details.instance = Mock()
-        job_details.instance.instance_id = 'test_id'
-        job_details.instance.trajectory_id = 'test_trajectory'
+        job_details.instance = {
+            'instance_id': 'test_id',
+            'trajectory_id': 'test_trajectory',
+        }
 
         exception = Exception('Run error')
         result = run_exception(job_details, exception)
@@ -601,9 +603,10 @@ class TestExceptionHandlers:
     def test_eval_exception(self):
         """Test eval exception handler"""
         job_details = Mock()
-        job_details.instance = Mock()
-        job_details.instance.instance_id = 'test_id'
-        job_details.instance.trajectory_id = 'test_trajectory'
+        job_details.instance = {
+            'instance_id': 'test_id',
+            'trajectory_id': 'test_trajectory',
+        }
         job_details.run_results = {
             'git_patch': 'test patch',
             'success': True,
