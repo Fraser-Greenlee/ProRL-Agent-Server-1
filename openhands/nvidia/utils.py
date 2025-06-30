@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
 from openhands.controller.state.state import State
+from openhands.nvidia.logger import nvidia_logger as logger
 
 
 def clear_queue(q: queue.Queue):
@@ -30,9 +31,9 @@ def kill_all_singularity_jobs():
         for pid in pids:
             if pid.strip():
                 subprocess.run(['kill', '-9', pid])
-                print(f'Killed Singularity process with PID: {pid}')
+                logger.info(f'Killed Singularity process with PID: {pid}')
     except subprocess.CalledProcessError:
-        print('No Singularity processes found.')
+        logger.info('No Singularity processes found.')
 
     try:
         # List all openhands processes
@@ -43,9 +44,9 @@ def kill_all_singularity_jobs():
         for pid in pids:
             if pid.strip():
                 subprocess.run(['kill', '-9', pid])
-                print(f'Killed Openhands process with PID: {pid}')
+                logger.info(f'Killed Openhands process with PID: {pid}')
     except subprocess.CalledProcessError:
-        print('No Openhands processes found.')
+        logger.info('No Openhands processes found.')
 
 
 # Custom exceptions

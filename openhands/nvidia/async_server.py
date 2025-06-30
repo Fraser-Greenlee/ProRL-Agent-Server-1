@@ -7,6 +7,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from openhands.core.config.llm_config import LLMConfig
+from openhands.nvidia.logger import nvidia_logger as logger
 from openhands.nvidia.registry import (
     FunctionNotRegisteredError,
     JobDetails,
@@ -70,7 +71,7 @@ class OpenHandsServer:
     def get_unique_id(self, instance, max_retries=10):
         for _ in range(max_retries):
             uid = str(uuid.uuid4())
-            uid = f'{instance.instance_id}_{instance.trajectory_id}_{uid}'
+            uid = f'{instance["instance_id"]}_{instance["trajectory_id"]}_{uid}'
             with self._job_details_lock:
                 if uid not in self._job_details:
                     return uid
@@ -81,13 +82,13 @@ class OpenHandsServer:
             # Check if address already exists
             for weight, addr in self.weighted_addresses:
                 if addr == llm_server_address:
-                    print(
+                    logger.warning(
                         f'Warning: LLM server address {llm_server_address} already exists'
                     )
                     return
 
             heapq.heappush(self.weighted_addresses, [0, llm_server_address])
-            print(f'Added LLM server address: {llm_server_address}')
+            logger.info(f'Added LLM server address: {llm_server_address}')
 
     def create_llm_config(self, sampling_params):
         with self._address_lock:
@@ -157,11 +158,11 @@ class OpenHandsServer:
         job_details.event = threading.Event()
         with self._job_details_lock:
             self._job_details[job_id] = job_details
-        print(f'Job {job_id} added to job details')
+        logger.info(f'Job {job_id} added to job details')
 
         # Add job to init queue
         self.init_queue.put(job_id)
-        print(f'Job {job_id} added to init queue')
+        logger.info(f'Job {job_id} added to init queue')
 
         # Wait for job to be finished
         job_details.event.wait()
@@ -187,21 +188,23 @@ class OpenHandsServer:
 
     async def _init_worker(self, wid):
         while True:
-            print(f'[init-worker-{wid}] Waiting for job')
+            logger.info(f'[init-worker-{wid}] Waiting for job')
             job_id = await asyncio.to_thread(self.init_queue.get)
 
             # Check for stop sentinel
             if job_id == '__STOP__':
-                print(f'[init-worker-{wid}] Received stop signal, exiting')
+                logger.info(f'[init-worker-{wid}] Received stop signal, exiting')
                 self.init_queue.task_done()
                 break
 
-            print(f'[init-worker-{wid}] Got job {job_id}')
+            logger.info(f'[init-worker-{wid}] Got job {job_id}')
             # Thread-safe job details retrieval
             with self._job_details_lock:
                 job_details = self._job_details.get(job_id)
                 if job_details is None:
-                    print(f'[init-worker-{wid}] Job {job_id} not found, skipping')
+                    logger.warning(
+                        f'[init-worker-{wid}] Job {job_id} not found, skipping'
+                    )
                     self.init_queue.task_done()
                     continue
 
@@ -242,12 +245,12 @@ class OpenHandsServer:
 
     async def _run_worker(self, wid):
         while True:
-            print(f'[run-worker-{wid}] Waiting for job')
+            logger.info(f'[run-worker-{wid}] Waiting for job')
             job_id = await asyncio.to_thread(self.run_queue.get)
 
             # Check for stop sentinel
             if job_id == '__STOP__':
-                print(f'[run-worker-{wid}] Received stop signal, exiting')
+                logger.info(f'[run-worker-{wid}] Received stop signal, exiting')
                 self.run_queue.task_done()
                 break
 
@@ -255,11 +258,13 @@ class OpenHandsServer:
             with self._job_details_lock:
                 job_details = self._job_details.get(job_id)
                 if job_details is None:
-                    print(f'[run-worker-{wid}] Job {job_id} not found, skipping')
+                    logger.warning(
+                        f'[run-worker-{wid}] Job {job_id} not found, skipping'
+                    )
                     self.run_queue.task_done()
                     continue
 
-            print(f'[run-worker-{wid}] Got job {job_id}')
+            logger.info(f'[run-worker-{wid}] Got job {job_id}')
             job_details.start_run_time = time.time()
 
             # Thread-safe active jobs tracking
@@ -309,21 +314,23 @@ class OpenHandsServer:
     async def _eval_worker(self, wid):
         """Worker that evaluates the generated patch and produces a report."""
         while True:
-            print(f'[eval-worker-{wid}] Waiting for job')
+            logger.info(f'[eval-worker-{wid}] Waiting for job')
             job_id = await asyncio.to_thread(self.evaluate_queue.get)
 
             # Check for stop sentinel
             if job_id == '__STOP__':
-                print(f'[eval-worker-{wid}] Received stop signal, exiting')
+                logger.info(f'[eval-worker-{wid}] Received stop signal, exiting')
                 self.evaluate_queue.task_done()
                 break
 
-            print(f'[eval-worker-{wid}] Got job {job_id}')
+            logger.info(f'[eval-worker-{wid}] Got job {job_id}')
             # Thread-safe job details retrieval
             with self._job_details_lock:
                 job_details = self._job_details.get(job_id)
                 if job_details is None:
-                    print(f'[eval-worker-{wid}] Job {job_id} not found, skipping')
+                    logger.warning(
+                        f'[eval-worker-{wid}] Job {job_id} not found, skipping'
+                    )
                     self.evaluate_queue.task_done()
                     continue
 
@@ -387,7 +394,7 @@ class OpenHandsServer:
         """Stops the server by shutting down all workers and clearing all queues and jobs."""
         if not self._server_running:
             return
-        print('Stopping events')
+        logger.info('Stopping events')
 
         # Thread-safe iteration and event setting
         with self._state_lock:
@@ -404,32 +411,32 @@ class OpenHandsServer:
                 if job is not None and job.event is not None:
                     job.event.set()
 
-        print('Stopping queues')
+        logger.info('Stopping queues')
         # Add sentinel values to queues to unblock workers
         for _ in range(self.max_init_workers):
             try:
                 self.init_queue.put_nowait('__STOP__')
             except Exception as e:
-                print(f'Warning: Failed to put stop signal in init queue: {e}')
+                logger.warning(f'Warning: Failed to put stop signal in init queue: {e}')
 
         for _ in range(self.max_run_workers):
             try:
                 self.run_queue.put_nowait('__STOP__')
             except Exception as e:
-                print(f'Warning: Failed to put stop signal in run queue: {e}')
+                logger.warning(f'Warning: Failed to put stop signal in run queue: {e}')
 
         for _ in range(self.max_eval_workers):
             try:
                 self.evaluate_queue.put_nowait('__STOP__')
             except Exception as e:
-                print(f'Warning: Failed to put stop signal in eval queue: {e}')
+                logger.warning(f'Warning: Failed to put stop signal in eval queue: {e}')
 
-        print('Shutting down executor')
+        logger.info('Shutting down executor')
         # Shutdown the executor with a timeout - this is the main fix
         if hasattr(self, '_executor') and self._executor:
             self._executor.shutdown(wait=True, cancel_futures=True)
 
-        print('Clearing active jobs')
+        logger.info('Clearing active jobs')
         # Thread-safe cleanup
         with self._state_lock:
             self._active_init_jobs.clear()
@@ -448,7 +455,7 @@ class OpenHandsServer:
         clear_queue(self.evaluate_queue)
 
         self._server_running = False
-        print(f'Server status: {self.status()}')
+        logger.info(f'Server status: {self.status()}')
 
     def status(self):
         """Returns the number of jobs currently being processed in both queues and workers."""

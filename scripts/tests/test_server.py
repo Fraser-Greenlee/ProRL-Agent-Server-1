@@ -86,6 +86,7 @@ async def process_request(instance: dict, sampling_params: dict | None = None):
                 result = await response.json()
                 # Don't print full messages
                 result['messages'] = len(result['messages'])
+                result['tools'] = len(result['tools'])
                 print('Process completed successfully:', result)
                 return result
             else:

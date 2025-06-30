@@ -18,6 +18,7 @@ from openhands.nvidia.utils import (
     kill_all_singularity_jobs,
     process_with_timeout,
 )
+from openhands.nvidia.logger import nvidia_logger as logger
 
 app = FastAPI(title='OpenHands Async Server API')
 
@@ -37,15 +38,15 @@ def init_server(
     timeout: float = DEFAULT_TIMEOUT,
     allow_skip_eval: bool = True,
 ):
-    print(
+    logger.info(
         f'Initializing server with max_init_workers={max_init_workers}, max_run_workers={max_run_workers}, timeout={timeout}'
     )
     if allow_skip_eval:
-        print(
+        logger.info(
             'Allowing skipping evaluation if git_patch is None or empty. Please set allow_skip_eval=False for testing.'
         )
     else:
-        print(
+        logger.info(
             'Not allowing skipping evaluation if git_patch is None or empty. Please set allow_skip_eval=True for production.'
         )
     global server, global_timeout, thread_pool
@@ -62,7 +63,7 @@ def init_server(
         thread_pool_count = max_init_workers
     else:
         thread_pool_count = min(max_init_workers, cpu_count - 64)
-    print(f'Using {thread_pool_count} threads for the thread pool')
+    logger.info(f'Using {thread_pool_count} threads for the thread pool')
     thread_pool = ThreadPoolExecutor(max_workers=thread_pool_count)
 
 
@@ -104,16 +105,19 @@ async def start_server():
     kill_all_singularity_jobs()
     global server
     if server is None:
+        logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
             status_code=500, detail='Server is not initialized. This should not happen.'
         )
     if server._server_running:
+        logger.warning('Server is already running. But user requested to start.')
         raise HTTPException(status_code=400, detail='Server is already running')
 
     try:
         server.start()
         return {'status': 'Server started successfully'}
     except Exception as e:
+        logger.error(f'Failed to start server: {str(e)}')
         raise HTTPException(status_code=500, detail=f'Failed to start server: {str(e)}')
 
 
@@ -121,10 +125,12 @@ async def start_server():
 async def stop_server():
     global server
     if server is None:
+        logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
             status_code=500, detail='Server is not initialized. This should not happen.'
         )
     if not server._server_running:
+        logger.warning('Server is not running. But user requested to stop.')
         raise ServerNotRunningError()
     try:
         # Run the stop operation in a thread pool to avoid blocking the event loop
@@ -133,7 +139,7 @@ async def stop_server():
         kill_all_singularity_jobs()
         return {'status': 'Server stopped successfully'}
     except Exception as e:
-        print(f'Failed to stop server: {str(e)}. Force kill all singularity jobs.')
+        logger.warning(f'Failed to stop server: {str(e)}. Force kill all singularity jobs.')
         kill_all_singularity_jobs()
         return {'status': 'Force killed all singularity jobs.'}
 
@@ -142,15 +148,18 @@ async def stop_server():
 async def get_status():
     global server
     if server is None:
+        logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
             status_code=500, detail='Server is not initialized. This should not happen.'
         )
     if not server._server_running:
+        logger.warning('Server is not running. But user requested to get status.')
         raise ServerNotRunningError()
 
     try:
         return server.status()
     except Exception as e:
+        logger.error(f'Server probably not running. Failed to get server status: {str(e)}')
         raise HTTPException(
             status_code=500,
             detail=f'Server probably not running. Failed to get server status: {str(e)}',
@@ -161,6 +170,7 @@ async def get_status():
 async def add_llm_server(request: LLMServerRequest):
     global server
     if server is None:
+        logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
             status_code=500, detail='Server is not initialized. This should not happen.'
         )
@@ -168,6 +178,7 @@ async def add_llm_server(request: LLMServerRequest):
         server.add_llm_server_address(request.address)
         return {'status': f'Added LLM server address: {request.address}'}
     except Exception as e:
+        logger.error(f'Failed to add LLM server: {str(e)}')
         raise HTTPException(
             status_code=500, detail=f'Failed to add LLM server: {str(e)}'
         )
@@ -177,19 +188,23 @@ async def add_llm_server(request: LLMServerRequest):
 async def process(request: ProcessRequest):
     global server
     if server is None:
+        logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
             status_code=500, detail='Server is not initialized. This should not happen.'
         )
     if not server._server_running:
+        logger.warning('Server is not running. But user requested to process.')
         raise ServerNotRunningError()
 
     if len(server.weighted_addresses) == 0:
+        logger.error('No LLM server addresses configured. Please add at least one LLM server address.')
         raise NoLLMServerError()
 
     # Convert instance dict to pandas Series
     try:
         instance = request.instance
     except Exception as e:
+        logger.error(f'Invalid instance data: {str(e)}')
         raise HTTPException(status_code=400, detail=f'Invalid instance data: {str(e)}')
 
     result = await process_with_timeout(

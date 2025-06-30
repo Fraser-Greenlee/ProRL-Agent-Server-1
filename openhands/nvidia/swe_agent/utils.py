@@ -32,7 +32,7 @@ from openhands.core.config import (
 from openhands.core.setup import create_agent
 from openhands.core.main import create_runtime, run_controller
 from openhands.controller.state.state import State
-from openhands.core.logger import openhands_logger as logger
+from openhands.nvidia.logger import nvidia_logger as logger
 from openhands.events.action import (
     Action,
     AgentFinishAction,
@@ -101,7 +101,7 @@ def get_config(
     base_container_image = get_instance_docker_image(
         instance['instance_id']
     )
-    logger.info(
+    logger.debug(
         f'Using instance container image: {base_container_image}. '
         f'Please make sure this image exists. '
         f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
@@ -206,7 +206,7 @@ async def initialize_agents(
     runtime = create_runtime(config, sid=sid)
 
     await runtime.connect()
-    print(f"Runtime connected {runtime.sid}")
+    logger.debug(f"Runtime connected {runtime.sid}")
 
     try:
         initialize_runtime(runtime, instance, metadata)
@@ -246,7 +246,7 @@ async def run_agent(
 
         return_val = complete_runtime(runtime, instance)
         git_patch = return_val['git_patch']
-        logger.info(
+        logger.debug(
             f'Got git diff for instance {instance['instance_id']}:\n--------\n{git_patch}\n--------'
         )
 
@@ -336,7 +336,7 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: dict):
             f"{instance_id}: Unexpected output when applying patch:\n{patch_result}"
         )
 
-    logger.info(f"[{instance_id}] {APPLY_PATCH_PASS}:\n{patch_result}")
+    logger.debug(f"[{instance_id}] {APPLY_PATCH_PASS}:\n{patch_result}")
 
     log_file = "/tmp/eval_output.log"
     action = CmdRunAction(command=f"/tmp/eval.sh > {log_file} 2>&1 & echo $!")
@@ -346,7 +346,7 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: dict):
         raise RuntimeError("Failed to launch evaluation script")
 
     pid = obs.content.split()[-1].strip()
-    logger.info(f"[{instance_id}] Evaluation started (PID={pid})")
+    logger.debug(f"[{instance_id}] Evaluation started (PID={pid})")
 
     start_time = time.time()
     timeout = 20 * 60  # 20 minutes
@@ -361,9 +361,9 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: dict):
             isinstance(check_obs, CmdOutputObservation)
             and check_obs.content.split()[-1].strip() == "1"
         ):
-            logger.info(f"[{instance_id}] Evaluation finished after {elapsed:.0f}s")
+            logger.debug(f"[{instance_id}] Evaluation finished after {elapsed:.0f}s")
             break
-        logger.info(f"[{instance_id}] [{elapsed:.0f}s] Evaluation in progress …")
+        logger.debug(f"[{instance_id}] [{elapsed:.0f}s] Evaluation in progress …")
         time.sleep(30)
 
     cat_action = CmdRunAction(command=f"cat {log_file}")
@@ -389,7 +389,7 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: dict):
         )
 
     report = grading_report[instance_id]
-    logger.info(f"[{instance_id}] Grading report: {report}")
+    logger.debug(f"[{instance_id}] Grading report: {report}")
 
     test_result = {
         "report": {
