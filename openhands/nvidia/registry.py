@@ -26,6 +26,7 @@ class JobDetails:
     start_run_time: float | None = None
     start_eval_time: float | None = None
     end_time: float | None = None
+    timeout_error: bool = False
 
 
 class AgentHandler(ABC):

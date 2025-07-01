@@ -25,8 +25,8 @@ def test_server(
     requests = []
     for i in range(total_jobs):
         cur = instance.copy(deep=True)
-        cur.trajectory_id = i
-        requests.append(cur)
+        cur['trajectory_id'] = i
+        requests.append(cur.to_dict())
 
     llm_server_address = 'http://127.0.0.1:8000/v1'
     sampling_params = {

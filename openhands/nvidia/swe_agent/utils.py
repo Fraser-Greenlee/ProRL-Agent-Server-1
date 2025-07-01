@@ -509,16 +509,18 @@ def final_result(job_details: JobDetails):
                 'instance_id': instance_id,
                 'trajectory_id': trajectory_id,
                 'resolved': job_details.eval_results['resolved'] if job_details.eval_results is not None else False,
-                'critical_error': None,
+                'critical_error': 'timeout' if job_details.timeout_error else None,
             }
         else:
             result = {
                 **job_details.run_results,
                 'resolved': job_details.eval_results['resolved'] if job_details.eval_results is not None else False,
-                'critical_error': None,
+                'critical_error': 'timeout' if job_details.timeout_error else None,
             }
     else:
         result = copy.deepcopy(job_details.results)
+        if job_details.timeout_error:
+            result['critical_error'] = 'timeout'
     if job_details.start_run_time:
         if job_details.start_time is None:
             job_details.start_time = job_details.start_run_time

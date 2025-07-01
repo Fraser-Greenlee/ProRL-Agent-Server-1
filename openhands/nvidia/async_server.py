@@ -14,7 +14,11 @@ from openhands.nvidia.registry import (
     get_registered_functions,
     is_registered_handler,
 )
-from openhands.nvidia.utils import clear_queue
+from openhands.nvidia.utils import (
+    clear_queue,
+    get_singularity_job_pids,
+    kill_all_singularity_jobs,
+)
 
 
 class OpenHandsServer:
@@ -32,7 +36,7 @@ class OpenHandsServer:
         *max_run_workers*, so you only need to specify one number when you want
         these two pools to have the same size.
 
-        allow_skip_eval: if True, skip evaluation if git_patch is None or empty.
+        allow_skip_eval: if True, skip evaluation if run_results (i.e. git_patch) is None or empty.
         Set to False for testing.
         """
         if llm_server_addresses is None:
@@ -54,6 +58,7 @@ class OpenHandsServer:
         self._active_init_jobs: set[str] = set()  # Track jobs being initialized
         self._active_run_jobs: set[str] = set()  # Track jobs being run
         self._active_eval_jobs: set[str] = set()  # Track jobs being evaluated
+        self._exclude_pids: set[str] = set()
 
         self._server_running: bool = False
 
@@ -93,6 +98,10 @@ class OpenHandsServer:
     def clear_llm_server_addresses(self):
         with self._address_lock:
             self.weighted_addresses.clear()
+            logger.info('Cleared LLM server addresses')
+
+    def clear_singularity_jobs(self):
+        kill_all_singularity_jobs(self._exclude_pids)
 
     def create_llm_config(self, sampling_params):
         with self._address_lock:
@@ -110,6 +119,10 @@ class OpenHandsServer:
         if self._server_running:
             raise RuntimeError('Server is already running')
         self._server_running = True
+
+        with self._address_lock:
+            self._exclude_pids = get_singularity_job_pids()
+            logger.info(f'Excluded Singularity job PIDs: {self._exclude_pids}')
 
         self._executor = ThreadPoolExecutor(
             max_workers=self.max_init_workers
@@ -133,6 +146,8 @@ class OpenHandsServer:
         # Submit evaluation workers
         for i in range(self.max_eval_workers):
             self._executor.submit(self._run_eval_worker_in_thread, i)
+
+        self.clear_singularity_jobs()
 
     def process(self, instance, sampling_params, job_id=None):
         if not self._server_running:

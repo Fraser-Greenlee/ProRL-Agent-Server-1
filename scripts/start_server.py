@@ -15,7 +15,6 @@ from openhands.nvidia.utils import (
     NoLLMServerError,
     ProcessRequest,
     ServerNotRunningError,
-    kill_all_singularity_jobs,
     process_with_timeout,
 )
 from openhands.nvidia.logger import nvidia_logger as logger
@@ -102,7 +101,6 @@ async def function_not_registered_handler(request, exc):
 
 @app.post('/start')
 async def start_server():
-    kill_all_singularity_jobs()
     global server
     if server is None:
         logger.error('Server is not initialized. This should not happen.')
@@ -136,11 +134,11 @@ async def stop_server():
         # Run the stop operation in a thread pool to avoid blocking the event loop
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, server.stop)
-        kill_all_singularity_jobs()
+        server.clear_singularity_jobs()
         return {'status': 'Server stopped successfully'}
     except Exception as e:
         logger.warning(f'Failed to stop server: {str(e)}. Force kill all singularity jobs.')
-        kill_all_singularity_jobs()
+        server.clear_singularity_jobs()
         return {'status': 'Force killed all singularity jobs.'}
 
 

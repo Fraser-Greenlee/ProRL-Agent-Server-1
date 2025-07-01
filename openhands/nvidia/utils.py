@@ -21,7 +21,35 @@ def clear_queue(q: queue.Queue):
             break
 
 
-def kill_all_singularity_jobs():
+def get_singularity_job_pids():
+    all_pids = set()
+    try:
+        result = subprocess.run(
+            ['pgrep', '-f', 'openhands'], stdout=subprocess.PIPE, text=True, check=True
+        )
+        pids = result.stdout.strip().split('\n')
+        for pid in pids:
+            if pid.strip():
+                all_pids.add(pid.strip())
+
+        result = subprocess.run(
+            ['pgrep', '-f', 'openhands'],
+            stdout=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        pids = result.stdout.strip().split('\n')
+        for pid in pids:
+            if pid.strip():
+                all_pids.add(pid.strip())
+    except subprocess.CalledProcessError:
+        pass
+    return all_pids
+
+
+def kill_all_singularity_jobs(exclude_pids: set[str] | None = None):
+    if exclude_pids is None:
+        exclude_pids = set()
     try:
         # List all singularity-related processes
         result = subprocess.run(
@@ -29,22 +57,27 @@ def kill_all_singularity_jobs():
         )
         pids = result.stdout.strip().split('\n')
         for pid in pids:
-            if pid.strip():
-                subprocess.run(['kill', '-9', pid])
-                logger.info(f'Killed Singularity process with PID: {pid}')
+            clean_pid = pid.strip()
+            if clean_pid and clean_pid not in exclude_pids:
+                subprocess.run(['kill', '-9', clean_pid])
+                logger.info(f'Killed Singularity process with PID: {clean_pid}')
     except subprocess.CalledProcessError:
         logger.info('No Singularity processes found.')
 
     try:
         # List all openhands processes
         result = subprocess.run(
-            ['pgrep', '-f', 'openhands'], stdout=subprocess.PIPE, text=True, check=True
+            ['pgrep', '-f', 'openhands'],
+            stdout=subprocess.PIPE,
+            text=True,
+            check=True,
         )
         pids = result.stdout.strip().split('\n')
         for pid in pids:
-            if pid.strip():
-                subprocess.run(['kill', '-9', pid])
-                logger.info(f'Killed Openhands process with PID: {pid}')
+            clean_pid = pid.strip()
+            if clean_pid and clean_pid not in exclude_pids:
+                subprocess.run(['kill', '-9', clean_pid])
+                logger.info(f'Killed Openhands process with PID: {clean_pid}')
     except subprocess.CalledProcessError:
         logger.info('No Openhands processes found.')
 
@@ -78,6 +111,9 @@ async def cleanup_timed_out_job(server, job_id: str | None = None):
 
     if job_id in server._job_details:
         job_details = server._job_details[job_id]
+
+        # Set timeout error flag
+        job_details.timeout_error = True
 
         # Set the event to unblock any waiting threads
         if job_details.event is not None:
@@ -124,10 +160,12 @@ async def process_with_timeout(
         return result
     except asyncio.TimeoutError:
         # Clean up the timed-out job
+        logger.error(f'Job {job_id} timed out after {timeout} seconds')
         await cleanup_timed_out_job(server, job_id)
         raise JobTimeoutError(f'Job {job_id} timed out after {timeout} seconds')
-    except Exception:
+    except Exception as e:
         # Clean up on any other error
+        logger.error(f'Job {job_id} failed with error: {str(e)}')
         await cleanup_timed_out_job(server, job_id)
         raise
 
