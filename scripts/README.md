@@ -64,6 +64,12 @@ python start_server.py [OPTIONS]
 - **Output:** `{"status": "Added LLM server address: <address>"}`
 - **Notes:** Must be called to setup LLM addresses before sending evaluation requests
 
+#### `POST /clear_llm_server`
+- **Purpose:** Clear all configured LLM server addresses
+- **Input:** No request body required
+- **Output:** `{"status": "Cleared all LLM server addresses"}`
+- **Notes:** Removes all LLM server addresses from the configuration. Useful for resetting the server configuration.
+
 #### `POST /process`
 - **Purpose:** Process evaluation requests with timeout management
 - **Input Request Format:**
@@ -127,7 +133,7 @@ python start_server.py [OPTIONS]
 #### For RL Training Inference (Recommended Workflow)
 
 **One-time Setup:**
-1. **Setup LLM Servers:** Use `POST /add_llm_server` to configure all LLM endpoint addresses (add all server addresses before training)
+1. **Setup LLM Servers:** Use `POST /clear_llm_server` then `POST /add_llm_server` to configure all LLM endpoint addresses (add all server addresses before training)
 
 **For each batch of inference during training:**
 1. **Start Server:** `POST /start` to initialize the server

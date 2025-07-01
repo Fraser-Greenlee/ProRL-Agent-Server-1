@@ -16,6 +16,7 @@ This directory contains comprehensive tests for the SWE-bench utilities, includi
 - `test_swebench_utils.py` - Original comprehensive unit tests + new real data tests
 - `test_swebench_utils_integration.py` - Integration tests using real examples
 - `test_swe_agent_handler.py` - Unit tests for the SweAgentHandler class
+- `test_async_server.py` - Unit tests for the OpenHandsServer async server class
 - `conftest.py` - Pytest fixtures and configuration
 - `pytest.ini` - Pytest configuration and markers
 - `run_tests.py` - Test runner script with different options
@@ -33,6 +34,12 @@ python run_tests.py --integration
 
 # Run tests with real data specifically
 python run_tests.py --real-data
+
+# Run SweAgentHandler tests specifically
+python run_tests.py --swe-agent-handler
+
+# Run OpenHandsServer async tests specifically
+python run_tests.py --async-server
 
 # Test the main examples from utils.py
 python run_tests.py --main-examples
@@ -58,6 +65,9 @@ pytest -m "not slow" tests/nvidia/
 
 # Run SweAgentHandler tests specifically
 pytest tests/nvidia/test_swe_agent_handler.py -v
+
+# Run OpenHandsServer async tests specifically
+pytest tests/nvidia/test_async_server.py -v
 
 # Run with coverage
 pytest --cov=openhands.nvidia --cov-report=term-missing tests/nvidia/
@@ -123,6 +133,55 @@ The `test_swe_agent_handler.py` file contains comprehensive unit tests for the `
 - **Unit Tests**: Fast tests using mocks for all external dependencies
 - **Integration Tests**: Tests using real data structures (marked with `@pytest.mark.real_data`)
 - **Edge Cases**: Tests for error conditions and boundary cases
+
+## OpenHandsServer Tests
+
+The `test_async_server.py` file contains comprehensive unit tests for the `OpenHandsServer` class, which provides the asynchronous job processing server for handling multiple concurrent OpenHands evaluation tasks.
+
+### Test Coverage
+
+1. **Server Lifecycle Tests**:
+   - Server initialization with default and custom parameters
+   - Starting and stopping the server
+   - Thread pool management and cleanup
+   - Server status reporting
+
+2. **Configuration Management Tests**:
+   - LLM server address management (add, clear, load balancing)
+   - LLM configuration creation
+   - Worker pool configuration
+
+3. **Job Management Tests**:
+   - Unique job ID generation and collision handling
+   - Job details storage and retrieval
+   - Job lifecycle tracking (init, run, eval phases)
+   - Custom job ID support
+
+4. **Queue Operations Tests**:
+   - Job queuing across init, run, and evaluation phases
+   - Queue status monitoring
+   - Queue cleanup on server shutdown
+
+5. **Thread Safety Tests**:
+   - Concurrent access to job details
+   - Active job tracking across worker threads
+   - Lock contention handling
+
+6. **Error Handling Tests**:
+   - Unregistered handler detection
+   - Server state validation
+   - Exception propagation and cleanup
+
+7. **Load Balancing Tests**:
+   - Weighted address distribution
+   - Round-robin server selection
+
+### Test Categories
+
+- **Unit Tests**: Fast tests using mocks for registry functions and external dependencies
+- **Thread Safety Tests**: Tests for concurrent operations and race condition prevention
+- **Lifecycle Tests**: Tests for proper resource management and cleanup
+- **Integration Tests**: Basic integration with registry system (without external services)
 
 ## Test Examples from __main__
 
@@ -283,4 +342,50 @@ async def test_handler_eval(mock_evaluate_agent):
 
     result = await handler.eval(job_details=job_details)
     assert result['resolved'] is True
+```
+
+### Testing OpenHandsServer
+
+```python
+def test_server_initialization():
+    """Test server initialization with custom parameters"""
+    server = OpenHandsServer(
+        llm_server_addresses=["http://localhost:8000"],
+        max_init_workers=3,
+        max_run_workers=4,
+        max_eval_workers=2
+    )
+
+    assert server.max_init_workers == 3
+    assert server.max_run_workers == 4
+    assert server.max_eval_workers == 2
+    assert len(server.weighted_addresses) == 1
+
+def test_job_lifecycle():
+    """Test basic job lifecycle management"""
+    server = OpenHandsServer(llm_server_addresses=["http://localhost:8000"])
+    mock_instance = MockInstance()
+
+    # Test unique ID generation
+    job_id = server.get_unique_id(mock_instance)
+    assert "test_instance" in job_id
+    assert "test_trajectory" in job_id
+
+    # Test job details storage
+    job_details = JobDetails(job_id=job_id, instance=mock_instance)
+    with server._job_details_lock:
+        server._job_details[job_id] = job_details
+        assert job_id in server._job_details
+
+def test_thread_safety():
+    """Test thread-safe operations"""
+    server = OpenHandsServer()
+    job_id = "test_job"
+
+    # Test concurrent job tracking
+    with server._state_lock:
+        server._active_init_jobs.add(job_id)
+        assert job_id in server._active_init_jobs
+        server._active_init_jobs.discard(job_id)
+        assert job_id not in server._active_init_jobs
 ```

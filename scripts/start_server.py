@@ -184,6 +184,24 @@ async def add_llm_server(request: LLMServerRequest):
         )
 
 
+@app.post('/clear_llm_server')
+async def clear_llm_server():
+    global server
+    if server is None:
+        logger.error('Server is not initialized. This should not happen.')
+        raise HTTPException(
+            status_code=500, detail='Server is not initialized. This should not happen.'
+        )
+    try:
+        server.clear_llm_server_addresses()
+        return {'status': 'Cleared all LLM server addresses'}
+    except Exception as e:
+        logger.error(f'Failed to clear LLM servers: {str(e)}')
+        raise HTTPException(
+            status_code=500, detail=f'Failed to clear LLM servers: {str(e)}'
+        )
+
+
 @app.post('/process')
 async def process(request: ProcessRequest):
     global server

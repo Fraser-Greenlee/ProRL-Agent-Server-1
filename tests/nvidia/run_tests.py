@@ -11,12 +11,14 @@ Test Files:
 - test_swebench_utils.py - Comprehensive SWE-bench utility tests
 - test_swebench_utils_integration.py - Integration tests with real data
 - test_swe_agent_handler.py - SweAgentHandler class unit tests
+- test_async_server.py - OpenHandsServer async server unit tests
 
 Usage:
     python run_tests.py --unit                    # Run only unit tests
     python run_tests.py --integration            # Run integration tests
     python run_tests.py --real-data             # Run tests with real data
     python run_tests.py --swe-agent-handler     # Run SweAgentHandler tests only
+    python run_tests.py --async-server          # Run OpenHandsServer async tests only
     python run_tests.py --all                   # Run all tests
     python run_tests.py --main-examples         # Test main examples specifically
 """
@@ -129,6 +131,11 @@ def main():
         action='store_true',
         help='Run SweAgentHandler tests only',
     )
+    parser.add_argument(
+        '--async-server',
+        action='store_true',
+        help='Run OpenHandsServer async tests only',
+    )
     parser.add_argument('--all', action='store_true', help='Run all tests')
     parser.add_argument(
         '--main-examples', action='store_true', help='Test main examples'
@@ -169,10 +176,13 @@ def main():
     elif args.swe_agent_handler:
         print('Running SweAgentHandler tests only...')
         test_files = ['tests/nvidia/test_swe_agent_handler.py']
+    elif args.async_server:
+        print('Running OpenHandsServer async tests only...')
+        test_files = ['tests/nvidia/test_async_server.py']
     elif args.fast:
         markers.append('not slow')
     elif args.all:
-        # Run all tests (includes test_swebench_utils.py, test_swebench_utils_integration.py, and test_swe_agent_handler.py)
+        # Run all tests (includes test_swebench_utils.py, test_swebench_utils_integration.py, test_swe_agent_handler.py, and test_async_server.py)
         pass
     else:
         # Default: run unit tests

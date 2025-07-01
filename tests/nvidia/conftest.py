@@ -52,9 +52,12 @@ HAS_REAL_DATA = os.path.exists(PARQUET_FILE)
 
 @pytest.fixture(autouse=True)
 def suppress_warnings():
-    """Automatically suppress warnings for each test"""
+    """Auto-use fixture to suppress warnings for all tests."""
     with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
+        warnings.simplefilter('ignore', DeprecationWarning)
+        warnings.simplefilter('ignore', UserWarning)
+        warnings.simplefilter('ignore', RuntimeWarning)
+        warnings.simplefilter('ignore', ResourceWarning)
         yield
 
 
@@ -148,8 +151,27 @@ def pytest_collection_modifyitems(config, items):
 
 
 def pytest_configure(config):
-    """Configure pytest with markers and warning filters"""
-    import warnings
+    """Configure pytest with custom warning filters."""
+    # Suppress all deprecation warnings from external libraries
+    warnings.filterwarnings('ignore', category=DeprecationWarning, module='google.*')
+    warnings.filterwarnings('ignore', category=DeprecationWarning, module='pydub.*')
+    warnings.filterwarnings(
+        'ignore', category=DeprecationWarning, message='.*google._upb.*'
+    )
+    warnings.filterwarnings(
+        'ignore', category=DeprecationWarning, message='.*utcfromtimestamp.*'
+    )
+    warnings.filterwarnings(
+        'ignore', category=DeprecationWarning, message='.*audioop.*'
+    )
+
+    # More general filters
+    warnings.filterwarnings(
+        'ignore', category=DeprecationWarning, module='<frozen importlib._bootstrap>'
+    )
+    warnings.filterwarnings('ignore', category=UserWarning)
+    warnings.filterwarnings('ignore', category=RuntimeWarning)
+    warnings.filterwarnings('ignore', category=ResourceWarning)
 
     # Configure custom pytest markers
     config.addinivalue_line('markers', 'integration: marks tests as integration tests')

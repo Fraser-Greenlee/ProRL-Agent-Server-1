@@ -90,6 +90,10 @@ class OpenHandsServer:
             heapq.heappush(self.weighted_addresses, [0, llm_server_address])
             logger.info(f'Added LLM server address: {llm_server_address}')
 
+    def clear_llm_server_addresses(self):
+        with self._address_lock:
+            self.weighted_addresses.clear()
+
     def create_llm_config(self, sampling_params):
         with self._address_lock:
             if len(self.weighted_addresses) == 0:
