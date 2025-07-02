@@ -181,9 +181,17 @@ A utility script for collecting and building Singularity container images from S
 - Automatic cache directory management
 
 **Usage:**
+First specific the local Directory of singularities images:
+```bash
+export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/
+OpenHands_internal/singularity_images
+```
+then run
 ```bash
 python pull_swe_images.py [OPTIONS]
 ```
+It would better to copy the images from `/lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/
+OpenHands_internal/singularity_images` to your own path.
 
 **Required Arguments:**
 - `--parquet-file`: Path to a SWE-Bench parquet file (train/validation etc.)
