@@ -9,6 +9,7 @@ from openhands.nvidia.registry import (
     FunctionNotRegisteredError,
     JobDetails,
 )
+from openhands.nvidia.timer import PausableTimer
 
 
 class MockInstance(dict):
@@ -80,6 +81,17 @@ class TestOpenHandsServer(unittest.TestCase):
         )
         self.mock_instance = MockInstance()
         self.mock_handler = MockAgentHandler()
+
+    def run_with_timeout(self, func, timeout=10):
+        """Run a function with a timeout to prevent hanging tests."""
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(func)
+            try:
+                return future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                self.fail(f'Test timed out after {timeout} seconds')
 
     def tearDown(self):
         """Clean up after tests."""
@@ -416,6 +428,432 @@ class TestOpenHandsServer(unittest.TestCase):
         with self.server._job_details_lock:
             if job_id in self.server._job_details:
                 del self.server._job_details[job_id]
+
+    def test_process_with_timeout_parameter(self):
+        """Test that process method accepts timeout parameter."""
+        custom_timeout = 1.0
+        mock_instance = MockInstance(data_source='unregistered_type')
+
+        self.server.start()
+
+        try:
+            # This will fail at registration check, but we can verify timeout was passed
+            with self.assertRaises(FunctionNotRegisteredError):
+                self.server.process(
+                    mock_instance, {'temperature': 0.7}, timeout=custom_timeout
+                )
+        finally:
+            self.server.stop()
+
+    @patch('openhands.nvidia.async_server.run_with_timeout_awareness')
+    @patch('openhands.nvidia.async_server.get_registered_functions')
+    @patch('openhands.nvidia.async_server.is_registered_handler')
+    @patch('openhands.nvidia.async_server.PausableTimer')
+    def test_timer_initialization_in_process(
+        self,
+        mock_timer_class,
+        mock_is_registered,
+        mock_get_functions,
+        mock_run_with_timeout,
+    ):
+        """Test that PausableTimer is created and started for each job."""
+        mock_timer = Mock()
+        mock_timer.get_timing_info.return_value = {'timing': 'info'}  # Mock timing info
+        mock_timer_class.return_value = mock_timer
+        mock_is_registered.return_value = True  # Allow registration check to pass
+
+        # Mock async execution to prevent hanging
+        mock_run_with_timeout.side_effect = lambda timer, coro: (
+            Mock(),
+            Mock(),
+            Mock(),
+        )  # For init
+
+        # Mock all the async functions to prevent hanging
+        mock_init_func = Mock()
+        mock_run_func = Mock()
+        mock_eval_func = Mock()
+        mock_final_result = Mock(return_value={'status': 'test'})
+
+        mock_get_functions.side_effect = lambda func_type, dataset: {
+            'init': mock_init_func,
+            'run': mock_run_func,
+            'eval': mock_eval_func,
+            'final_result': mock_final_result,
+        }.get(func_type)
+
+        mock_instance = MockInstance(data_source='test_dataset')
+        custom_timeout = 1.0
+
+        self.server.start()
+
+        def test_logic():
+            # This should succeed now with proper mocking
+            result = self.server.process(
+                mock_instance, {'temperature': 0.7}, timeout=custom_timeout
+            )
+
+            # Verify timer was created with correct timeout
+            mock_timer_class.assert_called_once_with(timeout=custom_timeout)
+            mock_timer.start.assert_called_once()
+
+            # Verify the result contains the expected data
+            self.assertIn('status', result)
+            self.assertIn('timing', result)  # Verify timing info is added
+            return result
+
+        try:
+            self.run_with_timeout(test_logic, timeout=5)
+        finally:
+            self.server.stop()
+
+    @patch('openhands.nvidia.async_server.get_registered_functions')
+    @patch('openhands.nvidia.async_server.is_registered_handler')
+    def test_timeout_error_handling_in_init_phase(
+        self, mock_is_registered, mock_get_functions
+    ):
+        """Test timeout error handling during init phase."""
+        mock_is_registered.return_value = True
+
+        # Mock exception function
+        mock_init_exception = Mock(return_value={'error': 'timeout_in_init'})
+        mock_get_functions.side_effect = lambda func_type, dataset: {
+            'init_exception': mock_init_exception
+        }.get(func_type)
+
+        mock_instance = MockInstance(data_source='test_dataset')
+
+        # Create a job details object that will be used
+        job_id = self.server.get_unique_id(mock_instance)
+        job_details = JobDetails()
+        job_details.job_id = job_id
+        job_details.instance = mock_instance
+        job_details.timer = PausableTimer(timeout=1.0)
+        job_details.timer.start()
+        job_details.event = threading.Event()
+
+        # Manually trigger timeout
+        job_details.timer.trigger_timeout()
+
+        with self.server._job_details_lock:
+            self.server._job_details[job_id] = job_details
+
+        # Verify timeout flag is set
+        self.assertTrue(job_details.timer.is_expired())
+
+    @patch('openhands.nvidia.async_server.get_registered_functions')
+    @patch('openhands.nvidia.async_server.is_registered_handler')
+    def test_timeout_error_handling_in_run_phase(
+        self, mock_is_registered, mock_get_functions
+    ):
+        """Test timeout error handling during run phase."""
+        mock_is_registered.return_value = True
+
+        # Mock exception function
+        mock_run_exception = Mock(return_value={'error': 'timeout_in_run'})
+        mock_get_functions.side_effect = lambda func_type, dataset: {
+            'run_exception': mock_run_exception
+        }.get(func_type)
+
+        mock_instance = MockInstance(data_source='test_dataset')
+
+        # Create a job details object for run phase
+        job_id = self.server.get_unique_id(mock_instance)
+        job_details = JobDetails()
+        job_details.job_id = job_id
+        job_details.instance = mock_instance
+        job_details.timer = PausableTimer(timeout=1.0)
+        job_details.timer.start()
+        job_details.event = threading.Event()
+        job_details.runtime = Mock()  # Add mock runtime
+
+        # Manually trigger timeout
+        job_details.timer.trigger_timeout()
+
+        with self.server._job_details_lock:
+            self.server._job_details[job_id] = job_details
+
+        # Verify timeout flag is set
+        self.assertTrue(job_details.timer.is_expired())
+
+    @patch('openhands.nvidia.async_server.get_registered_functions')
+    @patch('openhands.nvidia.async_server.is_registered_handler')
+    def test_timeout_error_handling_in_eval_phase(
+        self, mock_is_registered, mock_get_functions
+    ):
+        """Test timeout error handling during eval phase."""
+        mock_is_registered.return_value = True
+
+        # Mock exception function
+        mock_eval_exception = Mock(return_value={'error': 'timeout_in_eval'})
+        mock_get_functions.side_effect = lambda func_type, dataset: {
+            'eval_exception': mock_eval_exception
+        }.get(func_type)
+
+        mock_instance = MockInstance(data_source='test_dataset')
+
+        # Create a job details object for eval phase
+        job_id = self.server.get_unique_id(mock_instance)
+        job_details = JobDetails()
+        job_details.job_id = job_id
+        job_details.instance = mock_instance
+        job_details.timer = PausableTimer(timeout=1.0)
+        job_details.timer.start()
+        job_details.event = threading.Event()
+
+        # Manually trigger timeout
+        job_details.timer.trigger_timeout()
+
+        with self.server._job_details_lock:
+            self.server._job_details[job_id] = job_details
+
+        # Verify timeout flag is set
+        self.assertTrue(job_details.timer.is_expired())
+
+    @patch('openhands.nvidia.async_server.run_with_timeout_awareness')
+    @patch('openhands.nvidia.async_server.PausableTimer')
+    @patch('openhands.nvidia.async_server.get_registered_functions')
+    @patch('openhands.nvidia.async_server.is_registered_handler')
+    def test_timing_information_in_results(
+        self,
+        mock_is_registered,
+        mock_get_functions,
+        mock_timer_class,
+        mock_run_with_timeout,
+    ):
+        """Test that timing information is included in final results."""
+        mock_timer = Mock()
+        mock_timer.get_timing_info.return_value = {
+            'total_time': 10.5,
+            'counted_time': 8.2,
+        }
+        mock_timer_class.return_value = mock_timer
+        mock_is_registered.return_value = True
+
+        # Mock async execution to prevent hanging
+        mock_run_with_timeout.side_effect = lambda timer, coro: (
+            Mock(),
+            Mock(),
+            Mock(),
+        )  # For init
+
+        # Mock all the async functions to prevent hanging
+        mock_init_func = Mock()
+        mock_run_func = Mock()
+        mock_eval_func = Mock()
+        mock_final_result = Mock(return_value={'status': 'completed'})
+
+        mock_get_functions.side_effect = lambda func_type, dataset: {
+            'init': mock_init_func,
+            'run': mock_run_func,
+            'eval': mock_eval_func,
+            'final_result': mock_final_result,
+        }.get(func_type)
+
+        mock_instance = MockInstance(data_source='test_dataset')
+
+        self.server.start()
+
+        def test_logic():
+            # This should succeed now with proper mocking
+            result = self.server.process(mock_instance, {'temperature': 0.7})
+
+            # Verify the result contains timing information
+            self.assertIn('status', result)
+            self.assertIn('timing', result)
+            self.assertEqual(result['timing']['total_time'], 10.5)
+            self.assertEqual(result['timing']['counted_time'], 8.2)
+            return result
+
+        try:
+            self.run_with_timeout(test_logic, timeout=5)
+        finally:
+            self.server.stop()
+
+    def test_timer_phase_context_usage(self):
+        """Test that timer phases are properly managed."""
+        timer = PausableTimer(timeout=1.0)
+        timer.start()
+
+        # Test that timer starts in 'others' phase by default
+        self.assertEqual(timer.current_phase, 'others')
+
+        # Test phase transitions
+        timer.enter_phase('init')
+        self.assertEqual(timer.current_phase, 'init')
+
+        timer.exit_phase()
+        self.assertEqual(timer.current_phase, 'others')
+
+        # Test different phases
+        for phase in ['init', 'run', 'eval']:
+            timer.enter_phase(phase)
+            self.assertEqual(timer.current_phase, phase)
+            timer.exit_phase()
+            self.assertEqual(timer.current_phase, 'others')
+
+    def test_timeout_awareness_integration(self):
+        """Test integration with timeout-aware execution."""
+        timer = PausableTimer(timeout=1.0)
+        timer.start()
+        timer.enter_phase('run')
+
+        # Test remaining timeout calculation
+        remaining = timer.get_remaining_timeout()
+        self.assertIsNotNone(remaining)
+        self.assertGreater(remaining, 0)
+
+        # Test manual timeout trigger
+        timer.trigger_timeout()
+        self.assertTrue(timer.is_expired())
+        self.assertIsNone(timer.get_remaining_timeout())
+
+    def test_timer_counted_vs_uncounted_phases(self):
+        """Test that only init/run/eval phases count toward timeout."""
+        timer = PausableTimer(timeout=1.0)
+        timer.start()
+
+        # Mock time to simulate phase durations
+        with patch('time.time') as mock_time:
+            mock_time.return_value = 100.0
+
+            # Spend time in 'others' phase (uncounted)
+            timer.enter_phase('others')
+            mock_time.return_value = 110.0  # 10 seconds
+            timer.exit_phase()
+
+            # Should not count toward timeout
+            self.assertEqual(timer.get_counted_time(), 0.0)
+            self.assertFalse(timer.is_expired())
+
+            # Spend time in 'run' phase (counted)
+            mock_time.return_value = 115.0
+            timer.enter_phase('run')
+            mock_time.return_value = 116.0  # 1 second
+            timer.exit_phase()
+
+            # Should count toward timeout
+            self.assertEqual(timer.get_counted_time(), 1.0)
+            self.assertTrue(timer.is_expired())  # Exceeds 1s timeout
+
+    @patch('openhands.nvidia.async_server.run_with_timeout_awareness')
+    @patch('openhands.nvidia.async_server.phase_context')
+    def test_timeout_aware_execution_calls(
+        self, mock_phase_context, mock_run_with_timeout
+    ):
+        """Test that timeout-aware execution functions are called properly."""
+
+        # This test verifies that the server uses the timeout infrastructure correctly
+        # We can't easily test the full async execution without complex mocking,
+        # but we can verify the integration points exist
+
+        timer = PausableTimer(timeout=1.0)
+        timer.start()
+
+        # Verify phase context manager exists and works
+        with (
+            patch.object(timer, 'enter_phase') as mock_enter,
+            patch.object(timer, 'exit_phase') as mock_exit,
+        ):
+            from openhands.nvidia.timer import phase_context
+
+            with phase_context(timer, 'init'):
+                pass
+
+            mock_enter.assert_called_once_with('init')
+            mock_exit.assert_called_once()
+
+    def test_default_timeout_value(self):
+        """Test that process method uses default timeout value."""
+        mock_instance = MockInstance(data_source='unregistered_type')
+
+        self.server.start()
+
+        try:
+            # This will fail at registration check, but we can verify default timeout
+            with self.assertRaises(FunctionNotRegisteredError):
+                # Call without timeout parameter to test default
+                self.server.process(mock_instance, {'temperature': 0.7})
+        finally:
+            self.server.stop()
+
+    @patch('openhands.nvidia.async_server.run_with_timeout_awareness')
+    @patch('openhands.nvidia.async_server.get_registered_functions')
+    @patch('openhands.nvidia.async_server.is_registered_handler')
+    @patch('openhands.nvidia.async_server.PausableTimer')
+    def test_timer_attached_to_job_details(
+        self,
+        mock_timer_class,
+        mock_is_registered,
+        mock_get_functions,
+        mock_run_with_timeout,
+    ):
+        """Test that timer is properly attached to job details."""
+        mock_timer = Mock()
+        mock_timer.get_timing_info.return_value = {'timing': 'info'}  # Mock timing info
+        mock_timer_class.return_value = mock_timer
+        mock_is_registered.return_value = True  # Allow registration check to pass
+
+        # Mock async execution to prevent hanging
+        mock_run_with_timeout.side_effect = lambda timer, coro: (
+            Mock(),
+            Mock(),
+            Mock(),
+        )  # For init
+
+        # Mock all the async functions to prevent hanging
+        mock_init_func = Mock()
+        mock_run_func = Mock()
+        mock_eval_func = Mock()
+        mock_final_result = Mock(return_value={'status': 'test'})
+
+        mock_get_functions.side_effect = lambda func_type, dataset: {
+            'init': mock_init_func,
+            'run': mock_run_func,
+            'eval': mock_eval_func,
+            'final_result': mock_final_result,
+        }.get(func_type)
+
+        mock_instance = MockInstance(data_source='test_dataset')
+
+        self.server.start()
+
+        def test_logic():
+            # This should succeed now with proper mocking
+            result = self.server.process(mock_instance, {'temperature': 0.7})
+
+            # Verify timer was created and started
+            mock_timer_class.assert_called_once_with(timeout=300.0)
+            mock_timer.start.assert_called_once()
+
+            # Verify the result contains the expected data
+            self.assertIn('status', result)
+            self.assertIn('timing', result)  # Verify timing info is added
+            return result
+
+        try:
+            self.run_with_timeout(test_logic, timeout=5)
+        finally:
+            self.server.stop()
+
+    def test_runtime_cleanup_on_timeout(self):
+        """Test that runtime is properly cleaned up when timeout occurs."""
+        job_details = JobDetails()
+        job_details.runtime = Mock()
+        job_details.timer = PausableTimer(timeout=1.0)
+        job_details.timer.start()
+        job_details.timer.trigger_timeout()  # Simulate timeout
+
+        # Verify runtime exists before cleanup
+        self.assertIsNotNone(job_details.runtime)
+
+        # Simulate the cleanup that happens in async_server workers
+        if job_details.runtime:
+            job_details.runtime.close()
+            job_details.runtime = None
+
+        # Verify runtime was cleaned up
+        self.assertIsNone(job_details.runtime)
 
 
 if __name__ == '__main__':

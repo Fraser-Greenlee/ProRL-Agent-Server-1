@@ -12,6 +12,7 @@ Test Files:
 - test_swebench_utils_integration.py - Integration tests with real data
 - test_swe_agent_handler.py - SweAgentHandler class unit tests
 - test_async_server.py - OpenHandsServer async server unit tests
+- test_timer.py - Timer module unit tests for timeout handling
 
 Usage:
     python run_tests.py --unit                    # Run only unit tests
@@ -19,6 +20,7 @@ Usage:
     python run_tests.py --real-data             # Run tests with real data
     python run_tests.py --swe-agent-handler     # Run SweAgentHandler tests only
     python run_tests.py --async-server          # Run OpenHandsServer async tests only
+    python run_tests.py --timer                 # Run timer tests only
     python run_tests.py --all                   # Run all tests
     python run_tests.py --main-examples         # Test main examples specifically
 """
@@ -136,6 +138,11 @@ def main():
         action='store_true',
         help='Run OpenHandsServer async tests only',
     )
+    parser.add_argument(
+        '--timer',
+        action='store_true',
+        help='Run timer tests only',
+    )
     parser.add_argument('--all', action='store_true', help='Run all tests')
     parser.add_argument(
         '--main-examples', action='store_true', help='Test main examples'
@@ -179,10 +186,13 @@ def main():
     elif args.async_server:
         print('Running OpenHandsServer async tests only...')
         test_files = ['tests/nvidia/test_async_server.py']
+    elif args.timer:
+        print('Running timer tests only...')
+        test_files = ['tests/nvidia/test_timer.py']
     elif args.fast:
         markers.append('not slow')
     elif args.all:
-        # Run all tests (includes test_swebench_utils.py, test_swebench_utils_integration.py, test_swe_agent_handler.py, and test_async_server.py)
+        # Run all tests (includes test_swebench_utils.py, test_swebench_utils_integration.py, test_swe_agent_handler.py, test_async_server.py, and test_timer.py)
         pass
     else:
         # Default: run unit tests

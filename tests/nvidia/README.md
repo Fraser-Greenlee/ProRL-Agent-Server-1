@@ -10,6 +10,7 @@ This directory contains comprehensive tests for the SWE-bench utilities, includi
 2. **Integration Tests**: Tests with real data when available
 3. **Real Data Tests**: Tests specifically requiring the actual parquet dataset
 4. **Main Examples Tests**: Tests that validate the examples from `utils.py`'s `__main__` section
+5. **Timer Tests**: Tests for timeout-sensitive job processing with phase-aware timing
 
 ### Files
 
@@ -17,6 +18,7 @@ This directory contains comprehensive tests for the SWE-bench utilities, includi
 - `test_swebench_utils_integration.py` - Integration tests using real examples
 - `test_swe_agent_handler.py` - Unit tests for the SweAgentHandler class
 - `test_async_server.py` - Unit tests for the OpenHandsServer async server class
+- `test_timer.py` - Unit tests for the OpenHands timer module (timeout handling)
 - `conftest.py` - Pytest fixtures and configuration
 - `pytest.ini` - Pytest configuration and markers
 - `run_tests.py` - Test runner script with different options
@@ -40,6 +42,9 @@ python run_tests.py --swe-agent-handler
 
 # Run OpenHandsServer async tests specifically
 python run_tests.py --async-server
+
+# Run timer tests specifically
+python run_tests.py --timer
 
 # Test the main examples from utils.py
 python run_tests.py --main-examples
@@ -68,6 +73,9 @@ pytest tests/nvidia/test_swe_agent_handler.py -v
 
 # Run OpenHandsServer async tests specifically
 pytest tests/nvidia/test_async_server.py -v
+
+# Run timer tests specifically
+pytest tests/nvidia/test_timer.py -v
 
 # Run with coverage
 pytest --cov=openhands.nvidia --cov-report=term-missing tests/nvidia/
@@ -176,12 +184,21 @@ The `test_async_server.py` file contains comprehensive unit tests for the `OpenH
    - Weighted address distribution
    - Round-robin server selection
 
+8. **Timeout Integration Tests**:
+   - Timeout parameter acceptance in process method
+   - PausableTimer initialization and lifecycle
+   - Timeout error handling across all phases (init, run, eval)
+   - Timing information inclusion in results
+   - Phase-aware timeout management
+   - Runtime cleanup on timeout events
+
 ### Test Categories
 
 - **Unit Tests**: Fast tests using mocks for registry functions and external dependencies
 - **Thread Safety Tests**: Tests for concurrent operations and race condition prevention
 - **Lifecycle Tests**: Tests for proper resource management and cleanup
 - **Integration Tests**: Basic integration with registry system (without external services)
+- **Timeout Tests**: Tests for timeout functionality and phase-aware timing behavior
 
 ## Test Examples from __main__
 
@@ -276,11 +293,12 @@ Async tests require proper event loop handling. The test runner and fixtures han
 
 When adding new tests:
 
-1. Use appropriate markers (`@pytest.mark.real_data`, etc.)
+1. Use appropriate markers (`@pytest.mark.real_data`, `@pytest.mark.asyncio`, etc.)
 2. Add fixtures to `conftest.py` for reusable test data
-3. Mock expensive operations (Docker, LLM calls, network)
+3. Mock expensive operations (Docker, LLM calls, network, time-dependent operations)
 4. Test both the happy path and error conditions
-5. Update this README if adding new test categories
+5. For timer tests, use `patch('time.time')` to avoid actual delays
+6. Update this README if adding new test categories
 
 ## Examples
 

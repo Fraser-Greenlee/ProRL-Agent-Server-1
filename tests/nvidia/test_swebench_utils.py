@@ -627,40 +627,73 @@ class TestFinalResult:
     """Test final_result function"""
 
     def test_final_result_with_all_times(self):
-        """Test final result with all timing information"""
+        """Test final result merges run_results and eval_results"""
         job_details = Mock()
         job_details.results = None
         job_details.run_results = {'success': True, 'git_patch': 'test'}
         job_details.eval_results = {'resolved': True}
-        job_details.start_time = 1000
-        job_details.start_run_time = 1010
-        job_details.start_eval_time = 1050
-        job_details.end_time = 1080
+        job_details.timeout_error = False
 
         result = final_result(job_details)
 
         assert result['success'] is True
+        assert result['git_patch'] == 'test'
         assert result['resolved'] is True
-        assert result['init_time_taken'] == 10
-        assert result['run_time_taken'] == 40
-        assert result['evaluate_time_taken'] == 30
+        assert result['critical_error'] is None
 
     def test_final_result_no_eval_time(self):
-        """Test final result without eval time"""
+        """Test final result with timeout error"""
         job_details = Mock()
         job_details.results = None
         job_details.run_results = {'success': True}
         job_details.eval_results = {'resolved': False}
-        job_details.start_time = 1000
-        job_details.start_run_time = 1010
-        job_details.start_eval_time = None
-        job_details.end_time = 1080
+        job_details.timeout_error = True
 
         result = final_result(job_details)
 
-        assert result['init_time_taken'] == 10
-        assert result['run_time_taken'] == 70
-        assert result['evaluate_time_taken'] == 0
+        assert result['success'] is True
+        assert result['resolved'] is False
+        assert result['critical_error'] == 'timeout'
+
+    def test_final_result_with_existing_results(self):
+        """Test final result when job_details.results already exists"""
+        job_details = Mock()
+        job_details.results = {'existing': True, 'data': 'test'}
+        job_details.timeout_error = False
+
+        result = final_result(job_details)
+
+        assert result['existing'] is True
+        assert result['data'] == 'test'
+        assert 'critical_error' not in result or result['critical_error'] is None
+
+    def test_final_result_no_run_results(self):
+        """Test final result when run_results is None"""
+        job_details = Mock()
+        job_details.results = None
+        job_details.run_results = None
+        job_details.eval_results = {'resolved': True}
+        job_details.timeout_error = False
+        job_details.instance = {'instance_id': 'test_id', 'trajectory_id': 'test_traj'}
+
+        result = final_result(job_details)
+
+        assert result['instance_id'] == 'test_id'
+        assert result['trajectory_id'] == 'test_traj'
+        assert result['resolved'] is True
+        assert result['critical_error'] is None
+
+    def test_final_result_timeout_with_existing_results(self):
+        """Test final result with timeout when results already exist"""
+        job_details = Mock()
+        job_details.results = {'existing': True, 'data': 'test'}
+        job_details.timeout_error = True
+
+        result = final_result(job_details)
+
+        assert result['existing'] is True
+        assert result['data'] == 'test'
+        assert result['critical_error'] == 'timeout'
 
 
 class TestMainExecution:
