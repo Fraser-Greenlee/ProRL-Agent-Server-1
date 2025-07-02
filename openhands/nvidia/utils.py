@@ -152,11 +152,13 @@ async def process_with_timeout(
 
         loop = asyncio.get_event_loop()
         future = loop.run_in_executor(
-            thread_pool, lambda: server.process(instance, sampling_params, job_id)
+            thread_pool,
+            lambda: server.process(instance, sampling_params, job_id, timeout),
         )
 
         # Wait for the future with timeout
-        result = await asyncio.wait_for(future, timeout=timeout)
+        # We use 2x the timeout to account time in queue
+        result = await asyncio.wait_for(future, timeout=timeout * 2)
         return result
     except asyncio.TimeoutError:
         # Clean up the timed-out job

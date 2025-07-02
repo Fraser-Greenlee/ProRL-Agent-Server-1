@@ -2,9 +2,9 @@ import asyncio
 import heapq
 import queue
 import threading
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 from openhands.core.config.llm_config import LLMConfig
 from openhands.nvidia.logger import nvidia_logger as logger
@@ -13,6 +13,12 @@ from openhands.nvidia.registry import (
     JobDetails,
     get_registered_functions,
     is_registered_handler,
+)
+from openhands.nvidia.timer import (
+    PausableTimer,
+    TimeoutError,
+    phase_context,
+    run_with_timeout_awareness,
 )
 from openhands.nvidia.utils import (
     clear_queue,
@@ -149,7 +155,7 @@ class OpenHandsServer:
 
         self.clear_singularity_jobs()
 
-    def process(self, instance, sampling_params, job_id=None):
+    def process(self, instance, sampling_params, job_id=None, timeout: float = 300.0):
         if not self._server_running:
             raise RuntimeError('Server is not running')
 
@@ -173,8 +179,13 @@ class OpenHandsServer:
             job_details.max_iterations = sampling_params.pop('max_iterations')
         llm_config = self.create_llm_config(sampling_params)
         job_details.llm_config = llm_config
-        job_details.start_time = time.time()
         job_details.event = threading.Event()
+
+        # Initialize timer - only tracks init/run/eval phases
+        # All other time is automatically counted as "others" (not counted toward timeout)
+        job_details.timer = PausableTimer(timeout=timeout)
+        job_details.timer.start()
+
         with self._job_details_lock:
             self._job_details[job_id] = job_details
         logger.info(f'Job {job_id} added to job details')
@@ -185,17 +196,21 @@ class OpenHandsServer:
 
         # Wait for job to be finished
         job_details.event.wait()
-        job_details.end_time = time.time()
 
         # Get final result
         _final_result_func = get_registered_functions('final_result', dataset_type)
         if _final_result_func is None:
-            result = {
+            result: dict[str, Any] = {
                 'critical_error': 'final_result',
                 'error': f'Function not found in registry type final_result for dataset type {dataset_type}',
             }
         else:
             result = _final_result_func(job_details)
+
+        # Add timing information to result
+        if job_details.timer:
+            timing_info = job_details.timer.get_timing_info()
+            result['timing'] = timing_info
 
         # Close runtime
         if job_details.runtime:
@@ -217,6 +232,7 @@ class OpenHandsServer:
                 break
 
             logger.info(f'[init-worker-{wid}] Got job {job_id}')
+
             # Thread-safe job details retrieval
             with self._job_details_lock:
                 job_details = self._job_details.get(job_id)
@@ -230,23 +246,49 @@ class OpenHandsServer:
             # Thread-safe active jobs tracking
             with self._state_lock:
                 self._active_init_jobs.add(job_id)
+
             dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
             _init_func = get_registered_functions('init', dataset_type)
+
             try:
                 if _init_func is None:
                     raise FunctionNotRegisteredError(
                         f"Function '{dataset_type}' not found in registry type 'init'"
                     )
-                runtime, metadata, config = await _init_func(
-                    job_details.instance,
-                    job_details.llm_config,
-                    sid=job_id,
-                    max_iterations=job_details.max_iterations,
-                )
+
+                # Enter init phase - all work here counts toward timeout
+                if job_details.timer is None:
+                    raise RuntimeError('Timer is not initialized')
+                with phase_context(job_details.timer, 'init'):
+                    # Use timeout-aware coroutine execution
+                    init_coro = _init_func(
+                        job_details.instance,
+                        job_details.llm_config,
+                        sid=job_id,
+                        max_iterations=job_details.max_iterations,
+                    )
+                    runtime, metadata, config = await run_with_timeout_awareness(
+                        job_details.timer, init_coro
+                    )
+
                 job_details.runtime = runtime
                 job_details.metadata = metadata
                 job_details.config = config
+
+                # Put in run queue (automatically becomes "others" phase)
                 self.run_queue.put(job_id)
+
+            except TimeoutError as e:
+                logger.warning(
+                    f'[init-worker-{wid}] Job {job_id} timed out during init: {e}'
+                )
+                job_details.timeout_error = True
+                _init_exception_func = get_registered_functions(
+                    'init_exception', dataset_type
+                )
+                job_details.results = _init_exception_func(job_details, e)
+                if job_details.event is not None:
+                    job_details.event.set()
             except Exception as e:
                 _init_exception_func = get_registered_functions(
                     'init_exception', dataset_type
@@ -257,9 +299,7 @@ class OpenHandsServer:
             finally:
                 # Thread-safe cleanup
                 with self._state_lock:
-                    self._active_init_jobs.discard(
-                        job_id
-                    )  # discard won't raise KeyError
+                    self._active_init_jobs.discard(job_id)
                 self.init_queue.task_done()
 
     async def _run_worker(self, wid):
@@ -284,7 +324,6 @@ class OpenHandsServer:
                     continue
 
             logger.info(f'[run-worker-{wid}] Got job {job_id}')
-            job_details.start_run_time = time.time()
 
             # Thread-safe active jobs tracking
             with self._state_lock:
@@ -292,28 +331,56 @@ class OpenHandsServer:
 
             dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
             _run_func = get_registered_functions('run', dataset_type)
+
             try:
                 if _run_func is None:
                     raise FunctionNotRegisteredError(
                         f"Function '{dataset_type}' not found in registry type 'run'"
                     )
-                run_results = await _run_func(
-                    job_details.runtime,
-                    job_details.metadata,
-                    job_details.config,
-                    job_details.instance,
-                )
+
+                # Enter run phase - all work here counts toward timeout
+                if job_details.timer is None:
+                    raise RuntimeError('Timer is not initialized')
+                with phase_context(job_details.timer, 'run'):
+                    # Use timeout-aware coroutine execution
+                    run_coro = _run_func(
+                        job_details.runtime,
+                        job_details.metadata,
+                        job_details.config,
+                        job_details.instance,
+                    )
+                    run_results = await run_with_timeout_awareness(
+                        job_details.timer, run_coro
+                    )
+
                 job_details.run_results = run_results
 
-                # Close runtime right after run finishes (before evaluation)
+                # Close runtime (automatically in "others" phase - doesn't count toward timeout)
                 if job_details.runtime:
                     job_details.runtime.close()
                     job_details.runtime = None
 
-                # Push to evaluation queue for further processing
+                # Push to evaluation queue (automatically "others" phase)
                 self.evaluate_queue.put(job_id)
+
+            except TimeoutError as e:
+                logger.warning(
+                    f'[run-worker-{wid}] Job {job_id} timed out during run: {e}'
+                )
+                job_details.timeout_error = True
+                # Ensure runtime is closed (automatically in "others" phase)
+                if job_details.runtime:
+                    job_details.runtime.close()
+                    job_details.runtime = None
+
+                _run_exception_func = get_registered_functions(
+                    'run_exception', dataset_type
+                )
+                job_details.results = _run_exception_func(job_details, e)
+                if job_details.event is not None:
+                    job_details.event.set()
             except Exception as e:
-                # Ensure runtime is closed even if an exception occurs
+                # Ensure runtime is closed (automatically in "others" phase)
                 if job_details.runtime:
                     job_details.runtime.close()
                     job_details.runtime = None
@@ -343,6 +410,7 @@ class OpenHandsServer:
                 break
 
             logger.info(f'[eval-worker-{wid}] Got job {job_id}')
+
             # Thread-safe job details retrieval
             with self._job_details_lock:
                 job_details = self._job_details.get(job_id)
@@ -353,29 +421,51 @@ class OpenHandsServer:
                     self.evaluate_queue.task_done()
                     continue
 
-            job_details.start_eval_time = time.time()
-
             # Thread-safe active jobs tracking
             with self._state_lock:
                 self._active_eval_jobs.add(job_id)
 
             dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
             _eval_func = get_registered_functions('eval', dataset_type)
+
             try:
                 if _eval_func is None:
                     raise FunctionNotRegisteredError(
                         f"Function '{dataset_type}' not found in registry type 'eval'"
                     )
-                eval_report = await _eval_func(
-                    job_details,
-                    sid=f'eval_{job_id}',
-                    allow_skip=self.allow_skip_eval,
-                )
+
+                # Enter eval phase - all work here counts toward timeout
+                if job_details.timer is None:
+                    raise RuntimeError('Timer is not initialized')
+                with phase_context(job_details.timer, 'eval'):
+                    # Use timeout-aware coroutine execution
+                    eval_coro = _eval_func(
+                        job_details,
+                        sid=f'eval_{job_id}',
+                        allow_skip=self.allow_skip_eval,
+                    )
+                    eval_report = await run_with_timeout_awareness(
+                        job_details.timer, eval_coro
+                    )
+
                 # Only keep the 'report' field if present
                 if isinstance(eval_report, dict) and 'report' in eval_report:
                     job_details.eval_results = eval_report['report']
                 else:
                     job_details.eval_results = eval_report
+
+                if job_details.event is not None:
+                    job_details.event.set()
+
+            except TimeoutError as e:
+                logger.warning(
+                    f'[eval-worker-{wid}] Job {job_id} timed out during eval: {e}'
+                )
+                job_details.timeout_error = True
+                _eval_exception_func = get_registered_functions(
+                    'eval_exception', dataset_type
+                )
+                job_details.results = _eval_exception_func(job_details, e)
                 if job_details.event is not None:
                     job_details.event.set()
             except Exception as e:
@@ -414,6 +504,9 @@ class OpenHandsServer:
         if not self._server_running:
             return
         logger.info('Stopping events')
+
+        # Stop the server running flag first to stop timeout monitor
+        self._server_running = False
 
         # Thread-safe iteration and event setting
         with self._state_lock:
@@ -473,7 +566,6 @@ class OpenHandsServer:
         clear_queue(self.run_queue)
         clear_queue(self.evaluate_queue)
 
-        self._server_running = False
         logger.info(f'Server status: {self.status()}')
 
     def status(self):

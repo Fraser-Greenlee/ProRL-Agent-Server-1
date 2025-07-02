@@ -1,11 +1,12 @@
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 from evaluation.utils.shared import EvalMetadata  # type: ignore
 from openhands.core.config import OpenHandsConfig
 from openhands.core.config.llm_config import LLMConfig
+from openhands.nvidia.timer import PausableTimer
 from openhands.runtime.base import Runtime
 
 
@@ -22,11 +23,8 @@ class JobDetails:
     eval_results: dict | None = None
     results: dict | None = None
     event: threading.Event | None = None
-    start_time: float | None = None
-    start_run_time: float | None = None
-    start_eval_time: float | None = None
-    end_time: float | None = None
     timeout_error: bool = False
+    timer: Optional['PausableTimer'] = None  # Import handled in async_server.py
 
 
 class AgentHandler(ABC):

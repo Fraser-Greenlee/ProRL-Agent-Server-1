@@ -521,31 +521,5 @@ def final_result(job_details: JobDetails):
         result = copy.deepcopy(job_details.results)
         if job_details.timeout_error:
             result['critical_error'] = 'timeout'
-    if job_details.start_run_time:
-        if job_details.start_time is None:
-            job_details.start_time = job_details.start_run_time
-        if job_details.end_time is None:
-            job_details.end_time = job_details.start_run_time
-        init_time_taken = job_details.start_run_time - job_details.start_time
-        if job_details.start_eval_time:
-            run_time_taken = (
-                job_details.start_eval_time - job_details.start_run_time
-            )
-            evaluate_time_taken = job_details.end_time - job_details.start_eval_time
-        else:
-            run_time_taken = job_details.end_time - job_details.start_run_time
-            evaluate_time_taken = 0
-    else:
-        if job_details.start_time is None or job_details.end_time is None:
-            init_time_taken = 0
-        else:
-            init_time_taken = job_details.end_time - job_details.start_time
-        run_time_taken = 0
-        evaluate_time_taken = 0
-
-    return {
-            **result,
-            'init_time_taken': init_time_taken,
-            'run_time_taken': run_time_taken,
-            'evaluate_time_taken': evaluate_time_taken,
-        }
+            
+    return result

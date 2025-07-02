@@ -64,7 +64,7 @@ def kill_process_tree(pid):
 
             # Try SIGTERM first for graceful shutdown
             os.killpg(pgid, signal.SIGTERM)
-            time.sleep(3)  # Give processes time to shut down gracefully
+            time.sleep(1)  # Give processes time to shut down gracefully
 
             # Check if any processes in the group are still alive
             try:
@@ -80,7 +80,7 @@ def kill_process_tree(pid):
             logger.info(f'Process group kill failed ({e}), trying individual process kill')
             try:
                 os.kill(pid, signal.SIGTERM)
-                time.sleep(2)
+                time.sleep(1)
 
                 # Check if still alive, then force kill
                 try:
