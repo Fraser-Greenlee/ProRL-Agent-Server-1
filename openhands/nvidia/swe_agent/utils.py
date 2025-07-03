@@ -56,28 +56,29 @@ from evaluation.benchmarks.swe_bench.eval_infer import (  # type: ignore
 from evaluation.utils.shared import EvalMetadata  # type: ignore
 from openhands.core.config import LLMConfig
 
-try:
-    from swegym.harness.grading import get_eval_report  # type: ignore
-    from swegym.harness.run_evaluation import (
-        APPLY_PATCH_FAIL,  # type: ignore
-        APPLY_PATCH_PASS,  # type: ignore
-    )
-    from swegym.harness.test_spec import make_test_spec  # type: ignore
-except ModuleNotFoundError:
-    # Fall back to the regular SWE-Bench harness
-    from swebench.harness.grading import get_eval_report  # type: ignore
-    from swebench.harness.run_evaluation import (
-        APPLY_PATCH_FAIL,  # type: ignore
-        APPLY_PATCH_PASS,  # type: ignore
-    )
-    from swebench.harness.test_spec.test_spec import make_test_spec  # type: ignore
+from swegym.harness.grading import get_eval_report
+from swegym.harness.run_evaluation import (
+    APPLY_PATCH_FAIL,
+    APPLY_PATCH_PASS,
+)
+from swegym.harness.test_spec import make_test_spec
 
-def get_instance_docker_image(instance_id: str) -> str:
-    image_name = 'sweb.eval.x86_64.' + instance_id
-    image_name = image_name.replace(
-        '__', '_s_'
-    )  # to comply with docker image naming convention
-    return (DOCKER_IMAGE_PREFIX.rstrip('/') + '/' + image_name).lower()
+def get_instance_docker_image(instance_id: str, dataset: str | None = None) -> str:
+    is_multimodal = bool(dataset and 'multimodal' in dataset.lower())
+    print("is_multimodal", is_multimodal)
+    if is_multimodal:
+        try:
+            repo, issue = instance_id.split('__', 1)
+        except ValueError:
+            repo, issue = instance_id, ''
+
+        _issue = issue[:-2] if issue.endswith("_0") else issue
+        image_name = f"sweb.eval.x86_64.{repo}_1776_{_issue}:latest"
+        docker_prefix = "docker.io/swebench"
+    else:
+        image_name = f"sweb.eval.x86_64.{instance_id}".replace("__", "_s_")
+        docker_prefix = DOCKER_IMAGE_PREFIX.rstrip("/")
+    return f"{docker_prefix}/{image_name}".lower()
 
 def is_last_action_finish(state: State) -> bool:
     if state and state.history:
@@ -97,9 +98,12 @@ def get_config(
     instance: dict,
     metadata: EvalMetadata,
 ) -> OpenHandsConfig:
-    # We use a different instance image for the each instance of swe-bench eval
+    if 'image_assets' in instance.keys():
+        is_multimodal = True
+    else:
+        is_multimodal = False
     base_container_image = get_instance_docker_image(
-        instance['instance_id']
+        instance['instance_id'], "swebench" if not is_multimodal else "swebench_multimodal"
     )
     logger.debug(
         f'Using instance container image: {base_container_image}. '
@@ -177,6 +181,8 @@ async def initialize_agents(
     # explicit ``llm_config`` (mirrors the behaviour of the old
     # ``initialize_agents`` implementation that lived in
     # ``scripts/test_local_agent.py``).
+    if 'image_assets' in instance.keys():
+        dataset = "swebench_multimodal"
 
     if llm_config is None:
         raise ValueError('LLM config is None, cannot initialize.')
@@ -278,26 +284,51 @@ async def run(instance):
     return results
 
 
-def _apply_patch_and_evaluate(runtime, git_patch: str, instance: dict):
+def _apply_patch_and_evaluate(
+    runtime,
+    git_patch: str,
+    instance: dict,
+):
+
+    if 'image_assets' in instance.keys():
+        is_multimodal = True
+    else:
+        is_multimodal = False
+
+    if is_multimodal:
+        from swebench.harness.grading import get_eval_report
+        from swebench.harness.run_evaluation import (
+            APPLY_PATCH_FAIL,
+            APPLY_PATCH_PASS,
+        )
+        from swebench.harness.test_spec.test_spec import make_test_spec
+    else:
+        try:
+            from swegym.harness.grading import get_eval_report
+            from swegym.harness.run_evaluation import (
+                APPLY_PATCH_FAIL,
+                APPLY_PATCH_PASS,
+            )
+            from swegym.harness.test_spec import make_test_spec
+        except ModuleNotFoundError:
+            from swebench.harness.grading import get_eval_report
+            from swebench.harness.run_evaluation import (
+                APPLY_PATCH_FAIL,
+                APPLY_PATCH_PASS,
+            )
+            from swebench.harness.test_spec.test_spec import make_test_spec
 
     from openhands.events.action import CmdRunAction
     from openhands.events.observation import CmdOutputObservation
 
+    instance["instance_id"] = instance["instance_id"].lower()
+    if "version" not in instance and "base_commit" in instance:
+        instance["version"] = instance["base_commit"]
+
     model_patch = _process_git_patch(git_patch)
     instance_id: str = instance["instance_id"]
 
-    try:
-        test_spec = make_test_spec(instance)
-    except Exception:
-        from swebench.harness.utils import load_swebench_dataset
-
-        dataset_name = "princeton-nlp/SWE-bench"
-        full_dataset = load_swebench_dataset(dataset_name, "test")
-        inst_map = {ins["instance_id"]: ins for ins in full_dataset}
-        if instance_id not in inst_map:
-            raise ValueError(f"Could not find instance_id {instance_id} in {dataset_name}.")
-        test_spec = make_test_spec(inst_map[instance_id])
-
+    test_spec = make_test_spec(instance)
     import tempfile, os, time
 
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -381,13 +412,23 @@ def _apply_patch_and_evaluate(runtime, git_patch: str, instance: dict):
         with open(test_out_path, "w") as f:
             f.write(test_output)
 
-        grading_report = get_eval_report(
-            test_spec=test_spec,
-            prediction={"model_patch": model_patch, "instance_id": instance_id},
-            log_path=test_out_path,
-            include_tests_status=True,
-        )
-
+        try:
+            grading_report = get_eval_report(
+                test_spec=test_spec,
+                prediction={"model_patch": model_patch, "instance_id": instance_id},
+                log_path=test_out_path,
+                include_tests_status=True,
+            )
+        except Exception as e:
+            if "got an unexpected keyword argument" in str(e):
+                grading_report = get_eval_report(
+                    test_spec=test_spec,
+                    prediction={"model_patch": model_patch, "instance_id": instance_id},
+                    test_log_path=test_out_path,
+                    include_tests_status=True,
+                )
+            else:
+                raise  # re-raise if it's not the error we expect
     report = grading_report[instance_id]
     logger.debug(f"[{instance_id}] Grading report: {report}")
 
@@ -521,5 +562,5 @@ def final_result(job_details: JobDetails):
         result = copy.deepcopy(job_details.results)
         if job_details.timeout_error:
             result['critical_error'] = 'timeout'
-            
+
     return result
