@@ -122,13 +122,6 @@ def get_config(
     # Currently set to False as some container require GLIBC_2.38
     sandbox_config.run_as_fakeroot = False
 
-    """
-    sandbox_config.runtime_container_image = (
-        '/lustre/fsw/portfolios/nvr/users/mingjiel/root/singularity_images/'
-        'xingyaoww_sweb.eval.x86_64.getmoto_s_moto-7365.sif'
-    )
-    """
-
     config = OpenHandsConfig(
         default_agent=metadata.agent_class,
         run_as_openhands=False,
@@ -238,21 +231,21 @@ async def run_agent(
                 fake_user_response_fn=codeact_user_response,
             )
 
-         # if fatal error, throw EvalError to trigger re-run
-        if state is None:
-            raise EvalException('Final state is None')
-        if is_fatal_evaluation_error(state.last_error):
-            raise EvalException('Fatal error detected: ' + state.last_error)
-
+        # Try to get git patch first
         return_val = complete_runtime(runtime, instance)
         git_patch = return_val['git_patch']
         logger.debug(
             f'Got git diff for instance {instance['instance_id']}:\n--------\n{git_patch}\n--------'
         )
 
+        # if fatal error, throw EvalError to log.
+        if state is None:
+            raise EvalException('Final state is None')
+        if is_fatal_evaluation_error(state.last_error):
+            raise EvalException('Fatal error detected: ' + state.last_error)
+
     except Exception as e:
         logger.error(f"Error running agent: {e}")
-        raise e
 
     # get messages from agent history
     try:
@@ -262,7 +255,7 @@ async def run_agent(
         raise Exception(f"Failed to retrieve agent messages: {str(e)}")
 
     return {
-        "git_patch": git_patch if run_results['end_properly'] else "",
+        "git_patch": git_patch,
         'success': not bool(state.last_error if state else True),
         'error': state.last_error if state and state.last_error else None,
         'finish': is_last_action_finish(state),
@@ -466,15 +459,19 @@ def run_exception(job_details: JobDetails, e: Exception):
     tb = traceback.format_exc()
     instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
     trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
+    git_patch = job_details.run_results.get('git_patch', None) if job_details.run_results is not None else None
+    success = job_details.run_results.get('success', False) if job_details.run_results is not None else False
+    finish = job_details.run_results.get('finish', False) if job_details.run_results is not None else False
+    messages = job_details.run_results.get('messages', []) if job_details.run_results is not None else []
     return {
         'instance_id': instance_id,
         'trajectory_id': trajectory_id,
-        'git_patch': None,
-        'success': False,
+        'git_patch': git_patch,
+        'success': success,
         'error': f'Error in run agent: {str(e)}',
         'traceback': tb,
-        'finish': False,
-        'messages': [],
+        'finish': finish,
+        'messages': messages,
         'resolved': False,
         'critical_error': 'run',
     }

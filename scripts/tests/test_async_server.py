@@ -54,7 +54,7 @@ def test_server(
     # Process instances using ThreadPoolExecutor for parallel processing
     with ThreadPoolExecutor(max_workers=max_parallel_jobs) as executor:
         futures = [
-            executor.submit(server.process, inst, sampling_params) for inst in requests
+            executor.submit(server.process, inst, dict(sampling_params)) for inst in requests
         ]
         results = [future.result() for future in futures]
 
