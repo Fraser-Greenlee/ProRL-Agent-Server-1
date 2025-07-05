@@ -344,7 +344,7 @@ def _apply_patch_and_evaluate(
 
     # Make script executable
     action = CmdRunAction(command="chmod +x /tmp/eval.sh")
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     runtime.run_action(action)
 
     apply_cmd = (
@@ -355,7 +355,7 @@ def _apply_patch_and_evaluate(
         "echo 'APPLY_PATCH_FAIL')))"
     )
     action = CmdRunAction(command=apply_cmd)
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(30)
     obs = runtime.run_action(action)
     assert isinstance(obs, CmdOutputObservation)
     patch_result = obs.content  # type: ignore[attr-defined]
@@ -371,7 +371,7 @@ def _apply_patch_and_evaluate(
 
     log_file = "/tmp/eval_output.log"
     action = CmdRunAction(command=f"/tmp/eval.sh > {log_file} 2>&1 & echo $!")
-    action.set_hard_timeout(300)
+    action.set_hard_timeout(30)
     obs = runtime.run_action(action)
     if not (isinstance(obs, CmdOutputObservation) and obs.exit_code == 0):
         raise RuntimeError("Failed to launch evaluation script")
@@ -386,7 +386,7 @@ def _apply_patch_and_evaluate(
         if elapsed > timeout:
             raise TimeoutError(f"Evaluation timed out after {timeout} seconds")
         check_action = CmdRunAction(command=f"ps -p {pid} > /dev/null; echo $?")
-        check_action.set_hard_timeout(300)
+        check_action.set_hard_timeout(5)
         check_obs = runtime.run_action(check_action)
         if (
             isinstance(check_obs, CmdOutputObservation)
@@ -398,7 +398,7 @@ def _apply_patch_and_evaluate(
         time.sleep(30)
 
     cat_action = CmdRunAction(command=f"cat {log_file}")
-    cat_action.set_hard_timeout(300)
+    cat_action.set_hard_timeout(5)
     cat_obs = runtime.run_action(cat_action)
     if not (isinstance(cat_obs, CmdOutputObservation) and cat_obs.exit_code == 0):
         raise RuntimeError("Failed to read evaluation output")

@@ -291,7 +291,7 @@ def initialize_runtime(
     action = CmdRunAction(
         command=f"""echo 'export SWE_INSTANCE_ID={instance['instance_id']}' >> ~/.bashrc && echo 'export PIP_CACHE_DIR=~/.cache/pip' >> ~/.bashrc && echo "alias git='git --no-pager'" >> ~/.bashrc && git config --global core.pager "" && git config --global diff.binary false"""
     )
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -301,7 +301,7 @@ def initialize_runtime(
     )
 
     action = CmdRunAction(command="""export USER=$(whoami); echo USER=${USER} """)
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -312,7 +312,7 @@ def initialize_runtime(
 
     # inject the instance info
     action = CmdRunAction(command='mkdir -p /swe_util/eval_data/instances')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -342,14 +342,14 @@ def initialize_runtime(
         )
 
     action = CmdRunAction(command='cat ~/.bashrc')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
     assert_and_raise(obs.exit_code == 0, f'Failed to cat ~/.bashrc: {str(obs)}')
 
     action = CmdRunAction(command='source ~/.bashrc')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -358,7 +358,7 @@ def initialize_runtime(
     assert_and_raise(obs.exit_code == 0, f'Failed to source ~/.bashrc: {str(obs)}')
 
     action = CmdRunAction(command='source /swe_util/instance_swe_entry.sh')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(30)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -368,7 +368,7 @@ def initialize_runtime(
     )
 
     action = CmdRunAction(command=f'cd /workspace/{workspace_dir_name}')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -378,7 +378,7 @@ def initialize_runtime(
     )
 
     action = CmdRunAction(command='git reset --hard')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -387,7 +387,7 @@ def initialize_runtime(
     action = CmdRunAction(
         command='for remote_name in $(git remote); do git remote remove "${remote_name}"; done'
     )
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -412,7 +412,7 @@ def initialize_runtime(
 
         for command in setup_commands:
             action = CmdRunAction(command=command)
-            action.set_hard_timeout(600)
+            action.set_hard_timeout(5)
             logger.info(action, extra={'msg_type': 'ACTION'})
             obs = runtime.run_action(action)
             logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -421,7 +421,7 @@ def initialize_runtime(
         # Only for non-multimodal datasets, we need to activate the testbed environment for Python
         # SWE-Bench multimodal datasets are not using the testbed environment
         action = CmdRunAction(command='which python')
-        action.set_hard_timeout(600)
+        action.set_hard_timeout(5)
         logger.info(action, extra={'msg_type': 'ACTION'})
         obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -452,7 +452,7 @@ def complete_runtime(
     workspace_dir_name = _get_swebench_workspace_dir_name(instance)
 
     action = CmdRunAction(command=f'cd /workspace/{workspace_dir_name}')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -467,7 +467,7 @@ def complete_runtime(
 
         # Then run the command again
         action = CmdRunAction(command=f'cd /workspace/{workspace_dir_name}')
-        action.set_hard_timeout(600)
+        action.set_hard_timeout(5)
         logger.info(action, extra={'msg_type': 'ACTION'})
         obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -482,7 +482,7 @@ def complete_runtime(
 
         # Then run the command again
         action = CmdRunAction(command=f'cd /workspace/{workspace_dir_name}')
-        action.set_hard_timeout(600)
+        action.set_hard_timeout(5)
         logger.info(action, extra={'msg_type': 'ACTION'})
         obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -493,7 +493,7 @@ def complete_runtime(
     )
 
     action = CmdRunAction(command='git config --global core.pager ""')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -504,7 +504,7 @@ def complete_runtime(
 
     # First check for any git repositories in subdirectories
     action = CmdRunAction(command='find . -type d -name .git -not -path "./.git"')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -518,7 +518,7 @@ def complete_runtime(
         # Remove all .git directories in subdirectories
         for git_dir in git_dirs:
             action = CmdRunAction(command=f'rm -rf "{git_dir}"')
-            action.set_hard_timeout(600)
+            action.set_hard_timeout(5)
             logger.info(action, extra={'msg_type': 'ACTION'})
             obs = runtime.run_action(action)
             logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -529,7 +529,7 @@ def complete_runtime(
 
     # add all files
     action = CmdRunAction(command='git add -A')
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(5)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -540,7 +540,7 @@ def complete_runtime(
 
     # Remove binary files from git staging
     action = CmdRunAction(command=remove_binary_files_from_git())
-    action.set_hard_timeout(600)
+    action.set_hard_timeout(10)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -555,7 +555,7 @@ def complete_runtime(
         action = CmdRunAction(
             command=f'git diff --no-color --cached {instance["base_commit"]} > patch.diff'
         )
-        action.set_hard_timeout(max(300 + 100 * n_retries, 600))
+        action.set_hard_timeout(max(30 + 20 * n_retries, 100))
         logger.info(action, extra={'msg_type': 'ACTION'})
         obs = runtime.run_action(action)
         logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -564,7 +564,7 @@ def complete_runtime(
             if obs.exit_code == 0:
                 # Read the patch file
                 action = FileReadAction(path='patch.diff')
-                action.set_hard_timeout(max(300 + 100 * n_retries, 600))
+                action.set_hard_timeout(max(30 + 20 * n_retries, 100))
                 logger.info(action, extra={'msg_type': 'ACTION'})
                 obs = runtime.run_action(action)
                 logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -575,7 +575,7 @@ def complete_runtime(
                     # Fall back to cat "patch.diff" to get the patch
                     assert 'File could not be decoded as utf-8' in obs.content
                     action = CmdRunAction(command='cat patch.diff')
-                    action.set_hard_timeout(max(300 + 100 * n_retries, 600))
+                    action.set_hard_timeout(max(30 + 20 * n_retries, 100))
                     logger.info(action, extra={'msg_type': 'ACTION'})
                     obs = runtime.run_action(action)
                     assert isinstance(obs, CmdOutputObservation) and obs.exit_code == 0
