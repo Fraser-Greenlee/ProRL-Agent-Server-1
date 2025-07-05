@@ -164,7 +164,7 @@ python start_server.py [OPTIONS]
 
 ### `pull_swe_images.py`
 
-A utility script for collecting and building Singularity container images from SWE-Bench datasets.
+A utility script for collecting and building Singularity container images from SWE-Bench/SWE-Bench multimodal datasets.
 
 **Purpose:**
 - Extracts Docker image requirements from SWE-Bench parquet files
