@@ -11,14 +11,34 @@ from openhands.core.logger import openhands_logger as logger
 from openhands.nvidia.swe_agent.utils import evaluate_agent
 
 if __name__ == '__main__':
-    dataset = pd.read_parquet(
+    # Load one multimodal and one non-multimodal example
+    dataset_mm = pd.read_parquet(
+        '/lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/swe-bench-multimodal/data/train.parquet'
+    )
+    dataset_non_mm = pd.read_parquet(
         '/lustre/fsw/portfolios/nvr/users/mingjiel/data/swegym/train.parquet'
     )
 
-    instance = dataset.iloc[0]['instance']
-    # convert instance to serializable pandas series
-    instance = pd.Series(instance)
-    instance = instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+    row_mm = dataset_mm.iloc[0]
+    row_non_mm = dataset_non_mm.iloc[0]
+
+    def to_instance(series: pd.Series) -> pd.Series:
+        if 'instance' in series:
+            inst_dict = series['instance']
+        else:
+            inst_dict = series.to_dict()
+        inst = pd.Series(inst_dict)
+        # Convert any numpy arrays to lists for serialization
+        return inst.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+
+    instance_mm = to_instance(row_mm)
+    instance_non_mm = to_instance(row_non_mm)
+
+    # Store (instance, dataset_name) pairs for testing
+    test_cases = [
+        (instance_mm, 'princeton-nlp/SWE-bench_Multimodal'),
+        (instance_non_mm, 'swebench'),  # non-multimodal
+    ]
 
     # try:
     #     # Try to get the current event loop
@@ -46,9 +66,8 @@ if __name__ == '__main__':
     ###### async evaluate ##########
     async def run_parallel_async():
         tasks = []
-        for idx in range(1):
-            inst_clone = instance.copy()
-            inst_clone['instance_id'] = f'{instance["instance_id"]}_{idx}'
+        for inst, ds_name in test_cases:
+            inst_clone = inst.copy()
             gold_patch = inst_clone['patch']
             tasks.append(evaluate_agent(gold_patch, inst_clone))
         return await asyncio.gather(*tasks, return_exceptions=True)
@@ -66,8 +85,8 @@ if __name__ == '__main__':
     ###### sequential evaluate (non-async) ##########
     async def run_sequential_async():
         results = []
-        for i in range(2):
-            res = await evaluate_agent(mock_patch, instance)
+        for i, (inst, ds_name) in enumerate(test_cases):
+            res = await evaluate_agent(mock_patch, inst)
             print(f'\nBEGIN EVAL REPORT SEQ [{i}]')
             print(res)
             print(f'END EVAL REPORT SEQ [{i}]')
