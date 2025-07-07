@@ -209,7 +209,11 @@ def process_messages_from_agent_state(
         if isinstance(message['content'], str):
             new_message['content'] = message['content']
         else:
-            new_message['content'] = message['content'][0]['text']
+            try:
+                new_message['content'] = message['content'][0]['text']
+            except:
+                logger.critical(f'!!!!!!!!!!!!!!!!!!\nMessage content is empty:\n{message}\nSetting content to empty string.\n!!!!!!!!!!!!!!!!!!')
+                new_message['content'] = '' # empty string for default
         if 'tool_calls' in message:
             new_message['tool_calls'] = [
                 tool_call['function'] for tool_call in message['tool_calls']
