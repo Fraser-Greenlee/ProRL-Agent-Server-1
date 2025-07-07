@@ -1,9 +1,9 @@
 from typing import Any, Callable
 
+from litellm.exceptions import ContextWindowExceededError  # noqa
 from tenacity import (
     retry,
     retry_if_exception,
-    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
@@ -12,7 +12,6 @@ from openhands.core.exceptions import LLMNoResponseError
 from openhands.core.logger import openhands_logger as logger
 from openhands.utils.tenacity_stop import stop_if_should_exit
 
-from litellm.exceptions import ContextWindowExceededError # noqa
 
 class RetryMixin:
     """Mixin class for retry logic."""
@@ -61,10 +60,10 @@ class RetryMixin:
 
             # 🚫 Skip retry if these patterns are in the error message or it's a ContextWindowExceededError
             if (
-                "contextwindowexceedederror" in error_str
-                or "prompt is too long" in error_str
-                or "input length and `max_tokens` exceed context limit" in error_str
-                or "please reduce the length of either one" in error_str
+                'contextwindowexceedederror' in error_str
+                or 'prompt is too long' in error_str
+                or 'input length and `max_tokens` exceed context limit' in error_str
+                or 'please reduce the length of either one' in error_str
                 or isinstance(e, ContextWindowExceededError)
             ):
                 return False  # ❌ Do not retry
@@ -77,7 +76,9 @@ class RetryMixin:
             stop=stop_after_attempt(num_retries) | stop_if_should_exit(),
             reraise=True,
             retry=(
-                retry_if_exception(should_retry_exception) # changed from retry_if_exception_type to custom function
+                retry_if_exception(
+                    should_retry_exception
+                )  # changed from retry_if_exception_type to custom function
             ),  # retry only for these types
             wait=wait_exponential(
                 multiplier=retry_multiplier,

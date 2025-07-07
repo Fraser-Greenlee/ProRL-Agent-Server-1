@@ -65,7 +65,7 @@ from swegym.harness.test_spec import make_test_spec
 
 def get_instance_docker_image(instance_id: str, dataset: str | None = None) -> str:
     is_multimodal = bool(dataset and 'multimodal' in dataset.lower())
-    print("is_multimodal", is_multimodal)
+    logger.debug("is_multimodal", is_multimodal)
     if is_multimodal:
         try:
             repo, issue = instance_id.split('__', 1)
