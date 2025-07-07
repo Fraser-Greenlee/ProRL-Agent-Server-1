@@ -161,7 +161,7 @@ Follow these steps to resolve the issue:
 Important Guidelines:
     - Do not install additional packages. Avoid using `pip install` or `conda install` to install packages.
     - When running `pytest`, do not run all the tests. Only run the tests that are related to the issue you are fixing.
-    - When using `execute_bash` to run commands, avoid long-running commands. Always try to set appropriate timeout (e.g., 10 seconds).
+    - When using `execute_bash` to run commands, avoid long-running commands. Always set a timeout, preferably 10 seconds, and no more than 30 seconds.
     - Use `C-c` to interrupt long-running commands and set `is_input` to `true`.
     - Avoid running the same command more than once. If a command failed, try to fix and change the command or run a entirely different command.
     - Use `str_replace_editor` tool to edit the source code.

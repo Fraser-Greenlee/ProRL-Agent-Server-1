@@ -62,8 +62,8 @@ class RetryMixin:
             if (
                 'contextwindowexceedederror' in error_str
                 or 'prompt is too long' in error_str
-                or 'input length and `max_tokens` exceed context limit' in error_str
-                or 'please reduce the length of either one' in error_str
+                or 'exceed context limit' in error_str
+                or 'please reduce the length' in error_str
                 or isinstance(e, ContextWindowExceededError)
             ):
                 return False  # ❌ Do not retry
