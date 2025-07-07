@@ -149,6 +149,12 @@ def build_sif_for_image(image: str, dest_dir: Path, temp_base: Path) -> None:
         "singularity.def",
     ], cwd=build_dir, clean_bind_env=True)
 
+    if image.startswith("swebench/"):
+        new_sif_path = sif_path.with_name(f"docker.io_{sif_path.name}")
+        if not new_sif_path.exists():
+            os.rename(sif_path, new_sif_path)
+            sif_path = new_sif_path
+
     print(f"[OK]   {sif_path}")
 
 def main() -> None:

@@ -30,7 +30,7 @@ def _parse_args():
         '--num-instances',
         type=int,
         default=None,
-        help='Number of instances to evaluate (default: all).',
+        help='Number of instances to evaluate (default: 1).',
     )
     parser.add_argument(
         '--concurrency',

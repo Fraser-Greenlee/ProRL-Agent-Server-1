@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 DEFAULT_SAMPLING_PARAMS = {
-    "model": "openai/model/Qwen2.5-7B-Instruct",
+    "model": "hosted_vllm/Qwen/Qwen3-8B",
     "api_key": "mykey",
     "modify_params": False,
     "log_completions": False,
@@ -107,7 +107,7 @@ async def evaluate(args):
 
 def parse_args():
     p = argparse.ArgumentParser("Simple bulk evaluation with OpenHands async server")
-    p.add_argument("--dataset-path", default="/lustre/fsw/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/80-data/train.parquet")
+    p.add_argument("--dataset-path", default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/swegym/train.parquet")
     p.add_argument("--output", default="eval_results.jsonl")
     p.add_argument("--llm-addresses", nargs="+", default=["http://127.0.0.1:8000/v1"])
     p.add_argument("--host", default="localhost")

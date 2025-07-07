@@ -208,8 +208,15 @@ def process_messages_from_agent_state(
         new_message = {'role': message['role']}
         if isinstance(message['content'], str):
             new_message['content'] = message['content']
+        elif isinstance(message['content'], list):
+            if len(message['content']) == 0:
+                new_message['content'] = ''  # empty string for default
+            else:
+                new_message['content'] = message['content'][0]['text']
         else:
-            new_message['content'] = message['content'][0]['text']
+            raise RuntimeError(
+                f'Message content is not a string or list: {message["content"]}'
+            )
         if 'tool_calls' in message:
             new_message['tool_calls'] = [
                 tool_call['function'] for tool_call in message['tool_calls']
