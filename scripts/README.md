@@ -23,6 +23,8 @@ A FastAPI-based asynchronous server for OpenHands that provides REST API endpoin
 
 **Usage:**
 ```bash
+export LOG_LEVEL=ERROR
+export DEBUG=False
 python start_server.py [OPTIONS]
 ```
 
