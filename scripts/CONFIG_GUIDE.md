@@ -23,6 +23,8 @@ For a Qwen-14B model using tensor parallelism of 2:
 
 #### Recommended Command
 ```bash
+export LOG_LEVEL=ERROR
+export DEBUG=False
 python start_server.py --max-init-workers 32 --max-run-workers 32 --timeout 500
 ```
 
