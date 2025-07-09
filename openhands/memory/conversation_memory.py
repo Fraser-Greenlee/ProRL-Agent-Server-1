@@ -262,8 +262,9 @@ class ConversationMemory:
                 else:
                     action.thought = content
 
+                # we keep metadata for processing the tool call
                 # remove the tool call metadata
-                action.tool_call_metadata = None
+                # action.tool_call_metadata = None
             if role not in ('user', 'system', 'assistant', 'tool'):
                 raise ValueError(f'Invalid role: {role}')
             return [

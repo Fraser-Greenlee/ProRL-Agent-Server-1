@@ -33,13 +33,9 @@ from openhands.core.setup import create_agent
 from openhands.core.main import create_runtime, run_controller
 from openhands.controller.state.state import State
 from openhands.nvidia.logger import nvidia_logger as logger
-from openhands.events.action import (
-    Action,
-    AgentFinishAction,
-)
 
 from openhands.nvidia.registry import JobDetails
-from openhands.nvidia.utils import process_messages_from_agent_state
+from openhands.nvidia.utils import process_messages_from_agent_state, is_last_action_finish
 
 DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'xingyaoww/')
 logger.info(f'Using docker image prefix: {DOCKER_IMAGE_PREFIX}')
@@ -79,20 +75,6 @@ def get_instance_docker_image(instance_id: str, dataset: str | None = None) -> s
         image_name = f"sweb.eval.x86_64.{instance_id}".replace("__", "_s_")
         docker_prefix = DOCKER_IMAGE_PREFIX.rstrip("/")
     return f"{docker_prefix}/{image_name}".lower()
-
-def is_last_action_finish(state: State) -> bool:
-    if state and state.history:
-        last_action = next(
-            (
-                event
-                for event in reversed(state.history)
-                if isinstance(event, Action)
-            ),
-            None,
-        )
-        if isinstance(last_action, AgentFinishAction):
-            return True
-    return False
 
 def get_config(
     instance: dict,

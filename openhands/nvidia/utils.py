@@ -10,6 +10,10 @@ from pydantic import BaseModel
 
 from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
 from openhands.controller.state.state import State
+from openhands.events.action import (
+    Action,
+    AgentFinishAction,
+)
 from openhands.nvidia.logger import nvidia_logger as logger
 
 
@@ -172,6 +176,17 @@ async def process_with_timeout(
         raise
 
 
+def is_last_action_finish(state: State) -> bool:
+    if state and state.history:
+        last_action = next(
+            (event for event in reversed(state.history) if isinstance(event, Action)),
+            None,
+        )
+        if isinstance(last_action, AgentFinishAction):
+            return True
+    return False
+
+
 def process_messages_from_agent_state(
     agent: CodeActAgent, state: State
 ) -> dict[str, Any]:
@@ -195,7 +210,18 @@ def process_messages_from_agent_state(
     """
     initial_user_message = agent._get_initial_user_message(state.history)
     raw_messages = agent._get_messages(state.history, initial_user_message)
+
+    if raw_messages[-1].role != 'assistant':
+        raw_messages = raw_messages[:-1]
+
+    # patch the last message if it is an AgentFinishAction
+    if is_last_action_finish(state):
+        tool_metadata = state.history[-1].tool_call_metadata
+        if tool_metadata is not None:
+            assistant_msg = getattr(tool_metadata.model_response.choices[0], 'message')
+            raw_messages[-1].tool_calls = assistant_msg.tool_calls
     messages = agent.llm.format_messages_for_llm(raw_messages)
+
     if messages[-1]['role'] != 'assistant':
         messages = messages[:-1]
 
