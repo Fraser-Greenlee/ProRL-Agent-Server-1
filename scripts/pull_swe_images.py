@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Iterable, List, Set
 import pandas as pd
 
-
 DEFAULT_NORMAL_PREFIX = os.getenv("EVAL_DOCKER_IMAGE_PREFIX", "xingyaoww/").rstrip("/")
 OFFICIAL_MM_PREFIX = "swebench"
 
@@ -65,25 +64,7 @@ def parquet_to_instance_ids(parquet_path: Path) -> Iterable[str]:
         except Exception as e:
             print(f"[ERROR] Unable to read instance ids from {parquet_path}: {e}")
 
-
-def gather_images(
-    data_dir: Path,
-    *,
-    multimodal: bool = False,
-    prefix: str | None = None,
-) -> Set[str]:
-    """Collect image names required by a dataset dir."""
-    multimodal = "multimodal" in str(data_dir).lower()
-
-    images: set[str] = set()
-    for fname in ["train.parquet", "validation.parquet", "val.parquet"]:
-        for iid in parquet_to_instance_ids(data_dir / fname):
-            if iid:
-                images.add(instance_id_to_image(iid, multimodal=multimodal, prefix=prefix))
-    return images
-
 def sanitize_image_name(image: str) -> str:
-    """Make image name filesystem-safe."""
     return image.replace("/", "_").replace(":", "_")
 
 def _run(cmd: List[str], cwd: Path | None = None, *, clean_bind_env: bool = False) -> None:
@@ -157,6 +138,13 @@ def build_sif_for_image(image: str, dest_dir: Path, temp_base: Path) -> None:
 
     print(f"[OK]   {sif_path}")
 
+    try:
+        if build_dir.exists():
+            shutil.rmtree(build_dir, ignore_errors=True)
+            print(f"[CLEAN] Removed temp dir {build_dir}")
+    except Exception as cleanup_exc:
+        print(f"[WARN] Failed to remove temp dir {build_dir}: {cleanup_exc}")
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect Docker images from a parquet file and build Singularity SIFs.")
     parser.add_argument("--parquet-file", type=Path, required=True, help="Path to a SWE-Bench parquet file (train/validation etc.)")
@@ -171,6 +159,7 @@ def main() -> None:
     workspace_root = Path(__file__).resolve().parent.parent
 
     script_dir = Path(__file__).resolve().parent
+    print(f"[INFO] script_dir: {script_dir}")
     cache_base = script_dir / "_singularity_cache"
     for env_var in [
         "APPTAINER_TMPDIR",
@@ -185,6 +174,12 @@ def main() -> None:
                 os.environ[env_var] = str(local_path)
             except Exception as exc:
                 print(f"[WARN] Cache init failed for {env_var}: {exc}")
+    if not os.getenv("SINGULARITY_DOCKER_USERNAME"):
+        os.environ["SINGULARITY_DOCKER_USERNAME"] = "shaokunz753"
+        print("[INFO] Injected SINGULARITY_DOCKER_USERNAME for build session")
+    if not os.getenv("SINGULARITY_DOCKER_PASSWORD"):
+        os.environ["SINGULARITY_DOCKER_PASSWORD"] = "dckr_pat_lOFenPP-AXqP4HW0WUxP4-uoX6E"
+        print("[INFO] Injected SINGULARITY_DOCKER_PASSWORD for build session")
 
     dest_dir = Path(os.getenv("DEST_DIR", str(args.dest_dir or (workspace_root / "singularity_images"))))
     temp_base = Path(os.getenv("TEMP_BASE", str(args.temp_base or (dest_dir / "temp_dif"))))
@@ -257,4 +252,4 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# python pull_swe_images.py --parquet-file /lustre/fsw/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/80-data/train.parquet --start-index 1 --end-index 2 --dest-dir /lustre/fsw/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/images_process/test --log-name log_test
+# python pull_swe_images.py --parquet-file /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/train.parquet --start-index 1 --end-index 20 --dest-dir /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/singularity_images --log-name log_test
