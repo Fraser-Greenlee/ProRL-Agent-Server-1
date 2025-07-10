@@ -257,3 +257,22 @@ python run_swe.py \
   --concurrency 64 \
   --sampling-params '{"temperature": 0.3, "top_p": 0.95}'
 ```
+
+## Data Curation
+
+- **Train**:
+1. Swe-Gym - SkyRL-v0-293-data: gpt-4o-2024-08-06 or claude-3-5-sonnet-20241022 can answers correctly, provided by SWE-Gym.
+Image-path: /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/singularity_images
+Data-path: /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/train.parquet
+
+2. Swe-bench Multimodal - DevSet:
+Image-path: /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/singularity_images
+Data-path: /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/swe-bench-multimodal/data/train.parquet
+
+3.R2E-Gym-Lite - Devset:
+Image-path: TBD
+Data-path: /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/r2egym/data
+
+- **Test**:
+1. Swe-bench verified
+2. Swe-bench multimodal
