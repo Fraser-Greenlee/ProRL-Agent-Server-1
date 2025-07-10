@@ -7,6 +7,7 @@ from evaluation.utils.shared import (  # type: ignore
     EvalMetadata,
     get_default_sandbox_config_for_eval,
     update_llm_config_for_completions_logging,
+    EvalException,
 )
 
 from openhands.core.config.llm_config import LLMConfig
@@ -18,6 +19,7 @@ from openhands.core.config import (
 )
 from openhands.core.main import create_runtime, run_controller
 from openhands.core.setup import create_agent
+from openhands.controller.state.state import State
 from openhands.events.action import CmdRunAction, IPythonRunCellAction, MessageAction
 from openhands.events.observation import CmdOutputObservation
 from openhands.nvidia.logger import nvidia_logger as logger
@@ -25,6 +27,7 @@ from evaluation.utils.shared import codeact_user_response, is_fatal_evaluation_e
 
 from openhands.nvidia.utils import process_messages_from_agent_state, is_last_action_finish
 import json
+from openhands.nvidia.reward import Reward
 
 def get_instance_id(instance: dict) -> str:
     if 'instance_id' in instance:
@@ -239,18 +242,25 @@ async def run_agent(
         **run_results,
     }
 
-def evaluate_agent(run_results: dict, instance: dict):
+async def evaluate_agent(reward: Reward, run_results: dict, instance: dict):
     try:
         response = json.loads(run_results['messages'][-1]['tool_calls'][0]['arguments'])
         response = response['message']
         if '\\boxed' not in response:
-            return {'resolved': False}
-        # TODO: send to server for evaluation
-        return {'resolved': True}
+            return {'resolved': False, 'reward': 0}
+
+        # Remote server requires <think> tag
+        if '<think>' not in response:
+            response = '<think>\nfake thought\n</think>\n' + response
+        
+        # Send to server for evaluation
+        eval_results =  await reward.get_reward(instance, response)
+        return eval_results
     except:
-        return {'resolved': False}
+        return {'resolved': False, 'reward': 0}
 
 async def run(instance):
+    reward_server_ip = ['cpu-0017']
     max_iterations = 35
     sampling_params = {
         'model': 'hosted_vllm/Qwen/Qwen3-8B',
@@ -264,9 +274,17 @@ async def run(instance):
         base_url='http://127.0.0.1:8000/v1',
         **sampling_params
     )
+
+    reward = Reward(server_ip=reward_server_ip)
+
+    # test reward server
+    test_reward = await reward.get_reward(instance, '<think> fake thought </think> \\boxed{025}')
+    logger.info(f"Test reward: {test_reward}")
+
+    # run agent
     runtime, metadata, config = await initialize_agents(instance, llm_config=llm_config, max_iterations=max_iterations)
     run_results  = await run_agent(runtime, metadata, config, instance)
-    eval_results = evaluate_agent(run_results, instance)
+    eval_results = await evaluate_agent(reward, run_results, instance)
     return eval_results
 
 if __name__ == "__main__":
@@ -288,4 +306,5 @@ if __name__ == "__main__":
         run(instance)
     )
     
+    logger.info(f'Run Results: {results}')
     logger.info("Agents initialized successfully!")
