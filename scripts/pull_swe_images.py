@@ -64,6 +64,18 @@ def parquet_to_instance_ids(parquet_path: Path) -> Iterable[str]:
         except Exception as e:
             print(f"[ERROR] Unable to read instance ids from {parquet_path}: {e}")
 
+def parquet_to_docker_images(parquet_path: Path) -> Iterable[str]:
+    if not parquet_path.exists():
+        print(f"[WARN] {parquet_path} not found – skipping.")
+        return
+    try:
+        df = pd.read_parquet(parquet_path, columns=["docker_image"])
+        for img in df["docker_image"]:
+            if img:
+                yield str(img)
+    except Exception as e:
+        print(f"[DEBUG] No 'docker_image' column in {parquet_path}: {e}")
+
 def sanitize_image_name(image: str) -> str:
     return image.replace("/", "_").replace(":", "_")
 
@@ -213,12 +225,20 @@ def main() -> None:
     if not args.parquet_file.exists():
         sys.exit(f"[ERROR] Parquet file {args.parquet_file} not found")
 
-    multimodal_detect = "multimodal" in str(args.parquet_file).lower()
-    images = sorted({
-        instance_id_to_image(iid, multimodal=multimodal_detect, prefix=args.prefix)
-        for iid in parquet_to_instance_ids(args.parquet_file)
-        if iid
-    })
+    images_set: Set[str] = {img for img in parquet_to_docker_images(args.parquet_file) if img}
+
+    if images_set:
+        print(f"[INFO] Detected {len(images_set)} images via 'docker_image' column")
+    else:
+        multimodal_detect = "multimodal" in str(args.parquet_file).lower()
+        images_set = {
+            instance_id_to_image(iid, multimodal=multimodal_detect, prefix=args.prefix)
+            for iid in parquet_to_instance_ids(args.parquet_file)
+            if iid
+        }
+        print(f"[INFO] Detected {len(images_set)} images via instance_id conversion")
+
+    images = sorted(images_set)
     total_images = len(images)
     if total_images == 0:
         sys.exit("[ERROR] No images found – aborting.")
