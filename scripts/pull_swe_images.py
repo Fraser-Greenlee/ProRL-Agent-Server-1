@@ -174,12 +174,8 @@ def main() -> None:
                 os.environ[env_var] = str(local_path)
             except Exception as exc:
                 print(f"[WARN] Cache init failed for {env_var}: {exc}")
-    if not os.getenv("SINGULARITY_DOCKER_USERNAME"):
-        os.environ["SINGULARITY_DOCKER_USERNAME"] = "shaokunz753"
-        print("[INFO] Injected SINGULARITY_DOCKER_USERNAME for build session")
-    if not os.getenv("SINGULARITY_DOCKER_PASSWORD"):
-        os.environ["SINGULARITY_DOCKER_PASSWORD"] = "dckr_pat_lOFenPP-AXqP4HW0WUxP4-uoX6E"
-        print("[INFO] Injected SINGULARITY_DOCKER_PASSWORD for build session")
+    if not os.getenv("SINGULARITY_DOCKER_USERNAME") or not os.getenv("SINGULARITY_DOCKER_PASSWORD"):
+        raise RuntimeError("SINGULARITY_DOCKER_USERNAME and SINGULARITY_DOCKER_PASSWORD must be set")
 
     dest_dir = Path(os.getenv("DEST_DIR", str(args.dest_dir or (workspace_root / "singularity_images"))))
     temp_base = Path(os.getenv("TEMP_BASE", str(args.temp_base or (dest_dir / "temp_dif"))))
