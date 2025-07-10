@@ -80,21 +80,6 @@ def get_instance_docker_image(instance_id: str, dataset: str | None = None) -> s
 def get_instance_docker_image_r2egym(instance) -> str:
     return instance["docker_image"]
 
-
-def is_last_action_finish(state: State) -> bool:
-    if state and state.history:
-        last_action = next(
-            (
-                event
-                for event in reversed(state.history)
-                if isinstance(event, Action)
-            ),
-            None,
-        )
-        if isinstance(last_action, AgentFinishAction):
-            return True
-    return False
-
 def get_config(
     instance: dict,
     metadata: EvalMetadata,
