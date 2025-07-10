@@ -3,9 +3,34 @@ Migrated test script originally from openhands.nvidia.async_server
 """
 
 import time
-
+import numpy as np
+import pandas as pd
+import hashlib
 from openhands.nvidia.async_server import OpenHandsServer
 
+
+def pre_process_r2egym_instance(r2egym_instance):
+
+    r2egym_instance = pd.Series(r2egym_instance)
+    r2egym_instance = r2egym_instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+    r2egym_instance['data_source'] = 'swebench'  # keep using swebench handler logic
+    r2egym_instance['instance_id'] = (
+        r2egym_instance['docker_image'].replace('/', '_').replace(':', '_')
+    )
+    docker_image = r2egym_instance['docker_image']
+    if ':' in docker_image:
+        repo_part, version_part = docker_image.split(':', 1)
+    else:
+        repo_part, version_part = docker_image, 'latest'
+    r2egym_instance['repo'] = repo_part
+    r2egym_instance['version'] = version_part
+
+    if ('base_commit' not in r2egym_instance) or pd.isna(r2egym_instance['base_commit']):
+        if 'commit_hash' in r2egym_instance and not pd.isna(r2egym_instance['commit_hash']):
+            r2egym_instance['base_commit'] = r2egym_instance['commit_hash']
+        else:
+            r2egym_instance['base_commit'] = version_part
+    return r2egym_instance
 
 def test_server(
     total_jobs: int = 4, max_parallel_jobs: int = 2, allow_skip_eval: bool = False
@@ -15,16 +40,15 @@ def test_server(
     import numpy as np
     import pandas as pd
 
-    dataset = pd.read_parquet(
-        '/lustre/fsw/portfolios/nvr/users/mingjiel/data/swegym/train.parquet'
+    r2egym_dataset = pd.read_parquet(
+        '/lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/r2egym/data/train-00000-of-00008.parquet'
     )
-    instance = dataset.iloc[0]['instance']
-    instance = pd.Series(instance)
-    instance = instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+    r2egym_instance = r2egym_dataset.iloc[-2]
+    r2egym_instance = pre_process_r2egym_instance(r2egym_instance)
 
     requests = []
     for i in range(total_jobs):
-        cur = instance.copy(deep=True)
+        cur = r2egym_instance.copy(deep=True)
         cur['trajectory_id'] = i
         requests.append(cur.to_dict())
 
@@ -53,21 +77,22 @@ def test_server(
 
     # Process instances using ThreadPoolExecutor for parallel processing
     with ThreadPoolExecutor(max_workers=max_parallel_jobs) as executor:
-        futures = [
-            executor.submit(server.process, inst, dict(sampling_params))
-            for inst in requests
-        ]
+        futures = []
+        for inst in requests:
+            short_id = hashlib.sha1(
+                f'{inst["instance_id"]}_{inst["trajectory_id"]}'.encode()
+            ).hexdigest()[:12]
+            futures.append(
+                executor.submit(server.process, inst, dict(sampling_params), short_id)
+            )
         results = [future.result() for future in futures]
-
     print('Job submission finished')
-    # print(results)
     server.stop()
     return results
 
-
 if __name__ == '__main__':
     start = time.time()
-    results = test_server(total_jobs=5, max_parallel_jobs=5, allow_skip_eval=False)
+    results = test_server(total_jobs=2, max_parallel_jobs=2, allow_skip_eval=False)
     # Don't print full messages
     for result in results:
         assert type(result['messages']) is list, (

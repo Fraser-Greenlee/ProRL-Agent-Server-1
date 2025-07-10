@@ -278,28 +278,22 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
     from openhands.events.observation import CmdOutputObservation
     import tempfile, json, re
 
-    try:
-        from r2egym.repo_analysis.execution_log_parser import (
-            parse_log_fn,  # type: ignore
-            decolor_dict_keys,  # type: ignore
-        )
-    except ModuleNotFoundError:
-        def _basic_pytest_parser(log: str) -> dict[str, str]:
-            status_map: dict[str, str] = {}
-            for line in log.split("\n"):
-                if line.startswith(("PASSED", "FAILED", "ERROR", "SKIPPED")):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        status_map[parts[1].split(" - ")[0]] = parts[0]
-            return status_map
+    def _basic_pytest_parser(log: str) -> dict[str, str]:
+        status_map: dict[str, str] = {}
+        for line in log.split("\n"):
+            if line.startswith(("PASSED", "FAILED", "ERROR", "SKIPPED")):
+                parts = line.split()
+                if len(parts) >= 2:
+                    status_map[parts[1].split(" - ")[0]] = parts[0]
+        return status_map
 
-        def parse_log_fn(_repo: str):  # noqa: D401
-            """Return the basic pytest parser when r2egym is unavailable."""
-            return _basic_pytest_parser
+    def parse_log_fn(_repo: str):  # noqa: D401
+        """Return the basic pytest parser when r2egym is unavailable."""
+        return _basic_pytest_parser
 
-        def decolor_dict_keys(d: dict[str, str]) -> dict[str, str]:
-            ansi_re = re.compile(r"\u001b\[[0-9;]*m")
-            return {ansi_re.sub("", k): v for k, v in d.items()}
+    def decolor_dict_keys(d: dict[str, str]) -> dict[str, str]:
+        ansi_re = re.compile(r"\u001b\[[0-9;]*m")
+        return {ansi_re.sub("", k): v for k, v in d.items()}
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".diff") as tmp:
         tmp.write(git_patch.encode())
