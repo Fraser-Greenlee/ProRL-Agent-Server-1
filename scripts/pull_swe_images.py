@@ -248,4 +248,3 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-# python pull_swe_images.py --parquet-file /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/train.parquet --start-index 1 --end-index 20 --dest-dir /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/singularity_images --log-name log_test
