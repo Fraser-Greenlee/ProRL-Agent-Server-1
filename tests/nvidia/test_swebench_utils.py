@@ -308,9 +308,19 @@ class TestRunAgent:
         # Setup mocks
         mock_agent = Mock()
         mock_agent._get_initial_user_message.return_value = 'initial message'
+
+        # Create mock message objects with .role attributes
+        mock_user_message = Mock()
+        mock_user_message.role = 'user'
+        mock_user_message.content = 'test message'
+
+        mock_assistant_message = Mock()
+        mock_assistant_message.role = 'assistant'
+        mock_assistant_message.content = 'test response'
+
         mock_agent._get_messages.return_value = [
-            {'role': 'user', 'content': 'test message'},
-            {'role': 'assistant', 'content': 'test response'},
+            mock_user_message,
+            mock_assistant_message,
         ]
         mock_agent.llm.format_messages_for_llm.return_value = [
             {'role': 'user', 'content': 'test message'},
@@ -350,24 +360,29 @@ class TestRunAgent:
     async def test_run_with_none_state_raises_eval_exception(
         self, mock_get_instruction
     ):
-        """Test that None state raises EvalException"""
-        from evaluation.benchmarks.swe_bench.run_infer import EvalException
-
+        """Test that None state raises Exception due to failed message processing"""
         mock_get_instruction.return_value = Mock()
 
-        with patch('openhands.nvidia.swe_agent.utils.create_agent'):
+        with patch(
+            'openhands.nvidia.swe_agent.utils.create_agent'
+        ) as mock_create_agent:
             with patch(
                 'openhands.nvidia.swe_agent.utils.run_controller'
             ) as mock_run_controller:
-                mock_run_controller.return_value = None
+                with patch(
+                    'openhands.nvidia.swe_agent.utils.complete_runtime'
+                ) as mock_complete:
+                    mock_create_agent.return_value = Mock()
+                    mock_run_controller.return_value = None
+                    mock_complete.return_value = {'git_patch': 'test patch'}
 
-                runtime = Mock()
-                metadata = Mock()
-                config = Mock()
-                instance = pd.Series({'instance_id': 'test'})
+                    runtime = Mock()
+                    metadata = Mock()
+                    config = Mock()
+            instance = pd.Series({'instance_id': 'test'})
 
-                with pytest.raises(EvalException, match='Final state is None'):
-                    await run_agent(runtime, metadata, config, instance)
+            with pytest.raises(Exception, match='Failed to retrieve agent messages'):
+                await run_agent(runtime, metadata, config, instance)
 
 
 class TestEvaluateAgent:
@@ -482,9 +497,9 @@ class TestEvaluateAgent:
 class TestApplyPatchAndEvaluate:
     """Test the _apply_patch_and_evaluate function"""
 
-    @patch('openhands.nvidia.swe_agent.utils.make_test_spec')
+    @patch('swegym.harness.test_spec.make_test_spec')
     @patch('openhands.nvidia.swe_agent.utils._process_git_patch')
-    @patch('openhands.nvidia.swe_agent.utils.get_eval_report')
+    @patch('swegym.harness.grading.get_eval_report')
     def test_successful_patch_application_and_evaluation(
         self, mock_get_eval, mock_process_patch, mock_make_test_spec
     ):
@@ -526,10 +541,22 @@ class TestApplyPatchAndEvaluate:
         mock_make_test_spec.return_value = test_spec
 
         mock_get_eval.return_value = {
-            'test_instance': {'resolved': True, 'passed': 5, 'failed': 0}
+            'django__django-12345': {'resolved': True, 'passed': 5, 'failed': 0}
         }
 
-        instance = pd.Series({'instance_id': 'test_instance', 'patch': 'test patch'})
+        instance = pd.Series(
+            {
+                'instance_id': 'django__django-12345',  # Use proper SWE-bench instance ID format
+                'repo': 'django/django',  # Use a real repo name that exists in the mapping
+                'version': '3.0',
+                'base_commit': 'abc123',
+                'problem_statement': 'Test problem statement',
+                'hints_text': 'Test hints',
+                'test_patch': 'test patch content',
+                'PASS_TO_PASS': '[]',
+                'FAIL_TO_PASS': '[]',
+            }
+        )
         git_patch = 'diff --git a/test.py'
 
         # Mock time.time to return consistent values
@@ -543,7 +570,7 @@ class TestApplyPatchAndEvaluate:
         assert result['report']['resolved'] is True
 
     @patch('openhands.nvidia.swe_agent.utils._process_git_patch')
-    @patch('openhands.nvidia.swe_agent.utils.make_test_spec')
+    @patch('swegym.harness.test_spec.make_test_spec')
     def test_patch_application_failure(self, mock_make_test_spec, mock_process_patch):
         """Test patch application failure"""
         mock_runtime = Mock()
@@ -558,7 +585,19 @@ class TestApplyPatchAndEvaluate:
         mock_process_patch.return_value = 'processed patch'
         mock_make_test_spec.return_value = Mock(eval_script='test script')
 
-        instance = pd.Series({'instance_id': 'test_instance'})
+        instance = pd.Series(
+            {
+                'instance_id': 'django__django-12345',  # Use proper SWE-bench instance ID format
+                'repo': 'django/django',  # Use a real repo name that exists in the mapping
+                'version': '3.0',
+                'base_commit': 'abc123',
+                'problem_statement': 'Test problem statement',
+                'hints_text': 'Test hints',
+                'test_patch': 'test patch content',
+                'PASS_TO_PASS': '[]',
+                'FAIL_TO_PASS': '[]',
+            }
+        )
         git_patch = 'diff --git a/test.py'
 
         with pytest.raises(RuntimeError, match='APPLY_PATCH_FAIL'):

@@ -4,7 +4,7 @@ import queue
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any
+from typing import Any, Optional
 
 from openhands.core.config.llm_config import LLMConfig
 from openhands.nvidia.logger import nvidia_logger as logger
@@ -14,6 +14,7 @@ from openhands.nvidia.registry import (
     get_registered_functions,
     is_registered_handler,
 )
+from openhands.nvidia.reward import Reward
 from openhands.nvidia.timer import (
     PausableTimer,
     TimeoutError,
@@ -22,6 +23,7 @@ from openhands.nvidia.timer import (
 )
 from openhands.nvidia.utils import (
     clear_queue,
+    get_instance_id,
     get_singularity_job_pids,
     kill_all_singularity_jobs,
 )
@@ -35,6 +37,7 @@ class OpenHandsServer:
         max_run_workers: int = 5,
         max_eval_workers: int | None = None,
         allow_skip_eval: bool = True,
+        reward_server_ip: list[str] | None = None,
     ):
         """Create server.
 
@@ -79,10 +82,19 @@ class OpenHandsServer:
         self._job_details_lock = threading.RLock()  # Separate lock for job details dict
         self._address_lock = threading.RLock()  # Separate lock for address list
 
+        self.reward: Optional[Reward] = None
+        if reward_server_ip is not None:
+            logger.info(f'Setting up reward with server IP: {reward_server_ip}')
+            self.reward = Reward(server_ip=reward_server_ip)
+        else:
+            logger.warning(
+                'No reward server IP provided. Evaluations would only work for swebench problems.'
+            )
+
     def get_unique_id(self, instance, max_retries=10):
         for _ in range(max_retries):
             uid = str(uuid.uuid4())
-            uid = f'{instance["instance_id"]}_{instance["trajectory_id"]}_{uid}'
+            uid = f'{get_instance_id(instance)}_{instance["trajectory_id"]}_{uid}'
             with self._job_details_lock:
                 if uid not in self._job_details:
                     return uid
@@ -163,7 +175,7 @@ class OpenHandsServer:
             if len(self.weighted_addresses) == 0:
                 raise ValueError('No LLM server addresses added')
 
-        dataset_type = getattr(instance, 'data_source', 'swebench')
+        dataset_type = instance.get('data_source', 'swebench')
         if not is_registered_handler(dataset_type):
             raise FunctionNotRegisteredError(
                 f'Dataset type {dataset_type} is not registered'
@@ -247,7 +259,9 @@ class OpenHandsServer:
             with self._state_lock:
                 self._active_init_jobs.add(job_id)
 
-            dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
+            if job_details.instance is None:
+                raise RuntimeError('Instance is not initialized')
+            dataset_type = job_details.instance.get('data_source', 'swebench')
             _init_func = get_registered_functions('init', dataset_type)
 
             try:
@@ -262,8 +276,7 @@ class OpenHandsServer:
                 with phase_context(job_details.timer, 'init'):
                     # Use timeout-aware coroutine execution
                     init_coro = _init_func(
-                        job_details.instance,
-                        job_details.llm_config,
+                        job_details=job_details,
                         sid=job_id,
                         max_iterations=job_details.max_iterations,
                     )
@@ -329,7 +342,9 @@ class OpenHandsServer:
             with self._state_lock:
                 self._active_run_jobs.add(job_id)
 
-            dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
+            if job_details.instance is None:
+                raise RuntimeError('Instance is not initialized')
+            dataset_type = job_details.instance.get('data_source', 'swebench')
             _run_func = get_registered_functions('run', dataset_type)
 
             try:
@@ -344,10 +359,8 @@ class OpenHandsServer:
                 with phase_context(job_details.timer, 'run'):
                     # Use timeout-aware coroutine execution
                     run_coro = _run_func(
-                        job_details.runtime,
-                        job_details.metadata,
-                        job_details.config,
-                        job_details.instance,
+                        job_details=job_details,
+                        sid=job_id,
                     )
                     run_results = await run_with_timeout_awareness(
                         job_details.timer, run_coro
@@ -425,7 +438,9 @@ class OpenHandsServer:
             with self._state_lock:
                 self._active_eval_jobs.add(job_id)
 
-            dataset_type = getattr(job_details.instance, 'data_source', 'swebench')
+            if job_details.instance is None:
+                raise RuntimeError('Instance is not initialized')
+            dataset_type = job_details.instance.get('data_source', 'swebench')
             _eval_func = get_registered_functions('eval', dataset_type)
 
             try:
@@ -443,6 +458,7 @@ class OpenHandsServer:
                         job_details,
                         sid=f'eval_{job_id}',
                         allow_skip=self.allow_skip_eval,
+                        reward=self.reward,
                     )
                     eval_report = await run_with_timeout_awareness(
                         job_details.timer, eval_coro

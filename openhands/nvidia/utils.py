@@ -1,7 +1,9 @@
 import asyncio
+import copy
 import json
 import queue
 import subprocess
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -15,6 +17,7 @@ from openhands.events.action import (
     AgentFinishAction,
 )
 from openhands.nvidia.logger import nvidia_logger as logger
+from openhands.nvidia.registry import JobDetails
 
 
 def clear_queue(q: queue.Queue):
@@ -287,3 +290,228 @@ def process_messages_from_agent_state(
         'tools': tools,
         'end_properly': True,
     }
+
+
+def get_messages_from_partial_result(job_details: JobDetails) -> dict[str, Any]:
+    if job_details.agent is None or job_details.controller is None:
+        return {'messages': [], 'tools': [], 'end_properly': True}
+    controller = job_details.controller
+    state = controller.get_state()
+    assert state is not None, (
+        'Error in get_messages_from_partial_result: state is None.'
+    )
+    return process_messages_from_agent_state(job_details.agent, state)
+
+
+def get_instance_id(instance: dict) -> str:
+    if 'instance_id' in instance:
+        if instance['instance_id'] is not None:
+            return instance['instance_id']
+    data_source = instance.get('data_source', 'unknown')
+    if 'extra_info' in instance:
+        split = instance['extra_info'].get('split', 'unknown')
+        index = instance['extra_info'].get('index', 'unknown')
+        name = instance['extra_info'].get('name', 'unknown')
+    else:
+        split = 'unknown'
+        index = 'unknown'
+        name = 'unknown'
+    return f'{data_source}_{name}_{split}_{index}'
+
+
+def initialize_exception(job_details: JobDetails, e: Exception):
+    tb = traceback.format_exc()
+    instance_id = (
+        job_details.instance.get('instance_id', None)
+        if job_details.instance is not None
+        else None
+    )
+    trajectory_id = (
+        job_details.instance.get('trajectory_id', None)
+        if job_details.instance is not None
+        else None
+    )
+    return {
+        'instance_id': instance_id,
+        'trajectory_id': trajectory_id,
+        'git_patch': None,
+        'success': False,
+        'error': f'Error in init: {str(e)}',
+        'traceback': tb,
+        'finish': False,
+        'messages': [],
+        'tools': [],
+        'end_properly': False,
+        'resolved': False,
+        'critical_error': 'init',
+    }
+
+
+def run_exception(job_details: JobDetails, e: Exception):
+    tb = traceback.format_exc()
+    instance_id = (
+        job_details.instance.get('instance_id', None)
+        if job_details.instance is not None
+        else None
+    )
+    trajectory_id = (
+        job_details.instance.get('trajectory_id', None)
+        if job_details.instance is not None
+        else None
+    )
+    git_patch = (
+        job_details.run_results.get('git_patch', None)
+        if job_details.run_results is not None
+        else None
+    )
+    success = (
+        job_details.run_results.get('success', False)
+        if job_details.run_results is not None
+        else False
+    )
+    finish = (
+        job_details.run_results.get('finish', False)
+        if job_details.run_results is not None
+        else False
+    )
+    messages = (
+        job_details.run_results.get('messages', [])
+        if job_details.run_results is not None
+        else []
+    )
+    tools = (
+        job_details.run_results.get('tools', [])
+        if job_details.run_results is not None
+        else []
+    )
+    end_properly = (
+        job_details.run_results.get('end_properly', True)
+        if job_details.run_results is not None
+        else True
+    )
+    if len(messages) == 0:
+        partial_result = get_messages_from_partial_result(job_details)
+        messages = partial_result['messages']
+        tools = partial_result['tools']
+        end_properly = partial_result['end_properly']
+    return {
+        'instance_id': instance_id,
+        'trajectory_id': trajectory_id,
+        'git_patch': git_patch,
+        'success': success,
+        'error': f'Error in run agent: {str(e)}',
+        'traceback': tb,
+        'finish': finish,
+        'messages': messages,
+        'tools': tools,
+        'end_properly': end_properly,
+        'resolved': False,
+        'critical_error': 'run',
+    }
+
+
+def eval_exception(job_details: JobDetails, e: Exception):
+    tb = traceback.format_exc()
+    instance_id = (
+        job_details.instance.get('instance_id', None)
+        if job_details.instance is not None
+        else None
+    )
+    trajectory_id = (
+        job_details.instance.get('trajectory_id', None)
+        if job_details.instance is not None
+        else None
+    )
+    git_patch = (
+        job_details.run_results.get('git_patch', None)
+        if job_details.run_results is not None
+        else None
+    )
+    success = (
+        job_details.run_results.get('success', False)
+        if job_details.run_results is not None
+        else False
+    )
+    finish = (
+        job_details.run_results.get('finish', False)
+        if job_details.run_results is not None
+        else False
+    )
+    messages = (
+        job_details.run_results.get('messages', [])
+        if job_details.run_results is not None
+        else []
+    )
+    tools = (
+        job_details.run_results.get('tools', [])
+        if job_details.run_results is not None
+        else []
+    )
+    end_properly = (
+        job_details.run_results.get('end_properly', True)
+        if job_details.run_results is not None
+        else True
+    )
+    if len(messages) == 0:
+        partial_result = get_messages_from_partial_result(job_details)
+        messages = partial_result['messages']
+        tools = partial_result['tools']
+        end_properly = partial_result['end_properly']
+    return {
+        'instance_id': instance_id,
+        'trajectory_id': trajectory_id,
+        'git_patch': git_patch,
+        'success': success,
+        'error': f'Error in eval: {str(e)}',
+        'traceback': tb,
+        'finish': finish,
+        'messages': messages,
+        'tools': tools,
+        'end_properly': end_properly,
+        'resolved': False,
+        'critical_error': 'eval',
+    }
+
+
+def final_result(job_details: JobDetails):
+    if job_details.results is None:
+        if job_details.run_results is None:
+            instance_id = (
+                job_details.instance.get('instance_id', None)
+                if job_details.instance is not None
+                else None
+            )
+            trajectory_id = (
+                job_details.instance.get('trajectory_id', None)
+                if job_details.instance is not None
+                else None
+            )
+            partial_result = get_messages_from_partial_result(job_details)
+            messages = partial_result['messages']
+            tools = partial_result['tools']
+            end_properly = partial_result['end_properly']
+            result = {
+                'instance_id': instance_id,
+                'trajectory_id': trajectory_id,
+                'resolved': job_details.eval_results['resolved']
+                if job_details.eval_results is not None
+                else False,
+                'critical_error': 'timeout' if job_details.timeout_error else None,
+                'messages': messages,
+                'tools': tools,
+                'end_properly': end_properly,
+            }
+        else:
+            result = {
+                **job_details.run_results,
+                'resolved': job_details.eval_results['resolved']
+                if job_details.eval_results is not None
+                else False,
+                'critical_error': 'timeout' if job_details.timeout_error else None,
+            }
+    else:
+        result = copy.deepcopy(job_details.results)
+        if job_details.timeout_error:
+            result['critical_error'] = 'timeout'
+
+    return result

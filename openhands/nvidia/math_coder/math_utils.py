@@ -17,22 +17,22 @@ from openhands.core.config import (
     AgentConfig,
     OpenHandsConfig,
 )
-from openhands.core.main import create_runtime, run_controller
-from openhands.core.setup import create_agent
+from openhands.core.main import create_runtime
+from openhands.core.setup import create_agent, create_controller
 from openhands.controller.state.state import State
 from openhands.events.action import CmdRunAction, IPythonRunCellAction, MessageAction
 from openhands.events.observation import CmdOutputObservation
 from openhands.nvidia.logger import nvidia_logger as logger
+from openhands.core.logger import openhands_logger as openhands_logger
 from evaluation.utils.shared import codeact_user_response, is_fatal_evaluation_error
 
-from openhands.nvidia.utils import process_messages_from_agent_state, is_last_action_finish
+from openhands.nvidia.utils import process_messages_from_agent_state, is_last_action_finish, get_messages_from_partial_result
 import json
 from openhands.nvidia.reward import Reward
+from openhands.nvidia.registry import JobDetails
+from openhands.nvidia.utils import get_instance_id
+from openhands.nvidia.controller import run_controller_with_controller
 
-def get_instance_id(instance: dict) -> str:
-    if 'instance_id' in instance:
-        return instance['instance_id']
-    return f'{instance["data_source"]}_{instance["extra_info"]["index"]}'
 
 def get_config(
     instance: dict,
@@ -132,7 +132,7 @@ async def initialize_agents(
         sid:str | None = None,
         eval_output_dir:str = "/root",
         git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a",
-        dataset:str = "math_code",
+        dataset:str = "deepscaler",
         data_split:str = "train",
         max_iterations:int = 1,
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
@@ -175,49 +175,63 @@ def initialize_runtime(runtime: Runtime, instance: dict, metadata: EvalMetadata)
 
     This function is called before the runtime is used to run the agent.
     """
-    logger.info(f'{"-" * 50} BEGIN Runtime Initialization Fn {"-" * 50}')
+    openhands_logger.info(f'{"-" * 50} BEGIN Runtime Initialization Fn {"-" * 50}')
     obs: CmdOutputObservation
 
     # Set instance id
     action = CmdRunAction(command='mkdir -p /workspace')
     action.set_hard_timeout(5)
-    logger.info(action, extra={'msg_type': 'ACTION'})
+    openhands_logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     action = CmdRunAction(command='cd /workspace')
     action.set_hard_timeout(5)
-    logger.info(action, extra={'msg_type': 'ACTION'})
+    openhands_logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     assert obs.exit_code == 0
 
     action = IPythonRunCellAction(code='%pip install numpy scipy sympy')
     action.set_hard_timeout(30)
-    logger.info(action, extra={'msg_type': 'ACTION'})
+    openhands_logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
 
     action = IPythonRunCellAction(code='import numpy, scipy, sympy, math, cmath')
     action.set_hard_timeout(10)
-    logger.info(action, extra={'msg_type': 'ACTION'})
+    openhands_logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
 
-    logger.info(f'{"-" * 50} END Runtime Initialization Fn {"-" * 50}')
+    openhands_logger.info(f'{"-" * 50} END Runtime Initialization Fn {"-" * 50}')
 
 async def run_agent(
-        runtime:Runtime,
-        metadata:EvalMetadata,
-        config:OpenHandsConfig,
-        instance:dict,
+        job_details: JobDetails,
+        sid: str | None = None,
     ) -> dict[str, object]:
+    runtime = job_details.runtime
+    metadata = job_details.metadata
+    config = job_details.config
+    instance = job_details.instance
+
     message_action = get_instruction(instance, metadata)
     try:
         agent = create_agent(config)
-        state: State | None = await run_controller(
+        job_details.agent = agent
+        controller, initial_state = create_controller(
+            agent=agent,
+            runtime=runtime,
+            config=config,
+            replay_events=None,
+        )
+        job_details.controller = controller
+        state: State | None = await run_controller_with_controller(
                 config=config,
                 initial_user_action=message_action,
+                sid=sid,
                 runtime=runtime,
                 agent=agent,
                 fake_user_response_fn=codeact_user_response,
+                controller=controller,
+                initial_state=initial_state,
             )
         # if fatal error, throw EvalError to log.
         if state is None:
@@ -258,53 +272,3 @@ async def evaluate_agent(reward: Reward, run_results: dict, instance: dict):
         return eval_results
     except:
         return {'resolved': False, 'reward': 0}
-
-async def run(instance):
-    reward_server_ip = ['cpu-0017']
-    max_iterations = 35
-    sampling_params = {
-        'model': 'hosted_vllm/Qwen/Qwen3-8B',
-        'api_key': 'mykey',
-        'modify_params': False,
-        'log_completions': True,
-        'native_tool_calling': True,
-        'temperature': 0.6,
-    }
-    llm_config = LLMConfig(
-        base_url='http://127.0.0.1:8000/v1',
-        **sampling_params
-    )
-
-    reward = Reward(server_ip=reward_server_ip)
-
-    # test reward server
-    test_reward = await reward.get_reward(instance, '<think> fake thought </think> \\boxed{025}')
-    logger.info(f"Test reward: {test_reward}")
-
-    # run agent
-    runtime, metadata, config = await initialize_agents(instance, llm_config=llm_config, max_iterations=max_iterations)
-    run_results  = await run_agent(runtime, metadata, config, instance)
-    eval_results = await evaluate_agent(reward, run_results, instance)
-    return eval_results
-
-if __name__ == "__main__":
-
-    # get instance
-    import pandas as pd
-
-    dataset = pd.read_parquet(
-        '/lustre/fsw/portfolios/nvr/users/mingjiel/data/deepscaler/aime.parquet'
-    )
-    instance = dataset.iloc[1]
-    instance = pd.Series(instance)
-    instance = instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
-    instance = instance.to_dict()
-    print(instance)
-    
-    # Initialize the agents
-    results = asyncio.run(
-        run(instance)
-    )
-    
-    logger.info(f'Run Results: {results}')
-    logger.info("Agents initialized successfully!")
