@@ -13,6 +13,7 @@ import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
 from openhands.core.config.llm_config import LLMConfig  # noqa: E402
+from openhands.nvidia.registry import JobDetails  # noqa: E402
 from openhands.nvidia.swe_agent.utils import (  # noqa: E402
     evaluate_agent,
     initialize_agents,
@@ -305,9 +306,9 @@ class TestRealRuntimeIntegration:
         """Test full end-to-end evaluation with real runtime and real golden patch execution"""
         gold_patch = self.instance['patch']
         test_instance = self.instance.copy()
-        test_instance['instance_id'] = f'{self.instance["instance_id"]}_real_eval_test'
+        test_instance['instance_id'] = f'{self.instance["instance_id"]}'
 
-        llm_config = LLMConfig(
+        LLMConfig(
             model='gpt-4o-mini',
             base_url='https://api.openai.com/v1',
             api_key=os.environ.get('OPENAI_API_KEY', 'dummy-key'),
@@ -326,7 +327,6 @@ class TestRealRuntimeIntegration:
             result = await evaluate_agent(
                 gold_patch,
                 test_instance,
-                llm_config=llm_config,
                 sid=f'real_eval_{test_instance["instance_id"]}',
             )
 
@@ -370,10 +370,8 @@ class TestRealRuntimeIntegration:
             if 'Runtime' in str(e) or 'connection' in str(e).lower():
                 raise
             else:
-                # For patch application or test execution failures,
-                # we still consider this a successful test of the infrastructure
                 print(f'Non-critical evaluation error: {e}')
-                pass
+                raise
 
     @pytest.mark.asyncio
     async def test_run_agent_with_real_runtime_mock_llm(self):
@@ -429,15 +427,23 @@ I have implemented the necessary changes to resolve this issue.""",
 
         def mock_llm_response(*args, **kwargs):
             nonlocal response_index
+            # Import litellm types for proper response structure
+            from litellm.types.utils import ModelResponse
+
             # Return the next mock response
             if response_index < len(mock_responses):
                 response = mock_responses[response_index]
                 response_index += 1
 
-                # Mock the litellm response format (not OpenAI format)
-                mock_response = {
-                    'choices': [
+                # Create a proper ModelResponse object
+                mock_response = ModelResponse(
+                    id='mock_response_id',
+                    object='chat.completion',
+                    created=1234567890,
+                    model='gpt-4o-mini',
+                    choices=[
                         {
+                            'index': 0,
                             'message': {
                                 'role': response['role'],
                                 'content': response['content'],
@@ -445,19 +451,24 @@ I have implemented the necessary changes to resolve this issue.""",
                             'finish_reason': response['finish_reason'],
                         }
                     ],
-                    'usage': {
+                    usage={
                         'prompt_tokens': 100,
                         'completion_tokens': 50,
                         'total_tokens': 150,
                     },
-                }
+                )
 
                 return mock_response
             else:
                 # If we run out of responses, return a finish message
-                mock_response = {
-                    'choices': [
+                mock_response = ModelResponse(
+                    id='mock_response_id_final',
+                    object='chat.completion',
+                    created=1234567890,
+                    model='gpt-4o-mini',
+                    choices=[
                         {
+                            'index': 0,
                             'message': {
                                 'role': 'assistant',
                                 'content': 'I have completed the task.',
@@ -465,12 +476,12 @@ I have implemented the necessary changes to resolve this issue.""",
                             'finish_reason': 'stop',
                         }
                     ],
-                    'usage': {
+                    usage={
                         'prompt_tokens': 50,
                         'completion_tokens': 25,
                         'total_tokens': 75,
                     },
-                }
+                )
 
                 return mock_response
 
@@ -486,6 +497,16 @@ I have implemented the necessary changes to resolve this issue.""",
             assert runtime is not None
             assert hasattr(runtime, 'run_action')
 
+            # Create JobDetails object with all necessary fields
+            job_details = JobDetails(
+                job_id=f'test_job_{test_instance["instance_id"]}',
+                instance=test_instance,
+                runtime=runtime,
+                metadata=metadata,
+                config=config,
+                llm_config=llm_config,
+            )
+
             # Mock the LLM calls while keeping everything else real
             with patch('openai.AsyncOpenAI') as mock_openai:
                 # Set up the mock OpenAI client
@@ -500,8 +521,11 @@ I have implemented the necessary changes to resolve this issue.""",
                     'openhands.llm.llm.litellm_completion',
                     side_effect=mock_llm_response,
                 ):
-                    # Run the agent with real runtime but mocked LLM
-                    result = await run_agent(runtime, metadata, config, test_instance)
+                    # Run the agent with JobDetails object
+                    result = await run_agent(
+                        job_details=job_details,
+                        sid=f'run_agent_test_{test_instance["instance_id"]}',
+                    )
 
                     # Verify we got real results
                     assert isinstance(result, dict)

@@ -30,13 +30,14 @@ from openhands.core.config import (
     AgentConfig,
     OpenHandsConfig,
 )
-from openhands.core.setup import create_agent
-from openhands.core.main import create_runtime, run_controller
+from openhands.core.setup import create_agent, create_controller
+from openhands.core.main import create_runtime
+from openhands.nvidia.controller import run_controller_with_controller
 from openhands.controller.state.state import State
 from openhands.nvidia.logger import nvidia_logger as logger
 
 from openhands.nvidia.registry import JobDetails
-from openhands.nvidia.utils import process_messages_from_agent_state, is_last_action_finish
+from openhands.nvidia.utils import process_messages_from_agent_state, is_last_action_finish, get_messages_from_partial_result
 
 DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'xingyaoww/')
 logger.info(f'Using docker image prefix: {DOCKER_IMAGE_PREFIX}')
@@ -216,21 +217,36 @@ async def initialize_agents(
     return runtime, metadata, config
 
 async def run_agent(
-        runtime:Runtime,
-        metadata:EvalMetadata,
-        config:OpenHandsConfig,
-        instance:dict,
+        job_details: JobDetails,
+        sid: str | None = None,
     ) -> dict[str, object]:
+    runtime = job_details.runtime
+    metadata = job_details.metadata
+    config = job_details.config
+    instance = job_details.instance
+
     message_action = get_instruction(instance, metadata)
     try:
         agent = create_agent(config)
-        state: State | None = await run_controller(
+        job_details.agent = agent
+        controller, initial_state = create_controller(
+            agent=agent,
+            runtime=runtime,
+            config=config,
+            replay_events=None,
+        )
+        job_details.controller = controller
+        state: State | None = await run_controller_with_controller(
                 config=config,
                 initial_user_action=message_action,
+                sid=sid,
                 runtime=runtime,
                 agent=agent,
                 fake_user_response_fn=codeact_user_response,
+                controller=controller,
+                initial_state=initial_state,
             )
+        job_details.state = state
 
         # Try to get git patch first
         return_val = complete_runtime(runtime, instance)
@@ -571,86 +587,3 @@ async def evaluate_agent(git_patch: str | None, instance: dict, sid: str | None 
             await call_sync_from_async(runtime.close)
 
     return test_result
-
-def initialize_exception(job_details: JobDetails, e: Exception):
-    tb = traceback.format_exc()
-    instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
-    trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
-    return {
-        'instance_id': instance_id,
-        'trajectory_id': trajectory_id,
-        'git_patch': None,
-        'success': False,
-        'error': f'Error in init: {str(e)}',
-        'traceback': tb,
-        'finish': False,
-        'messages': [],
-        'resolved': False,
-        'critical_error': 'init',
-    }
-
-def run_exception(job_details: JobDetails, e: Exception):
-    tb = traceback.format_exc()
-    instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
-    trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
-    git_patch = job_details.run_results.get('git_patch', None) if job_details.run_results is not None else None
-    success = job_details.run_results.get('success', False) if job_details.run_results is not None else False
-    finish = job_details.run_results.get('finish', False) if job_details.run_results is not None else False
-    messages = job_details.run_results.get('messages', []) if job_details.run_results is not None else []
-    return {
-        'instance_id': instance_id,
-        'trajectory_id': trajectory_id,
-        'git_patch': git_patch,
-        'success': success,
-        'error': f'Error in run agent: {str(e)}',
-        'traceback': tb,
-        'finish': finish,
-        'messages': messages,
-        'resolved': False,
-        'critical_error': 'run',
-    }
-
-def eval_exception(job_details: JobDetails, e: Exception):
-    tb = traceback.format_exc()
-    instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
-    trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
-    git_patch = job_details.run_results.get('git_patch', None) if job_details.run_results is not None else None
-    success = job_details.run_results.get('success', False) if job_details.run_results is not None else False
-    finish = job_details.run_results.get('finish', False) if job_details.run_results is not None else False
-    messages = job_details.run_results.get('messages', []) if job_details.run_results is not None else []
-    return {
-        'instance_id': instance_id,
-        'trajectory_id': trajectory_id,
-        'git_patch': git_patch,
-        'success': success,
-        'error': f'Error in eval: {str(e)}',
-        'traceback': tb,
-        'finish': finish,
-        'messages': messages,
-        'resolved': False,
-        'critical_error': 'eval',
-    }
-
-def final_result(job_details: JobDetails):
-    if job_details.results is None:
-        if job_details.run_results is None:
-            instance_id = job_details.instance.get('instance_id', None) if job_details.instance is not None else None
-            trajectory_id = job_details.instance.get('trajectory_id', None) if job_details.instance is not None else None
-            result = {
-                'instance_id': instance_id,
-                'trajectory_id': trajectory_id,
-                'resolved': job_details.eval_results['resolved'] if job_details.eval_results is not None else False,
-                'critical_error': 'timeout' if job_details.timeout_error else None,
-            }
-        else:
-            result = {
-                **job_details.run_results,
-                'resolved': job_details.eval_results['resolved'] if job_details.eval_results is not None else False,
-                'critical_error': 'timeout' if job_details.timeout_error else None,
-            }
-    else:
-        result = copy.deepcopy(job_details.results)
-        if job_details.timeout_error:
-            result['critical_error'] = 'timeout'
-
-    return result

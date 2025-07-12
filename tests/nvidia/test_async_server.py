@@ -24,6 +24,7 @@ class MockInstance(dict):
         super().__init__()
         self['instance_id'] = instance_id
         self['trajectory_id'] = trajectory_id
+        self['data_source'] = data_source  # Fix: Add data_source to the dict
         self.instance_id = instance_id
         self.trajectory_id = trajectory_id
         self.data_source = data_source
@@ -253,7 +254,7 @@ class TestOpenHandsServer(unittest.TestCase):
 
         # Mock the registry functions to avoid real execution
         with patch(
-            'openhands.nvidia.registry.is_registered_handler', return_value=False
+            'openhands.nvidia.async_server.is_registered_handler', return_value=False
         ):
             self.server.start()
 

@@ -4,8 +4,11 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from evaluation.utils.shared import EvalMetadata  # type: ignore
+from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
+from openhands.controller.agent_controller import AgentController
 from openhands.core.config import OpenHandsConfig
 from openhands.core.config.llm_config import LLMConfig
+from openhands.nvidia.reward import Reward
 from openhands.nvidia.timer import PausableTimer
 from openhands.runtime.base import Runtime
 
@@ -19,6 +22,8 @@ class JobDetails:
     runtime: Runtime | None = None
     metadata: EvalMetadata | None = None
     config: OpenHandsConfig | None = None
+    agent: CodeActAgent | None = None  # for intermediate results
+    controller: AgentController | None = None  # for intermediate results
     run_results: dict | None = None
     eval_results: dict | None = None
     results: dict | None = None
@@ -39,8 +44,7 @@ class AgentHandler(ABC):
     @abstractmethod
     async def init(
         self,
-        instance: dict,
-        llm_config: LLMConfig | None = None,
+        job_details: JobDetails,
         sid: str | None = None,
         max_iterations: int = 1,
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
@@ -50,17 +54,19 @@ class AgentHandler(ABC):
     @abstractmethod
     async def run(
         self,
-        runtime: Runtime,
-        metadata: EvalMetadata,
-        config: OpenHandsConfig,
-        instance: dict,
+        job_details: JobDetails,
+        sid: str | None = None,
     ) -> dict[str, object]:
         """Run the agent with runtime and instance."""
         pass
 
     @abstractmethod
     async def eval(
-        self, job_details: JobDetails, sid: str | None = None, allow_skip: bool = True
+        self,
+        job_details: JobDetails,
+        sid: str | None = None,
+        allow_skip: bool = True,
+        reward: Optional[Reward] = None,
     ) -> dict[str, Any]:
         """Evaluate the agent results."""
         pass

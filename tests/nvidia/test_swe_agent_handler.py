@@ -33,14 +33,16 @@ class TestSweAgentHandler:
         mock_config = Mock()
         mock_initialize_agents.return_value = (mock_runtime, mock_metadata, mock_config)
 
-        # Create test instance
+        # Create test instance and job details
         instance = pd.Series({'instance_id': 'test_instance'})
+        job_details = JobDetails(
+            job_id='test_job', instance=instance, llm_config=minimal_llm_config
+        )
         handler = SweAgentHandler()
 
         # Call init method
         result = await handler.init(
-            instance=instance,
-            llm_config=minimal_llm_config,
+            job_details=job_details,
             sid='test_sid',
             max_iterations=5,
         )
@@ -66,12 +68,13 @@ class TestSweAgentHandler:
         mock_config = Mock()
         mock_initialize_agents.return_value = (mock_runtime, mock_metadata, mock_config)
 
-        # Create test instance
+        # Create test instance and job details
         instance = pd.Series({'instance_id': 'test_instance'})
+        job_details = JobDetails(job_id='test_job', instance=instance)
         handler = SweAgentHandler()
 
         # Call init method with defaults
-        result = await handler.init(instance=instance)
+        result = await handler.init(job_details=job_details)
 
         # Verify the result
         assert result == (mock_runtime, mock_metadata, mock_config)
@@ -89,11 +92,12 @@ class TestSweAgentHandler:
         mock_initialize_agents.side_effect = RuntimeError('Initialization failed')
 
         instance = pd.Series({'instance_id': 'test_instance'})
+        job_details = JobDetails(job_id='test_job', instance=instance)
         handler = SweAgentHandler()
 
         # Verify exception is propagated
         with pytest.raises(RuntimeError, match='Initialization failed'):
-            await handler.init(instance=instance)
+            await handler.init(job_details=job_details)
 
     @pytest.mark.asyncio
     @patch('openhands.nvidia.swe_agent.swe_agent_handler.run_agent')
@@ -104,14 +108,14 @@ class TestSweAgentHandler:
         mock_run_agent.return_value = expected_result
 
         # Create test data
-        metadata = Mock()
-        config = Mock()
         instance = pd.Series({'instance_id': 'test_instance'})
+        job_details = JobDetails(job_id='test_job', instance=instance)
         handler = SweAgentHandler()
 
         # Call run method
         result = await handler.run(
-            runtime=mock_runtime, metadata=metadata, config=config, instance=instance
+            job_details=job_details,
+            sid='test_sid',
         )
 
         # Verify the result
@@ -119,7 +123,8 @@ class TestSweAgentHandler:
 
         # Verify the mock was called with correct parameters
         mock_run_agent.assert_called_once_with(
-            runtime=mock_runtime, metadata=metadata, config=config, instance=instance
+            job_details=job_details,
+            sid='test_sid',
         )
 
     @pytest.mark.asyncio
@@ -129,18 +134,15 @@ class TestSweAgentHandler:
         # Setup mock to raise exception
         mock_run_agent.side_effect = RuntimeError('Run failed')
 
-        metadata = Mock()
-        config = Mock()
         instance = pd.Series({'instance_id': 'test_instance'})
+        job_details = JobDetails(job_id='test_job', instance=instance)
         handler = SweAgentHandler()
 
         # Verify exception is propagated
         with pytest.raises(RuntimeError, match='Run failed'):
             await handler.run(
-                runtime=mock_runtime,
-                metadata=metadata,
-                config=config,
-                instance=instance,
+                job_details=job_details,
+                sid='test_sid',
             )
 
     @pytest.mark.asyncio
@@ -388,12 +390,17 @@ class TestSweAgentHandlerIntegration:
         mock_config = Mock()
         mock_initialize_agents.return_value = (mock_runtime, mock_metadata, mock_config)
 
+        # Create job details with real instance
+        job_details = JobDetails(
+            job_id='real_test_job',
+            instance=real_instance,
+            llm_config=minimal_llm_config,
+        )
         handler = SweAgentHandler()
 
         # Call init method with real instance
         result = await handler.init(
-            instance=real_instance,
-            llm_config=minimal_llm_config,
+            job_details=job_details,
             sid='real_test_sid',
             max_iterations=10,
         )
@@ -562,7 +569,6 @@ class TestSweAgentHandlerEdgeCases:
     @pytest.mark.asyncio
     async def test_concurrent_operations(self, minimal_llm_config):
         """Test that multiple handler operations can run concurrently"""
-        SweAgentHandler()
         instance = pd.Series({'instance_id': 'test_instance'})
 
         # Create multiple handlers to test concurrency
@@ -581,13 +587,23 @@ class TestSweAgentHandlerEdgeCases:
             mock_eval.return_value = {'resolved': True}
 
             # Run multiple init operations concurrently
-            init_tasks = [
-                handler.init(
+            job_details_list = [
+                JobDetails(
+                    job_id=f'test_job_{i}',
                     instance=instance,
                     llm_config=minimal_llm_config,
+                )
+                for i in range(3)
+            ]
+
+            init_tasks = [
+                handler.init(
+                    job_details=job_details,
                     max_iterations=i + 1,
                 )
-                for i, handler in enumerate(handlers)
+                for i, (handler, job_details) in enumerate(
+                    zip(handlers, job_details_list)
+                )
             ]
 
             results = await asyncio.gather(*init_tasks)
