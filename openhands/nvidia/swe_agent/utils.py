@@ -7,6 +7,7 @@ import asyncio
 import json
 import copy
 import traceback
+import tempfile
 from evaluation.benchmarks.swe_bench.run_infer import (  # type: ignore
     initialize_runtime,
     get_instruction,
@@ -77,6 +78,9 @@ def get_instance_docker_image(instance_id: str, dataset: str | None = None) -> s
         docker_prefix = DOCKER_IMAGE_PREFIX.rstrip("/")
     return f"{docker_prefix}/{image_name}".lower()
 
+def get_instance_docker_image_r2egym(instance) -> str:
+    return instance["docker_image"]
+
 def get_config(
     instance: dict,
     metadata: EvalMetadata,
@@ -85,9 +89,13 @@ def get_config(
         is_multimodal = True
     else:
         is_multimodal = False
-    base_container_image = get_instance_docker_image(
-        instance['instance_id'], "swebench" if not is_multimodal else "swebench_multimodal"
-    )
+
+    if 'docker_image' in instance.keys():
+        base_container_image = get_instance_docker_image_r2egym(instance)
+    else:
+        base_container_image = get_instance_docker_image(
+            instance['instance_id'], "swebench" if not is_multimodal else "swebench_multimodal"
+        )
     logger.debug(
         f'Using instance container image: {base_container_image}. '
         f'Please make sure this image exists. '
@@ -100,10 +108,13 @@ def get_config(
     sandbox_config.use_host_network = False
     # Add platform to the sandbox config to solve issue 4401
     sandbox_config.platform = 'linux/amd64'
-    sandbox_config.remote_runtime_resource_factor = get_instance_resource_factor(
-        dataset_name=metadata.dataset or "swebench",
-        instance_id=instance['instance_id'],
-    )
+    if 'docker_image' not in instance.keys():
+        sandbox_config.remote_runtime_resource_factor = get_instance_resource_factor(
+            dataset_name=metadata.dataset or "swebench",
+            instance_id=instance['instance_id'],
+        )
+    else:
+        sandbox_config.remote_runtime_resource_factor = 1
 
     # run as fakeroot
     # Currently set to False as some container require GLIBC_2.38
@@ -159,6 +170,8 @@ async def initialize_agents(
     # ``scripts/test_local_agent.py``).
     if 'image_assets' in instance.keys():
         dataset = "swebench_multimodal"
+    if 'docker_image' in instance.keys():
+        dataset = "r2egym"
 
     if llm_config is None:
         raise ValueError('LLM config is None, cannot initialize.')
@@ -275,6 +288,101 @@ async def run(instance):
     return results
 
 
+def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
+
+    from openhands.events.action import CmdRunAction, FileReadAction
+    from openhands.events.observation import CmdOutputObservation
+    import tempfile, json, re
+
+    def _basic_pytest_parser(log: str) -> dict[str, str]:
+        status_map: dict[str, str] = {}
+        for line in log.split("\n"):
+            if line.startswith(("PASSED", "FAILED", "ERROR", "SKIPPED")):
+                parts = line.split()
+                if len(parts) >= 2:
+                    status_map[parts[1].split(" - ")[0]] = parts[0]
+        return status_map
+
+    def parse_log_fn(_repo: str):  # noqa: D401
+        """Return the basic pytest parser when r2egym is unavailable."""
+        return _basic_pytest_parser
+
+    def decolor_dict_keys(d: dict[str, str]) -> dict[str, str]:
+        ansi_re = re.compile(r"\u001b\[[0-9;]*m")
+        return {ansi_re.sub("", k): v for k, v in d.items()}
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".diff") as tmp:
+        tmp.write(git_patch.encode())
+        tmp_path = tmp.name
+    runtime.copy_to(tmp_path, "/tmp/patch.diff")
+
+    apply_cmd = (
+        "cd /testbed && "
+        "(git apply -v /tmp/patch.diff && echo 'APPLY_PATCH_PASS' || "
+        "(echo 'Failed to apply patch with git apply, trying with patch command...' && "
+        "(patch --batch --fuzz=5 -p1 -i /tmp/patch.diff && echo 'APPLY_PATCH_PASS' || "
+        "echo 'APPLY_PATCH_FAIL')))"
+    )
+    action = CmdRunAction(command=apply_cmd)
+    action.set_hard_timeout(60)
+    obs = runtime.run_action(action)
+    assert isinstance(obs, CmdOutputObservation)
+    patch_result = obs.content
+
+    # Early return if patch failed to apply
+    if "APPLY_PATCH_FAIL" in patch_result or "APPLY_PATCH_PASS" not in patch_result:
+        return {
+            "report": {
+                "empty_generation": len(git_patch.strip()) == 0,
+                "resolved": False,
+                "failed_apply_patch": True,
+                "error_eval": False,
+                "test_timeout": False,
+            },
+            "apply_patch_output": patch_result,
+            "test_output": "",
+        }
+    action = CmdRunAction(command="bash /root/run_tests.sh")
+    action.set_hard_timeout(20 * 60)  # 20-minute hard timeout
+    obs = runtime.run_action(action)
+    assert isinstance(obs, CmdOutputObservation)
+    test_output = obs.content
+    test_output_clean = re.sub(r"\x1b\[[0-9;]*m|\r", "", test_output)
+    repo_name = instance.get("repo_name") or instance.get("repo", "").split("/")[-1]
+    if repo_name.endswith("_final"):
+        repo_name = repo_name[: -len("_final")]
+
+    parsed = parse_log_fn(repo_name)(test_output_clean)
+    parsed = decolor_dict_keys(parsed)
+
+    expected_json = instance.get("expected_output_json")
+    if not expected_json:
+        exp_obs = runtime.run_action(FileReadAction(path="/root/expected_test_output.json"))
+        expected_json = getattr(exp_obs, "content", "{}")
+    try:
+        expected = json.loads(expected_json)
+    except Exception:
+        expected = {}
+    expected = decolor_dict_keys(expected)
+    strip_suffix = lambda d: {k.split(" - ")[0]: v for k, v in d.items()}
+    parsed = strip_suffix(parsed)
+    expected = strip_suffix(expected)
+
+    resolved = bool(parsed) and len(parsed) == len(expected) and all(
+        k in expected and parsed[k] == expected[k] for k in parsed
+    )
+    return {
+        "report": {
+            "empty_generation": False,
+            "resolved": resolved,
+            "failed_apply_patch": False,
+            "error_eval": False,
+            "test_timeout": False,
+        },
+        "apply_patch_output": patch_result,
+        "test_output": test_output,
+    }
+
 def _apply_patch_and_evaluate(
     runtime,
     git_patch: str,
@@ -285,6 +393,9 @@ def _apply_patch_and_evaluate(
         is_multimodal = True
     else:
         is_multimodal = False
+
+    if 'docker_image' in instance.keys():
+        return _apply_patch_and_evaluate_r2egym(runtime, git_patch, instance)
 
     if is_multimodal:
         from swebench.harness.grading import get_eval_report

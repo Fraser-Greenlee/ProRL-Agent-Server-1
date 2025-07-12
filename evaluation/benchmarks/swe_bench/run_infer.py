@@ -412,9 +412,8 @@ def initialize_runtime(
             obs = runtime.run_action(action)
             logger.info(obs, extra={'msg_type': 'OBSERVATION'})
 
-    if 'multimodal' not in metadata.dataset.lower():
-        # Only for non-multimodal datasets, we need to activate the testbed environment for Python
-        # SWE-Bench multimodal datasets are not using the testbed environment
+    # Only enforce testbed python for swebench datasets; r2egym images may not include testbed env
+    if 'multimodal' not in metadata.dataset.lower() and 'r2egym' not in metadata.dataset.lower():
         action = CmdRunAction(command='which python')
         action.set_hard_timeout(5)
         logger.info(action, extra={'msg_type': 'ACTION'})
