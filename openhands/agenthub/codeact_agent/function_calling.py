@@ -91,13 +91,14 @@ def response_to_actions(
                 is_input = arguments.get('is_input', 'false') == 'true'
                 action = CmdRunAction(command=arguments['command'], is_input=is_input)
 
-                # Set hard timeout if provided
-                if 'timeout' in arguments:
+                # Robustly parse timeout (may be None or empty)
+                timeout_val = arguments.get('timeout', None)
+                if timeout_val not in (None, "", "null"):  # skip if null/empty
                     try:
-                        action.set_hard_timeout(float(arguments['timeout']))
-                    except ValueError as e:
+                        action.set_hard_timeout(float(timeout_val))
+                    except (ValueError, TypeError) as e:
                         raise FunctionCallValidationError(
-                            f"Invalid float passed to 'timeout' argument: {arguments['timeout']}"
+                            f"Invalid float passed to 'timeout' argument: {timeout_val}"
                         ) from e
 
             # ================================================
