@@ -258,6 +258,44 @@ python run_swe.py \
   --sampling-params '{"temperature": 0.3, "top_p": 0.95}'
 ```
 
+### `prepare_data.py`
+
+Utility for merging and standardising benchmark parquet datasets (SWE-Bench, SWE-Bench multimodal, R2E-Gym) into a single unified file.
+
+**Purpose:**
+- Recursively scans the provided directory for parquet shards.
+- Detects dataset type based on the presence of signature columns and applies the corresponding per-row preprocessing:
+  - `docker_image`  → R2E-Gym (`pre_process_r2egym_instance`)
+  - `image_assets`  → SWE-Bench multimodal (`pre_process_swebench_mm_instance`)
+  - Otherwise       → SWE-Bench (`pre_process_swebench_instance`)
+- Converts nested NumPy arrays to plain Python lists so the data can be serialised to parquet.
+- Adds helper columns (`data_split`, `data_source`, `instance_id`, etc.) to keep provenance after merging.
+- Concatenates all processed rows and writes a single `merged.parquet` into the same directory.
+
+**Key Features:**
+- Automatic dataset-type detection with minimal configuration.
+- Pluggable preprocessing helpers if your schema evolves.
+- Handles heterogeneous schemas by performing an outer-style concat across dataframes.
+- Optional normalisation step to ensure parquet-compatible types (lists → JSON strings, etc.).
+
+**Usage:**
+```bash
+python prepare_data.py --data-dir /path/to/parquet_directory
+```
+
+**Arguments:**
+- `--data-dir` **(required)**: Directory containing one or more parquet files. The search is recursive.
+
+**Output:**
+- `merged.parquet` written to the same `--data-dir` directory.
+
+**Example:**
+```bash
+python prepare_data.py --data-dir data/merged
+```
+
+---
+
 ## Data Curation
 
 - **Train**:
