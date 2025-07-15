@@ -304,7 +304,7 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
                     status_map[parts[1].split(" - ")[0]] = parts[0]
         return status_map
 
-    def parse_log_fn(_repo: str):
+    def parse_log_fn(_repo: str): # noqa: D401
         """Return the basic pytest parser when r2egym is unavailable."""
         return _basic_pytest_parser
 
