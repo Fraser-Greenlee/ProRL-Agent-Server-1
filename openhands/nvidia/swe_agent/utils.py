@@ -234,7 +234,6 @@ async def run_agent(
             agent=agent,
             runtime=runtime,
             config=config,
-            headless_mode=False,
             replay_events=None,
         )
         job_details.controller = controller
@@ -245,7 +244,6 @@ async def run_agent(
                 runtime=runtime,
                 agent=agent,
                 fake_user_response_fn=codeact_user_response,
-                headless_mode=False,
                 controller=controller,
                 initial_state=initial_state,
             )
