@@ -5,7 +5,7 @@ import pandas as pd
 
 from openhands.core.config.llm_config import LLMConfig
 from openhands.core.logger import openhands_logger as logger
-from openhands.nvidia.math_coder.math_utils import (
+from openhands.nvidia.math_coder.code_utils import (
     evaluate_agent,
     initialize_agents,
     run_agent,
@@ -25,6 +25,7 @@ async def run(instance):
         'log_completions': True,
         'native_tool_calling': True,
         'temperature': 0.6,
+        'max_output_tokens': 8192,
     }
     llm_config = LLMConfig(base_url='http://127.0.0.1:8000/v1', **sampling_params)
 
@@ -60,9 +61,9 @@ async def run(instance):
 
 if __name__ == '__main__':
     dataset = pd.read_parquet(
-        '/lustre/fsw/portfolios/nvr/users/mingjiel/data/deepscaler/aime.parquet'
+        '/lustre/fsw/portfolios/nvr/users/mingjiel/data/eurus2-rl-data/train_code.parquet'
     )
-    instance = dataset.iloc[1]
+    instance = dataset.iloc[0]
     instance = pd.Series(instance)
     instance = instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
     instance = instance.to_dict()

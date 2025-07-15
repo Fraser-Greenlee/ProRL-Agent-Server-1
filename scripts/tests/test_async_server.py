@@ -123,6 +123,64 @@ def test_math_server(
     return results
 
 
+def test_code_server(
+    total_jobs: int = 4,
+    max_parallel_jobs: int = 2,
+    allow_skip_eval: bool = False,
+    reward_server_ip: str | None = None,
+):
+    dataset = pd.read_parquet(
+        '/lustre/fsw/portfolios/nvr/users/mingjiel/data/eurus2-rl-data/codecontests.parquet'
+    )
+    instance = dataset.iloc[0]
+    instance = pd.Series(instance)
+    instance = instance.apply(lambda x: x.tolist() if isinstance(x, np.ndarray) else x)
+
+    requests = []
+    for i in range(total_jobs):
+        cur = instance.copy(deep=True)
+        cur['trajectory_id'] = i
+        requests.append(cur.to_dict())
+
+    llm_server_address = 'http://127.0.0.1:8000/v1'
+    reward_server_ip = [reward_server_ip] if reward_server_ip else None
+    sampling_params = {
+        'model': 'hosted_vllm/Qwen/Qwen3-8B',
+        'api_key': 'mykey',
+        'modify_params': False,
+        'log_completions': True,
+        'native_tool_calling': True,
+        'temperature': 0.6,
+        'max_iterations': 35,  # test full iterations for math
+    }
+
+    print('Starting server')
+    server = OpenHandsServer(
+        llm_server_addresses=[llm_server_address, llm_server_address],
+        max_init_workers=max_parallel_jobs,
+        max_run_workers=max_parallel_jobs,
+        allow_skip_eval=allow_skip_eval,
+        reward_server_ip=reward_server_ip,
+    )
+    server.start()
+    print('Server started')
+
+    print('Job submission started')
+
+    # Process instances using ThreadPoolExecutor for parallel processing
+    with ThreadPoolExecutor(max_workers=max_parallel_jobs) as executor:
+        futures = [
+            executor.submit(server.process, inst, dict(sampling_params))
+            for inst in requests
+        ]
+        results = [future.result() for future in futures]
+
+    print('Job submission finished')
+    # print(results)
+    server.stop()
+    return results
+
+
 def check_results(results, start_time):
     # Don't print full messages
     for result in results:
@@ -156,6 +214,9 @@ def parse_args():
         '--skip-math-test', action='store_true', help='Skip the math server test'
     )
     parser.add_argument(
+        '--skip-code-test', action='store_true', help='Skip the code server test'
+    )
+    parser.add_argument(
         '--skip-swebench-test',
         action='store_true',
         help='Skip the swebench server test',
@@ -185,6 +246,18 @@ if __name__ == '__main__':
         )
         check_results(results, start_time)
         print('math tests passed!')
+
+    if not args.skip_code_test:
+        print('Running code server test...')
+        start_time = time.time()
+        results = test_code_server(
+            total_jobs=args.total_jobs,
+            max_parallel_jobs=args.total_jobs,
+            allow_skip_eval=False,
+            reward_server_ip=args.reward_server_ip,
+        )
+        check_results(results, start_time)
+        print('code tests passed!')
 
     if not args.skip_swebench_test:
         print('Running swebench server test...')
