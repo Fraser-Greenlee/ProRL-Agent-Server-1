@@ -45,6 +45,7 @@ class LLMConfig(BaseModel):
         native_tool_calling: Whether to use native tool calling if supported by the model. Can be True, False, or not set.
         reasoning_effort: The effort to put into reasoning. This is a string that can be one of 'low', 'medium', 'high', or 'none'. Exclusive for o1 models.
         seed: The seed to use for the LLM.
+        enable_thinking: Whether to enable thinking mode for Qwen3 models. (Default: True)
     """
 
     model: str = Field(default='claude-sonnet-4-20250514')
@@ -86,6 +87,7 @@ class LLMConfig(BaseModel):
     native_tool_calling: bool | None = Field(default=None)
     reasoning_effort: str | None = Field(default='high')
     seed: int | None = Field(default=None)
+    enable_thinking: bool = Field(default=True)
 
     model_config = {'extra': 'forbid'}
 

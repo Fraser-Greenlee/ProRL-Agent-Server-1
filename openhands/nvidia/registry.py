@@ -111,6 +111,8 @@ _registries: dict[str, dict[str, Callable[..., Any]]] = {
 
 _registered_handlers: set[str] = set()
 
+_name_mapping: dict[str, str] = {}
+
 
 class FunctionNotRegisteredError(Exception):
     """Raised when a requested function is not found in the registry."""
@@ -120,12 +122,19 @@ class FunctionNotRegisteredError(Exception):
 
 # Utility functions for registry management
 def get_registered_functions(registry_type, name):
-    return _registries.get(registry_type, {}).get(name)
+    mapped_name = _name_mapping.get(name)
+    if name[:9] == 'deepcoder':
+        mapped_name = 'deepcoder'
+    if mapped_name is None:
+        return None
+    return _registries.get(registry_type, {}).get(mapped_name)
 
 
 def is_registered_handler(name):
     """Check if a handler is registered correctly."""
-    return name in _registered_handlers
+    if name[:9] == 'deepcoder':
+        return True
+    return name in _name_mapping
 
 
 def register_agent_handler(handler: AgentHandler):
@@ -138,3 +147,8 @@ def register_agent_handler(handler: AgentHandler):
     _registries['run_exception'][handler.name] = handler.run_exception
     _registries['eval_exception'][handler.name] = handler.eval_exception
     _registries['final_result'][handler.name] = handler.final_result
+    _name_mapping[handler.name] = handler.name
+
+
+def add_name_mapping(name: str, mapped_name: str):
+    _name_mapping[name] = mapped_name

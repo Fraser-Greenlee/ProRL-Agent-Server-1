@@ -57,7 +57,7 @@ async def evaluate(args):
 
     instances: list[dict] = []
     for idx, row in df.iterrows():
-        s = pd.Series(row["instance"]).apply(
+        s = pd.Series(row).apply(
             lambda x: x.tolist() if isinstance(x, np.ndarray) else x
         )
         s["trajectory_id"] = idx
@@ -66,6 +66,9 @@ async def evaluate(args):
     params = DEFAULT_SAMPLING_PARAMS.copy()
     if args.sampling_params:
         params.update(json.loads(args.sampling_params))
+
+    if args.disable_thinking:
+        params["enable_thinking"] = False
 
     async with aiohttp.ClientSession() as session:
         for addr in args.llm_addresses:
@@ -107,13 +110,18 @@ async def evaluate(args):
 
 def parse_args():
     p = argparse.ArgumentParser("Simple bulk evaluation with OpenHands async server")
-    p.add_argument("--dataset-path", default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/swegym/train.parquet")
+    # for code dataset use: /lustre/fsw/portfolios/nvr/users/mingjiel/data/eurus2-rl-data/train_code.parquet
+    p.add_argument("--dataset-path", default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/deepscaler/train.parquet")
     p.add_argument("--output", default="eval_results.jsonl")
     p.add_argument("--llm-addresses", nargs="+", default=["http://127.0.0.1:8000/v1"])
     p.add_argument("--host", default="localhost")
     p.add_argument("--port", type=int, default=8006)
     p.add_argument("--concurrency", type=int, default=32)
     p.add_argument("--num-instances", type=int)
+    # need to launch reward server. Then pass in the ip address of the reward server.
+    p.add_argument("--reward-server-ip", type=str, nargs="+", default=[])
+    # Turn thinking off if using code dataset.
+    p.add_argument("--disable-thinking", action="store_true")
     p.add_argument(
         "--sampling-params",
         default="",
@@ -126,7 +134,7 @@ if __name__ == "__main__":
     args = parse_args()
 
     start_server_path = Path(__file__).with_name("start_server.py")
-    cmd = [sys.executable, str(start_server_path), "--port", str(args.port), "--timeout", "500"]
+    cmd = [sys.executable, str(start_server_path), "--port", str(args.port), "--reward-server-ip", *args.reward_server_ip, "--timeout", "500"]
     server_proc = subprocess.Popen(
         cmd,
         stdout=None,

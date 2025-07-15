@@ -181,6 +181,13 @@ class LLM(RetryMixin, DebugMixin):
             kwargs['max_tokens'] = self.config.max_output_tokens
             kwargs.pop('max_completion_tokens')
 
+        # Disble thinking if not set and model is Qwen3
+        if (
+            'Qwen3' in self.config.model.split('/')[-1]
+            and self.config.enable_thinking is False
+        ):
+            kwargs['chat_template_kwargs'] = {'enable_thinking': False}
+
         self._completion = partial(
             litellm_completion,
             model=self.config.model,

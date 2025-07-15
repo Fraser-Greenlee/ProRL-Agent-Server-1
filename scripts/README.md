@@ -35,6 +35,7 @@ python start_server.py [OPTIONS]
 - `--host`: Host to bind the server to (default: 0.0.0.0)
 - `--port`: Port to bind the server to (default: 8006)
 - `--allow-skip-eval`: Allow skipping evaluation if git_patch is None or empty (default: True)
+- `--reward-server-ip`: Reward server ip for math/code/reasoning gym (default: []). Example: `--reward_server_ip cpu-0004`.
 
 **API Endpoints:**
 
