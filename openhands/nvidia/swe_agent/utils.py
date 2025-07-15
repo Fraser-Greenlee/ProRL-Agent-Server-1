@@ -51,8 +51,8 @@ def infer_instance_type(instance: dict) -> str:
         ("swebench_multimodal", lambda inst: "image_assets" in inst and not pd.isna(inst['image_assets'])),
         ("swebench", lambda inst: True),
     ]
-    if 'data_split' in instance:
-        return instance['data_split']
+    if 'data_kind' in instance:
+        return instance['data_kind']
     return next(kind for kind, predicate in _RULES if predicate(instance))
 
 from evaluation.benchmarks.swe_bench.eval_infer import (  # type: ignore

@@ -270,7 +270,7 @@ Utility for merging and standardising benchmark parquet datasets (SWE-Bench, SWE
   - `image_assets`  → SWE-Bench multimodal (`pre_process_swebench_mm_instance`)
   - Otherwise       → SWE-Bench (`pre_process_swebench_instance`)
 - Converts nested NumPy arrays to plain Python lists so the data can be serialised to parquet.
-- Adds helper columns (`data_split`, `data_source`, `instance_id`, etc.) to keep provenance after merging.
+- Adds helper columns (`data_kind`, `data_source`, `instance_id`, etc.) to keep provenance after merging.
 - Concatenates all processed rows and writes a single `merged.parquet` into the same directory.
 
 **Key Features:**

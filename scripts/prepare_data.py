@@ -28,19 +28,19 @@ def pre_process_r2egym_instance(r2egym_instance):
             r2egym_instance['base_commit'] = r2egym_instance['commit_hash']
         else:
             r2egym_instance['base_commit'] = version_part
-    r2egym_instance['data_split'] = 'r2egym'
+    r2egym_instance['data_kind'] = 'r2egym'
     r2egym_instance['data_source'] = 'swebench'
     return r2egym_instance
 
 def pre_process_swebench_instance(swebench_instance):
     payload = swebench_instance.get("instance") if isinstance(swebench_instance, pd.Series) else swebench_instance["instance"]
-    payload["data_split"] = "swebench"
+    payload["data_kind"] = "swebench"
     payload['data_source'] = 'swebench'
 
     return pd.Series(payload)
 
 def pre_process_swebench_mm_instance(swebench_mm_instance):
-    swebench_mm_instance['data_split'] = 'swebench_multimodal'
+    swebench_mm_instance['data_kind'] = 'swebench_multimodal'
     swebench_mm_instance['data_source'] = 'swebench'
     return swebench_mm_instance
 
