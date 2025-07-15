@@ -36,6 +36,7 @@ def init_server(
     max_run_workers: int = 5,
     timeout: float = DEFAULT_TIMEOUT,
     allow_skip_eval: bool = True,
+    reward_server_ip: list | None = None,
 ):
     logger.info(
         f'Initializing server with max_init_workers={max_init_workers}, max_run_workers={max_run_workers}, timeout={timeout}'
@@ -54,6 +55,7 @@ def init_server(
         max_init_workers=max_init_workers,
         max_run_workers=max_run_workers,
         allow_skip_eval=allow_skip_eval,
+        reward_server_ip=reward_server_ip,
     )
     global_timeout = timeout
     cpu_count = os.cpu_count()
@@ -273,6 +275,13 @@ def parse_args():
         default=True,
         help='Allow skipping evaluation if git_patch is None or empty. Set to False for testing (default: True).',
     )
+    parser.add_argument(
+        '--reward-server-ip',
+        type=str,
+        nargs='*',
+        default=[],
+        help='List of reward server IP addresses (default: [])',
+    )
     return parser.parse_args()
 
 
@@ -283,5 +292,6 @@ if __name__ == '__main__':
         max_run_workers=args.max_run_workers,
         timeout=args.timeout,
         allow_skip_eval=args.allow_skip_eval,
+        reward_server_ip=args.reward_server_ip,
     )
     start_api_server(host=args.host, port=args.port)
