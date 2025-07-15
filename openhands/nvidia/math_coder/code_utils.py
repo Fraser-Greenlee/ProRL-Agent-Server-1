@@ -135,6 +135,13 @@ Important Guidelines:
 - Use `str_replace_editor` for editing source files.
 - Avoid rerunning the same command repeatedly. If something fails, adjust or try a different strategy.
 
+When running tests if your solution requires obtaining inputs and outputs with sys.stdin and sys.stdout, or using `input()` and `print()`, you need to redirect input to the script such as:
+- Create a input test file such as `test_input.txt`. This file should contain the input for the test case.
+- Run the test script and redirect input to the script such as `python solution.py < test_input.txt`.
+- Verify the output of the test script is correct by comparing the returned output with the expected output.
+- If the output is incorrect, you need to adjust your solution and run the test script again.
+- You do not need to use all the test cases in the problem statement. Try to only use one or two simple test cases for debugging.
+
 Be thoughtful, deliberate, and efficient. It's okay if the solution takes several steps—prioritize correctness and precision over speed or verbosity.
 """
     return MessageAction(content=instruction)

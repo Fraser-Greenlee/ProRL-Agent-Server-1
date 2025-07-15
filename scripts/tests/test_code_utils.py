@@ -25,7 +25,8 @@ async def run(instance):
         'log_completions': True,
         'native_tool_calling': True,
         'temperature': 0.6,
-        'max_output_tokens': 8192,
+        'max_output_tokens': 3072,
+        'enable_thinking': False,
     }
     llm_config = LLMConfig(base_url='http://127.0.0.1:8000/v1', **sampling_params)
 
