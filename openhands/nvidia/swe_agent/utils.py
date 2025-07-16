@@ -43,7 +43,17 @@ DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'xingyaoww/')
 logger.info(f'Using docker image prefix: {DOCKER_IMAGE_PREFIX}')
 
 RUN_WITH_BROWSING = os.environ.get('RUN_WITH_BROWSING', 'false').lower() == 'true'
+from typing import Callable
 
+def infer_instance_type(instance: dict) -> str:
+    _RULES: list[tuple[str, Callable[[dict], bool]]] = [
+        ("r2egym", lambda inst: "docker_image" in inst and not pd.isna(inst['docker_image'])),
+        ("swebench_multimodal", lambda inst: "image_assets" in inst and not pd.isna(inst['image_assets'])),
+        ("swebench", lambda inst: True),
+    ]
+    if 'data_kind' in instance:
+        return instance['data_kind']
+    return next(kind for kind, predicate in _RULES if predicate(instance))
 
 from evaluation.benchmarks.swe_bench.eval_infer import (  # type: ignore
     process_instance as _eval_process_instance,
@@ -61,10 +71,13 @@ from swegym.harness.run_evaluation import (
 )
 from swegym.harness.test_spec import make_test_spec
 
-def get_instance_docker_image(instance_id: str, dataset: str | None = None) -> str:
-    is_multimodal = bool(dataset and 'multimodal' in dataset.lower())
-    logger.debug("is_multimodal", is_multimodal)
-    if is_multimodal:
+def get_instance_docker_image(instance, data_kind) -> str:
+    if data_kind == "r2egym":
+        logger.debug("data_kind is r2egym")
+        return instance["docker_image"]
+    elif data_kind == "swebench_multimodal":
+        logger.debug("data_kind is swebench_multimodal")
+        instance_id = instance["instance_id"]
         try:
             repo, issue = instance_id.split('__', 1)
         except ValueError:
@@ -73,42 +86,33 @@ def get_instance_docker_image(instance_id: str, dataset: str | None = None) -> s
         _issue = issue[:-2] if issue.endswith("_0") else issue
         image_name = f"sweb.eval.x86_64.{repo}_1776_{_issue}:latest"
         docker_prefix = "docker.io/swebench"
-    else:
+    elif data_kind == "swebench":
+        logger.debug("data_kind is swebench")
+        instance_id = instance["instance_id"]
         image_name = f"sweb.eval.x86_64.{instance_id}".replace("__", "_s_")
         docker_prefix = DOCKER_IMAGE_PREFIX.rstrip("/")
+    else:
+        raise ValueError(f"Invalid data kind: {data_kind}")
     return f"{docker_prefix}/{image_name}".lower()
-
-def get_instance_docker_image_r2egym(instance) -> str:
-    return instance["docker_image"]
 
 def get_config(
     instance: dict,
     metadata: EvalMetadata,
 ) -> OpenHandsConfig:
-    if 'image_assets' in instance.keys():
-        is_multimodal = True
-    else:
-        is_multimodal = False
-
-    if 'docker_image' in instance.keys():
-        base_container_image = get_instance_docker_image_r2egym(instance)
-    else:
-        base_container_image = get_instance_docker_image(
-            instance['instance_id'], "swebench" if not is_multimodal else "swebench_multimodal"
-        )
+    data_kind = infer_instance_type(instance)
+    base_container_image = get_instance_docker_image(instance, data_kind)
     logger.debug(
         f'Using instance container image: {base_container_image}. '
         f'Please make sure this image exists. '
         f'Submit an issue on https://github.com/All-Hands-AI/OpenHands if you run into any issues.'
     )
-
     sandbox_config = get_default_sandbox_config_for_eval()
     sandbox_config.runtime_container_image = base_container_image
     sandbox_config.enable_auto_lint = True
     sandbox_config.use_host_network = False
     # Add platform to the sandbox config to solve issue 4401
     sandbox_config.platform = 'linux/amd64'
-    if 'docker_image' not in instance.keys():
+    if data_kind != "r2egym":
         sandbox_config.remote_runtime_resource_factor = get_instance_resource_factor(
             dataset_name=metadata.dataset or "swebench",
             instance_id=instance['instance_id'],
@@ -168,10 +172,7 @@ async def initialize_agents(
     # explicit ``llm_config`` (mirrors the behaviour of the old
     # ``initialize_agents`` implementation that lived in
     # ``scripts/test_local_agent.py``).
-    if 'image_assets' in instance.keys():
-        dataset = "swebench_multimodal"
-    if 'docker_image' in instance.keys():
-        dataset = "r2egym"
+    dataset = infer_instance_type(instance)
 
     if llm_config is None:
         raise ValueError('LLM config is None, cannot initialize.')
@@ -303,7 +304,7 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
                     status_map[parts[1].split(" - ")[0]] = parts[0]
         return status_map
 
-    def parse_log_fn(_repo: str):  # noqa: D401
+    def parse_log_fn(_repo: str): # noqa: D401
         """Return the basic pytest parser when r2egym is unavailable."""
         return _basic_pytest_parser
 
@@ -389,13 +390,12 @@ def _apply_patch_and_evaluate(
     instance: dict,
 ):
 
-    if 'image_assets' in instance.keys():
-        is_multimodal = True
-    else:
-        is_multimodal = False
+    kind = infer_instance_type(instance)
 
-    if 'docker_image' in instance.keys():
+    if kind == "r2egym":
         return _apply_patch_and_evaluate_r2egym(runtime, git_patch, instance)
+
+    is_multimodal = kind == "multimodal"
 
     if is_multimodal:
         from swebench.harness.grading import get_eval_report

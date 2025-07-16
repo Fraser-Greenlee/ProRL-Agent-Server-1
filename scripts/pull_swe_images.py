@@ -159,7 +159,7 @@ def build_sif_for_image(image: str, dest_dir: Path, temp_base: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Collect Docker images from a parquet file and build Singularity SIFs.")
-    parser.add_argument("--parquet-file", type=Path, required=True, help="Path to a SWE-Bench parquet file (train/validation etc.)")
+    parser.add_argument("--parquet-file", type=Path, required=True, help="Path to a dataset parquet file (e.g. SWE-Bench, R2E-Gym) containing image metadata.")
     parser.add_argument("--prefix", type=str, default=None, help="Override Docker image namespace prefix")
     parser.add_argument("--dest-dir", type=Path, default=None, help="Directory to store .sif images (default: <workspace>/singularity_images)")
     parser.add_argument("--temp-base", type=Path, default=None, help="Base directory for temporary build folders (default: <dest>/temp_dif)")
