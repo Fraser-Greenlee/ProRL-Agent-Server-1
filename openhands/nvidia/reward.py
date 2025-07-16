@@ -1,4 +1,5 @@
 import heapq
+import json
 import threading
 
 import aiohttp
@@ -24,7 +25,14 @@ class Reward:
             heapq.heapreplace(self.weighted_addresses, self.weighted_addresses[0])
 
         data_source = instance['data_source']
-        ground_truth = instance['reward_model']['ground_truth']
+        if isinstance(instance['reward_model'], str):
+            ground_truth = json.loads(instance['reward_model'])['ground_truth']
+        elif isinstance(instance['reward_model'], dict):
+            ground_truth = instance['reward_model']['ground_truth']
+        else:
+            raise ValueError(
+                f'Invalid reward_model type: {type(instance["reward_model"])}'
+            )
         extra_info = instance.get('extra_info', None)
 
         # please pass in session, spinning each session is very bad

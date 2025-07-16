@@ -93,7 +93,12 @@ def get_config(
 def get_instruction(instance: pd.Series | dict, metadata: EvalMetadata) -> MessageAction:
 
     def obtain_problem_statement(instance: dict) -> str:
-        problem_statement = instance['prompt'][0]['content']
+        if isinstance(instance['prompt'], list):
+            problem_statement = instance['prompt'][0]['content']
+        elif isinstance(instance['prompt'], str):
+            problem_statement = json.loads(instance['prompt'])[0]['content']
+        else:
+            raise ValueError(f'Invalid prompt type: {type(instance["prompt"])}')
         # Remove instructions from problem statement
         if "Write Python code to solve the problem. Present the code in \n```python\nYour code\n```\nat the end." in problem_statement:
             problem_statement = problem_statement.replace("Write Python code to solve the problem. Present the code in \n```python\nYour code\n```\nat the end.", "")

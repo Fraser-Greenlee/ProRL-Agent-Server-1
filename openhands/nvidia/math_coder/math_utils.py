@@ -93,7 +93,12 @@ def get_config(
 def get_instruction(instance: pd.Series | dict, metadata: EvalMetadata) -> MessageAction:
 
     def obtain_problem_statement(instance: dict) -> str:
-        problem_statement = instance['prompt'][0]['content']
+        if isinstance(instance['prompt'], list):
+            problem_statement = instance['prompt'][0]['content']
+        elif isinstance(instance['prompt'], str):
+            problem_statement = json.loads(instance['prompt'])[0]['content']
+        else:
+            raise ValueError(f'Invalid prompt type: {type(instance["prompt"])}')
         # Remove boxed instructions from problem statement
         if " Let's think step by step and output the final answer within \\boxed{}." in problem_statement:
             problem_statement = problem_statement.replace(" Let's think step by step and output the final answer within \\boxed{}.", "")
