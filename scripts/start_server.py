@@ -58,14 +58,9 @@ def init_server(
         reward_server_ip=reward_server_ip,
     )
     global_timeout = timeout
-    cpu_count = os.cpu_count()
     # Use 3x the max_init_workers for the thread pool.
     # Full throttle is init/run/eval all at the same time.
-    if cpu_count is None:
-        # Fallback to a reasonable default if CPU count is undetermined
-        thread_pool_count = max_init_workers*3
-    else:
-        thread_pool_count = min(max_init_workers*3, cpu_count - 64)
+    thread_pool_count = max_init_workers*3
     logger.info(f'Using {thread_pool_count} threads for the thread pool')
     thread_pool = ThreadPoolExecutor(max_workers=thread_pool_count)
 
