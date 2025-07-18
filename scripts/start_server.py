@@ -139,7 +139,7 @@ async def start_server():
 
 @app.post('/stop')
 async def stop_server():
-    global server, thread_pool, server_pid
+    global server, thread_pool
     if server is None:
         logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
