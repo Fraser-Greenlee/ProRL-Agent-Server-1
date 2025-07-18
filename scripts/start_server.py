@@ -31,6 +31,28 @@ DEFAULT_TIMEOUT = 300.0  # 5 minutes
 global_timeout = DEFAULT_TIMEOUT
 
 
+def _initialize_thread_pool(force_reinit: bool = False):
+    """Initialize or reinitialize the global thread pool if needed."""
+    global thread_pool, server
+    
+    if server is None:
+        logger.error('Cannot initialize thread pool: server is not initialized')
+        return
+    
+    if thread_pool is None or thread_pool._shutdown or force_reinit:
+        # Clean up existing thread pool if it exists
+        if thread_pool is not None and not thread_pool._shutdown:
+            try:
+                thread_pool.shutdown(wait=False, cancel_futures=True)
+            except Exception as e:
+                logger.warning(f'Error shutting down old thread pool: {e}')
+        
+        # Create new thread pool
+        thread_pool_count = server.max_init_workers * 3
+        thread_pool = ThreadPoolExecutor(max_workers=thread_pool_count)
+        logger.info(f'Initialized thread pool with {thread_pool_count} threads')
+
+
 def init_server(
     max_init_workers: int = 6,
     max_run_workers: int = 5,
@@ -49,7 +71,7 @@ def init_server(
         logger.info(
             'Not allowing skipping evaluation if git_patch is None or empty. Please set allow_skip_eval=True for production.'
         )
-    global server, global_timeout, thread_pool
+    global server, global_timeout
     server = OpenHandsServer(
         llm_server_addresses=[],
         max_init_workers=max_init_workers,
@@ -58,11 +80,6 @@ def init_server(
         reward_server_ip=reward_server_ip,
     )
     global_timeout = timeout
-    # Use 3x the max_init_workers for the thread pool.
-    # Full throttle is init/run/eval all at the same time.
-    thread_pool_count = max_init_workers*3
-    logger.info(f'Using {thread_pool_count} threads for the thread pool')
-    thread_pool = ThreadPoolExecutor(max_workers=thread_pool_count)
 
 
 @app.exception_handler(ServerNotRunningError)
@@ -100,7 +117,7 @@ async def function_not_registered_handler(request, exc):
 
 @app.post('/start')
 async def start_server():
-    global server
+    global server, thread_pool
     if server is None:
         logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
@@ -112,6 +129,8 @@ async def start_server():
 
     try:
         server.start()
+        if thread_pool is None:
+            _initialize_thread_pool()
         return {'status': 'Server started successfully'}
     except Exception as e:
         logger.error(f'Failed to start server: {str(e)}')
@@ -120,7 +139,7 @@ async def start_server():
 
 @app.post('/stop')
 async def stop_server():
-    global server
+    global server, thread_pool, server_pid
     if server is None:
         logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
@@ -134,10 +153,24 @@ async def stop_server():
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, server.stop)
         server.clear_singularity_jobs()
+        
+        # Clean up the global thread pool to prevent dead threads
+        if thread_pool is not None:
+            logger.info('Shutting down global thread pool')
+            thread_pool.shutdown(wait=True, cancel_futures=True)
+            thread_pool = None
         return {'status': 'Server stopped successfully'}
     except Exception as e:
         logger.warning(f'Failed to stop server: {str(e)}. Force kill all singularity jobs.')
         server.clear_singularity_jobs()
+        
+        # Still try to clean up thread pool even if server stop failed
+        if thread_pool is not None:
+            try:
+                thread_pool.shutdown(wait=True, cancel_futures=True)
+                thread_pool = None
+            except Exception as thread_e:
+                logger.warning(f'Failed to shutdown thread pool: {thread_e}')  
         return {'status': 'Force killed all singularity jobs.'}
 
 
@@ -201,8 +234,8 @@ async def clear_llm_server():
 
 @app.post('/process')
 async def process(request: ProcessRequest):
-    global server
-    if server is None:
+    global server, thread_pool
+    if server is None or thread_pool is None:
         logger.error('Server is not initialized. This should not happen.')
         raise HTTPException(
             status_code=500, detail='Server is not initialized. This should not happen.'

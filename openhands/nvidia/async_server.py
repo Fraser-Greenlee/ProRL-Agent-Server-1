@@ -2,6 +2,7 @@ import asyncio
 import heapq
 import queue
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Optional
@@ -133,6 +134,29 @@ class OpenHandsServer:
         llm_config = LLMConfig(base_url=address, **sampling_params)
         return llm_config
 
+    def _cleanup_job_runtime(self, runtime, job_id: str):
+        """Comprehensive cleanup of runtime resources to prevent thread leakage."""
+        try:
+            # 1. Close event stream and its thread pools
+            if hasattr(runtime, 'event_stream') and runtime.event_stream:
+                try:
+                    runtime.event_stream.close()
+                    logger.debug(f'Event stream closed for job {job_id}')
+                except Exception as e:
+                    logger.warning(f'Error closing event stream for job {job_id}: {e}')
+
+            # 2. Close runtime (handles container processes, plugins, etc.)
+            runtime.close()
+
+            # 3. Force cleanup any remaining subprocess-related resources
+            time.sleep(0.1)  # Brief pause for cleanup to complete
+
+        except Exception as e:
+            logger.error(
+                f'Error in comprehensive runtime cleanup for job {job_id}: {e}'
+            )
+            # Don't re-raise - we want cleanup to continue even if parts fail
+
     def start(self):
         if self._server_running:
             raise RuntimeError('Server is already running')
@@ -226,7 +250,7 @@ class OpenHandsServer:
 
         # Close runtime
         if job_details.runtime:
-            job_details.runtime.close()
+            self._cleanup_job_runtime(job_details.runtime, job_id)
         # Delete job details
         with self._job_details_lock:
             del self._job_details[job_id]
@@ -299,14 +323,23 @@ class OpenHandsServer:
                 _init_exception_func = get_registered_functions(
                     'init_exception', dataset_type
                 )
-                job_details.results = _init_exception_func(job_details, e)
+                if _init_exception_func is not None:
+                    job_details.results = _init_exception_func(job_details, e)
+                else:
+                    job_details.results = {
+                        'error': f'Timeout during init: {str(e)}',
+                        'timeout': True,
+                    }
                 if job_details.event is not None:
                     job_details.event.set()
             except Exception as e:
                 _init_exception_func = get_registered_functions(
                     'init_exception', dataset_type
                 )
-                job_details.results = _init_exception_func(job_details, e)
+                if _init_exception_func is not None:
+                    job_details.results = _init_exception_func(job_details, e)
+                else:
+                    job_details.results = {'error': f'Exception during init: {str(e)}'}
                 if job_details.event is not None:
                     job_details.event.set()
             finally:
@@ -370,7 +403,7 @@ class OpenHandsServer:
 
                 # Close runtime (automatically in "others" phase - doesn't count toward timeout)
                 if job_details.runtime:
-                    job_details.runtime.close()
+                    self._cleanup_job_runtime(job_details.runtime, job_id)
                     job_details.runtime = None
 
                 # Push to evaluation queue (automatically "others" phase)
@@ -383,25 +416,34 @@ class OpenHandsServer:
                 job_details.timeout_error = True
                 # Ensure runtime is closed (automatically in "others" phase)
                 if job_details.runtime:
-                    job_details.runtime.close()
+                    self._cleanup_job_runtime(job_details.runtime, job_id)
                     job_details.runtime = None
 
                 _run_exception_func = get_registered_functions(
                     'run_exception', dataset_type
                 )
-                job_details.results = _run_exception_func(job_details, e)
+                if _run_exception_func is not None:
+                    job_details.results = _run_exception_func(job_details, e)
+                else:
+                    job_details.results = {
+                        'error': f'Timeout during run: {str(e)}',
+                        'timeout': True,
+                    }
                 if job_details.event is not None:
                     job_details.event.set()
             except Exception as e:
                 # Ensure runtime is closed (automatically in "others" phase)
                 if job_details.runtime:
-                    job_details.runtime.close()
+                    self._cleanup_job_runtime(job_details.runtime, job_id)
                     job_details.runtime = None
 
                 _run_exception_func = get_registered_functions(
                     'run_exception', dataset_type
                 )
-                job_details.results = _run_exception_func(job_details, e)
+                if _run_exception_func is not None:
+                    job_details.results = _run_exception_func(job_details, e)
+                else:
+                    job_details.results = {'error': f'Exception during run: {str(e)}'}
                 if job_details.event is not None:
                     job_details.event.set()
             finally:
@@ -481,14 +523,23 @@ class OpenHandsServer:
                 _eval_exception_func = get_registered_functions(
                     'eval_exception', dataset_type
                 )
-                job_details.results = _eval_exception_func(job_details, e)
+                if _eval_exception_func is not None:
+                    job_details.results = _eval_exception_func(job_details, e)
+                else:
+                    job_details.results = {
+                        'error': f'Timeout during eval: {str(e)}',
+                        'timeout': True,
+                    }
                 if job_details.event is not None:
                     job_details.event.set()
             except Exception as e:
                 _eval_exception_func = get_registered_functions(
                     'eval_exception', dataset_type
                 )
-                job_details.results = _eval_exception_func(job_details, e)
+                if _eval_exception_func is not None:
+                    job_details.results = _eval_exception_func(job_details, e)
+                else:
+                    job_details.results = {'error': f'Exception during eval: {str(e)}'}
                 if job_details.event is not None:
                     job_details.event.set()
             finally:
@@ -501,30 +552,56 @@ class OpenHandsServer:
         """Run a worker in its own thread with its own event loop. Run until the worker is stopped."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        if is_init_worker:
-            loop.run_until_complete(self._init_worker(worker_id))
-            self._init_workers[worker_id] = loop
-        else:
-            loop.run_until_complete(self._run_worker(worker_id))
-            self._run_workers[worker_id] = loop
+
+        try:
+            if is_init_worker:
+                self._init_workers[worker_id] = loop
+                loop.run_until_complete(self._init_worker(worker_id))
+            else:
+                self._run_workers[worker_id] = loop
+                loop.run_until_complete(self._run_worker(worker_id))
+        finally:
+            # Always close the event loop to prevent resource leaks
+            try:
+                loop.close()
+                logger.debug(
+                    f'Event loop closed for {"init" if is_init_worker else "run"} worker {worker_id}'
+                )
+            except Exception as e:
+                logger.warning(
+                    f'Error closing event loop for {"init" if is_init_worker else "run"} worker {worker_id}: {e}'
+                )
 
     def _run_eval_worker_in_thread(self, worker_id):
         """Start an evaluation worker in its own thread."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(self._eval_worker(worker_id))
-        self._eval_workers[worker_id] = loop
+
+        try:
+            self._eval_workers[worker_id] = loop
+            loop.run_until_complete(self._eval_worker(worker_id))
+        finally:
+            # Always close the event loop to prevent resource leaks
+            try:
+                loop.close()
+                logger.debug(f'Event loop closed for eval worker {worker_id}')
+            except Exception as e:
+                logger.warning(
+                    f'Error closing event loop for eval worker {worker_id}: {e}'
+                )
 
     def stop(self):
         """Stops the server by shutting down all workers and clearing all queues and jobs."""
         if not self._server_running:
             return
-        logger.info('Stopping events')
 
-        # Stop the server running flag first to stop timeout monitor
+        logger.info('Stopping OpenHands server...')
+
+        # Step 1: Set server as not running to prevent new jobs
         self._server_running = False
 
-        # Thread-safe iteration and event setting
+        # Step 2: Force complete all active jobs with timeout errors
+        logger.info('Signaling active jobs to complete...')
         with self._state_lock:
             active_jobs = (
                 list(self._active_init_jobs)
@@ -532,57 +609,102 @@ class OpenHandsServer:
                 + list(self._active_eval_jobs)
             )
 
-        # Signal all active jobs to complete (outside the lock to avoid deadlock)
+        # Signal all active jobs and mark them with timeout errors
         for job_id in active_jobs:
-            with self._job_details_lock:
-                job = self._job_details.get(job_id)
-                if job is not None and job.event is not None:
-                    job.event.set()
+            try:
+                with self._job_details_lock:
+                    job = self._job_details.get(job_id)
+                    if job is not None:
+                        # Mark as timed out and signal completion
+                        job.timeout_error = True
+                        if job.event is not None:
+                            job.event.set()
+                        # Clean up runtime if it exists
+                        if job.runtime:
+                            self._cleanup_job_runtime(job.runtime, job_id)
+                            job.runtime = None
+            except Exception as e:
+                logger.warning(f'Error signaling job {job_id}: {e}')
 
-        logger.info('Stopping queues')
-        # Add sentinel values to queues to unblock workers
+        time.sleep(1)
+        # Step 3: Add stop signals to all queues to unblock workers
+        logger.info('Sending stop signals to worker queues...')
         for _ in range(self.max_init_workers):
             try:
                 self.init_queue.put_nowait('__STOP__')
             except Exception as e:
-                logger.warning(f'Warning: Failed to put stop signal in init queue: {e}')
+                logger.warning(f'Failed to put stop signal in init queue: {e}')
 
         for _ in range(self.max_run_workers):
             try:
                 self.run_queue.put_nowait('__STOP__')
             except Exception as e:
-                logger.warning(f'Warning: Failed to put stop signal in run queue: {e}')
+                logger.warning(f'Failed to put stop signal in run queue: {e}')
 
         for _ in range(self.max_eval_workers):
             try:
                 self.evaluate_queue.put_nowait('__STOP__')
             except Exception as e:
-                logger.warning(f'Warning: Failed to put stop signal in eval queue: {e}')
-
-        logger.info('Shutting down executor')
-        # Shutdown the executor with a timeout - this is the main fix
+                logger.warning(f'Failed to put stop signal in eval queue: {e}')
+        time.sleep(1)
+        # Step 4: Shutdown executor with timeout
+        logger.info('Shutting down thread pool executor...')
         if hasattr(self, '_executor') and self._executor:
-            self._executor.shutdown(wait=True, cancel_futures=True)
+            try:
+                # Give workers 30 seconds to finish gracefully
+                self._executor.shutdown(wait=True, cancel_futures=True)
+                logger.info('Thread pool executor shutdown completed')
+            except Exception as e:
+                logger.warning(f'Error during executor shutdown: {e}')
 
-        logger.info('Clearing active jobs')
-        # Thread-safe cleanup
-        with self._state_lock:
-            self._active_init_jobs.clear()
-            self._active_run_jobs.clear()
-            self._active_eval_jobs.clear()
-
+        # Step 5: Force cleanup any remaining runtime resources
+        logger.info('Cleaning up remaining job resources...')
         with self._job_details_lock:
-            self._job_details.clear()
+            remaining_jobs = list(self._job_details.keys())
+            for job_id in remaining_jobs:
+                try:
+                    job = self._job_details[job_id]
+                    if job.runtime:
+                        self._cleanup_job_runtime(job.runtime, job_id)
+                        job.runtime = None
+                except Exception as e:
+                    logger.warning(f'Error cleaning up job {job_id}: {e}')
 
-        self._init_workers.clear()
-        self._run_workers.clear()
-        self._eval_workers.clear()
-        # Reset queues
-        clear_queue(self.init_queue)
-        clear_queue(self.run_queue)
-        clear_queue(self.evaluate_queue)
+        # Step 6: Clear all data structures
+        logger.info('Clearing internal data structures...')
+        try:
+            with self._state_lock:
+                self._active_init_jobs.clear()
+                self._active_run_jobs.clear()
+                self._active_eval_jobs.clear()
 
-        logger.info(f'Server status: {self.status()}')
+            with self._job_details_lock:
+                self._job_details.clear()
+
+            # Clear worker lists (event loops are handled by thread completion)
+            self._init_workers.clear()
+            self._run_workers.clear()
+            self._eval_workers.clear()
+        except Exception as e:
+            logger.warning(f'Error clearing data structures: {e}')
+
+        # Step 7: Clear all queues
+        logger.info('Clearing all queues...')
+        try:
+            clear_queue(self.init_queue)
+            clear_queue(self.run_queue)
+            clear_queue(self.evaluate_queue)
+        except Exception as e:
+            logger.warning(f'Error clearing queues: {e}')
+
+        # Step 8: Clean up any remaining singularity jobs
+        logger.info('Cleaning up singularity processes...')
+        try:
+            self.clear_singularity_jobs()
+        except Exception as e:
+            logger.warning(f'Error cleaning up singularity jobs: {e}')
+
+        logger.info(f'Server stopped. Final status: {self.status()}')
 
     def status(self):
         """Returns the number of jobs currently being processed in both queues and workers."""

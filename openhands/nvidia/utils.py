@@ -21,11 +21,30 @@ from openhands.nvidia.registry import JobDetails
 
 
 def clear_queue(q: queue.Queue):
+    """Clear all items from a queue and properly mark them as done.
+
+    This function removes all items from the queue and calls task_done()
+    for each item to maintain proper queue state for join() operations.
+    """
+    items_cleared = 0
     while not q.empty():
         try:
             q.get_nowait()
+            try:
+                q.task_done()  # Mark the task as done
+                items_cleared += 1
+            except ValueError as e:
+                # task_done() called too many times - this shouldn't happen but handle gracefully
+                logger.warning(
+                    f'task_done() called too many times while clearing queue: {e}'
+                )
+                items_cleared += 1  # Still count the item as cleared
         except queue.Empty:
+            # Queue became empty between qsize check and get_nowait
             break
+
+    if items_cleared > 0:
+        logger.debug(f'Cleared {items_cleared} items from queue')
 
 
 def get_singularity_job_pids():
@@ -162,10 +181,7 @@ async def process_with_timeout(
             thread_pool,
             lambda: server.process(instance, sampling_params, job_id, timeout),
         )
-
-        # Wait for the future with timeout
-        # We use 2x the timeout to account time in queue
-        result = await asyncio.wait_for(future, timeout=timeout * 2)
+        result = await future
         return result
     except asyncio.TimeoutError:
         # Clean up the timed-out job
