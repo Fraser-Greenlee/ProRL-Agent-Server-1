@@ -5,7 +5,8 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Optional
+from enum import Enum
+from typing import Any, Optional, cast
 
 from openhands.core.config.llm_config import LLMConfig
 from openhands.nvidia.logger import nvidia_logger as logger
@@ -28,6 +29,14 @@ from openhands.nvidia.utils import (
     get_singularity_job_pids,
     kill_all_singularity_jobs,
 )
+
+# add enum for 3 types of jobs
+
+
+class JobType(Enum):
+    INIT = 'init'
+    RUN = 'run'
+    EVAL = 'eval'
 
 
 class OpenHandsServer:
@@ -179,15 +188,15 @@ class OpenHandsServer:
 
         # Submit init workers
         for i in range(self.max_init_workers):
-            self._executor.submit(self._run_worker_in_thread, i, True)
+            self._executor.submit(self._run_worker_in_thread, i, JobType.INIT)
 
         # Submit run workers
         for i in range(self.max_run_workers):
-            self._executor.submit(self._run_worker_in_thread, i, False)
+            self._executor.submit(self._run_worker_in_thread, i, JobType.RUN)
 
         # Submit evaluation workers
         for i in range(self.max_eval_workers):
-            self._executor.submit(self._run_eval_worker_in_thread, i)
+            self._executor.submit(self._run_worker_in_thread, i, JobType.EVAL)
 
         self.clear_singularity_jobs()
 
@@ -256,107 +265,49 @@ class OpenHandsServer:
             del self._job_details[job_id]
         return result
 
-    async def _init_worker(self, wid):
+    async def _worker(self, wid, job_type: JobType):
+        """Unified worker function that handles init, run, and eval jobs based on job_type."""
+
+        # Map job types to their respective queues and tracking sets
+        job_config = {
+            JobType.INIT: {
+                'queue': self.init_queue,
+                'active_jobs': self._active_init_jobs,
+                'function_type': 'init',
+                'exception_type': 'init_exception',
+                'worker_name': 'init-worker',
+            },
+            JobType.RUN: {
+                'queue': self.run_queue,
+                'active_jobs': self._active_run_jobs,
+                'function_type': 'run',
+                'exception_type': 'run_exception',
+                'worker_name': 'run-worker',
+            },
+            JobType.EVAL: {
+                'queue': self.evaluate_queue,
+                'active_jobs': self._active_eval_jobs,
+                'function_type': 'eval',
+                'exception_type': 'eval_exception',
+                'worker_name': 'eval-worker',
+            },
+        }
+
+        job_config_data = job_config[job_type]
+        queue_obj: queue.Queue[str] = cast(queue.Queue[str], job_config_data['queue'])
+        active_jobs_set: set[str] = cast(set[str], job_config_data['active_jobs'])
+        function_type: str = cast(str, job_config_data['function_type'])
+        exception_type: str = cast(str, job_config_data['exception_type'])
+        worker_name: str = cast(str, job_config_data['worker_name'])
+
         while True:
-            logger.info(f'[init-worker-{wid}] Waiting for job')
-            job_id = await asyncio.to_thread(self.init_queue.get)
+            logger.info(f'[{worker_name}-{wid}] Waiting for job')
+            job_id = await asyncio.to_thread(queue_obj.get)
 
             # Check for stop sentinel
             if job_id == '__STOP__':
-                logger.info(f'[init-worker-{wid}] Received stop signal, exiting')
-                self.init_queue.task_done()
-                break
-
-            logger.info(f'[init-worker-{wid}] Got job {job_id}')
-
-            # Thread-safe job details retrieval
-            with self._job_details_lock:
-                job_details = self._job_details.get(job_id)
-                if job_details is None:
-                    logger.warning(
-                        f'[init-worker-{wid}] Job {job_id} not found, skipping'
-                    )
-                    self.init_queue.task_done()
-                    continue
-
-            # Thread-safe active jobs tracking
-            with self._state_lock:
-                self._active_init_jobs.add(job_id)
-
-            if job_details.instance is None:
-                raise RuntimeError('Instance is not initialized')
-            dataset_type = job_details.instance.get('data_source', 'swebench')
-            _init_func = get_registered_functions('init', dataset_type)
-
-            try:
-                if _init_func is None:
-                    raise FunctionNotRegisteredError(
-                        f"Function '{dataset_type}' not found in registry type 'init'"
-                    )
-
-                # Enter init phase - all work here counts toward timeout
-                if job_details.timer is None:
-                    raise RuntimeError('Timer is not initialized')
-                with phase_context(job_details.timer, 'init'):
-                    # Use timeout-aware coroutine execution
-                    init_coro = _init_func(
-                        job_details=job_details,
-                        sid=job_id,
-                        max_iterations=job_details.max_iterations,
-                    )
-                    runtime, metadata, config = await run_with_timeout_awareness(
-                        job_details.timer, init_coro
-                    )
-
-                job_details.runtime = runtime
-                job_details.metadata = metadata
-                job_details.config = config
-
-                # Put in run queue (automatically becomes "others" phase)
-                self.run_queue.put(job_id)
-
-            except TimeoutError as e:
-                logger.warning(
-                    f'[init-worker-{wid}] Job {job_id} timed out during init: {e}'
-                )
-                job_details.timeout_error = True
-                _init_exception_func = get_registered_functions(
-                    'init_exception', dataset_type
-                )
-                if _init_exception_func is not None:
-                    job_details.results = _init_exception_func(job_details, e)
-                else:
-                    job_details.results = {
-                        'error': f'Timeout during init: {str(e)}',
-                        'timeout': True,
-                    }
-                if job_details.event is not None:
-                    job_details.event.set()
-            except Exception as e:
-                _init_exception_func = get_registered_functions(
-                    'init_exception', dataset_type
-                )
-                if _init_exception_func is not None:
-                    job_details.results = _init_exception_func(job_details, e)
-                else:
-                    job_details.results = {'error': f'Exception during init: {str(e)}'}
-                if job_details.event is not None:
-                    job_details.event.set()
-            finally:
-                # Thread-safe cleanup
-                with self._state_lock:
-                    self._active_init_jobs.discard(job_id)
-                self.init_queue.task_done()
-
-    async def _run_worker(self, wid):
-        while True:
-            logger.info(f'[run-worker-{wid}] Waiting for job')
-            job_id = await asyncio.to_thread(self.run_queue.get)
-
-            # Check for stop sentinel
-            if job_id == '__STOP__':
-                logger.info(f'[run-worker-{wid}] Received stop signal, exiting')
-                self.run_queue.task_done()
+                logger.info(f'[{worker_name}-{wid}] Received stop signal, exiting')
+                queue_obj.task_done()
                 break
 
             # Thread-safe job details retrieval
@@ -364,230 +315,156 @@ class OpenHandsServer:
                 job_details = self._job_details.get(job_id)
                 if job_details is None:
                     logger.warning(
-                        f'[run-worker-{wid}] Job {job_id} not found, skipping'
+                        f'[{worker_name}-{wid}] Job {job_id} not found, skipping'
                     )
-                    self.run_queue.task_done()
+                    queue_obj.task_done()
                     continue
 
-            logger.info(f'[run-worker-{wid}] Got job {job_id}')
+            logger.info(f'[{worker_name}-{wid}] Got job {job_id}')
 
             # Thread-safe active jobs tracking
             with self._state_lock:
-                self._active_run_jobs.add(job_id)
+                active_jobs_set.add(job_id)
 
             if job_details.instance is None:
                 raise RuntimeError('Instance is not initialized')
             dataset_type = job_details.instance.get('data_source', 'swebench')
-            _run_func = get_registered_functions('run', dataset_type)
+            func = get_registered_functions(function_type, dataset_type)
 
             try:
-                if _run_func is None:
+                if func is None:
                     raise FunctionNotRegisteredError(
-                        f"Function '{dataset_type}' not found in registry type 'run'"
+                        f"Function '{dataset_type}' not found in registry type '{function_type}'"
                     )
 
-                # Enter run phase - all work here counts toward timeout
+                # Enter appropriate phase - all work here counts toward timeout
                 if job_details.timer is None:
                     raise RuntimeError('Timer is not initialized')
-                with phase_context(job_details.timer, 'run'):
-                    # Use timeout-aware coroutine execution
-                    run_coro = _run_func(
-                        job_details=job_details,
-                        sid=job_id,
-                    )
-                    run_results = await run_with_timeout_awareness(
-                        job_details.timer, run_coro
-                    )
 
-                job_details.run_results = run_results
+                with phase_context(job_details.timer, function_type):
+                    # Execute the appropriate function based on job type
+                    if job_type == JobType.INIT:
+                        # Use timeout-aware coroutine execution
+                        init_coro = func(
+                            job_details=job_details,
+                            sid=job_id,
+                            max_iterations=job_details.max_iterations,
+                        )
+                        runtime, metadata, config = await run_with_timeout_awareness(
+                            job_details.timer, init_coro
+                        )
+                        job_details.runtime = runtime
+                        job_details.metadata = metadata
+                        job_details.config = config
+                        # Put in run queue (automatically becomes "others" phase)
+                        self.run_queue.put(job_id)
 
-                # Close runtime (automatically in "others" phase - doesn't count toward timeout)
-                if job_details.runtime:
-                    self._cleanup_job_runtime(job_details.runtime, job_id)
-                    job_details.runtime = None
+                    elif job_type == JobType.RUN:
+                        # Use timeout-aware coroutine execution
+                        run_coro = func(
+                            job_details=job_details,
+                            sid=job_id,
+                        )
+                        run_results = await run_with_timeout_awareness(
+                            job_details.timer, run_coro
+                        )
+                        job_details.run_results = run_results
+                        # Close runtime (automatically in "others" phase - doesn't count toward timeout)
+                        if job_details.runtime:
+                            self._cleanup_job_runtime(job_details.runtime, job_id)
+                            job_details.runtime = None
+                        # Push to evaluation queue (automatically "others" phase)
+                        self.evaluate_queue.put(job_id)
 
-                # Push to evaluation queue (automatically "others" phase)
-                self.evaluate_queue.put(job_id)
+                    elif job_type == JobType.EVAL:
+                        # Use timeout-aware coroutine execution
+                        eval_coro = func(
+                            job_details,
+                            sid=f'eval_{job_id}',
+                            allow_skip=self.allow_skip_eval,
+                            reward=self.reward,
+                        )
+                        eval_report = await run_with_timeout_awareness(
+                            job_details.timer, eval_coro
+                        )
+                        # Only keep the 'report' field if present
+                        if isinstance(eval_report, dict) and 'report' in eval_report:
+                            job_details.eval_results = eval_report['report']
+                        else:
+                            job_details.eval_results = eval_report
+                        if job_details.event is not None:
+                            job_details.event.set()
 
             except TimeoutError as e:
                 logger.warning(
-                    f'[run-worker-{wid}] Job {job_id} timed out during run: {e}'
+                    f'[{worker_name}-{wid}] Job {job_id} timed out during {function_type}: {e}'
                 )
                 job_details.timeout_error = True
-                # Ensure runtime is closed (automatically in "others" phase)
-                if job_details.runtime:
+
+                # Handle runtime cleanup for run workers
+                if job_type == JobType.RUN and job_details.runtime:
                     self._cleanup_job_runtime(job_details.runtime, job_id)
                     job_details.runtime = None
 
-                _run_exception_func = get_registered_functions(
-                    'run_exception', dataset_type
-                )
-                if _run_exception_func is not None:
-                    job_details.results = _run_exception_func(job_details, e)
+                exception_func = get_registered_functions(exception_type, dataset_type)
+                if exception_func is not None:
+                    job_details.results = exception_func(job_details, e)
                 else:
                     job_details.results = {
-                        'error': f'Timeout during run: {str(e)}',
+                        'error': f'Timeout during {function_type}: {str(e)}',
                         'timeout': True,
                     }
                 if job_details.event is not None:
                     job_details.event.set()
+
             except Exception as e:
-                # Ensure runtime is closed (automatically in "others" phase)
-                if job_details.runtime:
+                # Handle runtime cleanup for run workers
+                if job_type == JobType.RUN and job_details.runtime:
                     self._cleanup_job_runtime(job_details.runtime, job_id)
                     job_details.runtime = None
 
-                _run_exception_func = get_registered_functions(
-                    'run_exception', dataset_type
-                )
-                if _run_exception_func is not None:
-                    job_details.results = _run_exception_func(job_details, e)
-                else:
-                    job_details.results = {'error': f'Exception during run: {str(e)}'}
-                if job_details.event is not None:
-                    job_details.event.set()
-            finally:
-                # Thread-safe cleanup
-                with self._state_lock:
-                    self._active_run_jobs.discard(job_id)
-                self.run_queue.task_done()
-
-    async def _eval_worker(self, wid):
-        """Worker that evaluates the generated patch and produces a report."""
-        while True:
-            logger.info(f'[eval-worker-{wid}] Waiting for job')
-            job_id = await asyncio.to_thread(self.evaluate_queue.get)
-
-            # Check for stop sentinel
-            if job_id == '__STOP__':
-                logger.info(f'[eval-worker-{wid}] Received stop signal, exiting')
-                self.evaluate_queue.task_done()
-                break
-
-            logger.info(f'[eval-worker-{wid}] Got job {job_id}')
-
-            # Thread-safe job details retrieval
-            with self._job_details_lock:
-                job_details = self._job_details.get(job_id)
-                if job_details is None:
-                    logger.warning(
-                        f'[eval-worker-{wid}] Job {job_id} not found, skipping'
-                    )
-                    self.evaluate_queue.task_done()
-                    continue
-
-            # Thread-safe active jobs tracking
-            with self._state_lock:
-                self._active_eval_jobs.add(job_id)
-
-            if job_details.instance is None:
-                raise RuntimeError('Instance is not initialized')
-            dataset_type = job_details.instance.get('data_source', 'swebench')
-            _eval_func = get_registered_functions('eval', dataset_type)
-
-            try:
-                if _eval_func is None:
-                    raise FunctionNotRegisteredError(
-                        f"Function '{dataset_type}' not found in registry type 'eval'"
-                    )
-
-                # Enter eval phase - all work here counts toward timeout
-                if job_details.timer is None:
-                    raise RuntimeError('Timer is not initialized')
-                with phase_context(job_details.timer, 'eval'):
-                    # Use timeout-aware coroutine execution
-                    eval_coro = _eval_func(
-                        job_details,
-                        sid=f'eval_{job_id}',
-                        allow_skip=self.allow_skip_eval,
-                        reward=self.reward,
-                    )
-                    eval_report = await run_with_timeout_awareness(
-                        job_details.timer, eval_coro
-                    )
-
-                # Only keep the 'report' field if present
-                if isinstance(eval_report, dict) and 'report' in eval_report:
-                    job_details.eval_results = eval_report['report']
-                else:
-                    job_details.eval_results = eval_report
-
-                if job_details.event is not None:
-                    job_details.event.set()
-
-            except TimeoutError as e:
-                logger.warning(
-                    f'[eval-worker-{wid}] Job {job_id} timed out during eval: {e}'
-                )
-                job_details.timeout_error = True
-                _eval_exception_func = get_registered_functions(
-                    'eval_exception', dataset_type
-                )
-                if _eval_exception_func is not None:
-                    job_details.results = _eval_exception_func(job_details, e)
+                exception_func = get_registered_functions(exception_type, dataset_type)
+                if exception_func is not None:
+                    job_details.results = exception_func(job_details, e)
                 else:
                     job_details.results = {
-                        'error': f'Timeout during eval: {str(e)}',
-                        'timeout': True,
+                        'error': f'Exception during {function_type}: {str(e)}'
                     }
                 if job_details.event is not None:
                     job_details.event.set()
-            except Exception as e:
-                _eval_exception_func = get_registered_functions(
-                    'eval_exception', dataset_type
-                )
-                if _eval_exception_func is not None:
-                    job_details.results = _eval_exception_func(job_details, e)
-                else:
-                    job_details.results = {'error': f'Exception during eval: {str(e)}'}
-                if job_details.event is not None:
-                    job_details.event.set()
+
             finally:
                 # Thread-safe cleanup
                 with self._state_lock:
-                    self._active_eval_jobs.discard(job_id)
-                self.evaluate_queue.task_done()
+                    active_jobs_set.discard(job_id)
+                queue_obj.task_done()
 
-    def _run_worker_in_thread(self, worker_id, is_init_worker):
+    def _run_worker_in_thread(self, worker_id, job_type: JobType):
         """Run a worker in its own thread with its own event loop. Run until the worker is stopped."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         try:
-            if is_init_worker:
-                self._init_workers[worker_id] = loop
-                loop.run_until_complete(self._init_worker(worker_id))
-            else:
-                self._run_workers[worker_id] = loop
-                loop.run_until_complete(self._run_worker(worker_id))
+            match job_type:
+                case JobType.INIT:
+                    self._init_workers[worker_id] = loop
+                    loop.run_until_complete(self._worker(worker_id, job_type))
+                case JobType.RUN:
+                    self._run_workers[worker_id] = loop
+                    loop.run_until_complete(self._worker(worker_id, job_type))
+                case JobType.EVAL:
+                    self._eval_workers[worker_id] = loop
+                    loop.run_until_complete(self._worker(worker_id, job_type))
         finally:
             # Always close the event loop to prevent resource leaks
             try:
                 loop.close()
                 logger.debug(
-                    f'Event loop closed for {"init" if is_init_worker else "run"} worker {worker_id}'
+                    f'Event loop closed for {job_type.value} worker {worker_id}'
                 )
             except Exception as e:
                 logger.warning(
-                    f'Error closing event loop for {"init" if is_init_worker else "run"} worker {worker_id}: {e}'
-                )
-
-    def _run_eval_worker_in_thread(self, worker_id):
-        """Start an evaluation worker in its own thread."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        try:
-            self._eval_workers[worker_id] = loop
-            loop.run_until_complete(self._eval_worker(worker_id))
-        finally:
-            # Always close the event loop to prevent resource leaks
-            try:
-                loop.close()
-                logger.debug(f'Event loop closed for eval worker {worker_id}')
-            except Exception as e:
-                logger.warning(
-                    f'Error closing event loop for eval worker {worker_id}: {e}'
+                    f'Error closing event loop for {job_type.value} worker {worker_id}: {e}'
                 )
 
     def stop(self):
