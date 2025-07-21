@@ -72,7 +72,7 @@ from swegym.harness.run_evaluation import (
 from swegym.harness.test_spec import make_test_spec
 
 
-def get_instance_docker_image(instance, data_kind) -> str:
+def get_instance_docker_image(instance, data_kind = "swebench") -> str:
     if data_kind == "r2egym":
         logger.debug("data_kind is r2egym")
         return instance["docker_image"]
@@ -89,7 +89,10 @@ def get_instance_docker_image(instance, data_kind) -> str:
         docker_prefix = "docker.io/swebench"
     elif data_kind == "swebench":
         logger.debug("data_kind is swebench")
-        instance_id = instance["instance_id"]
+        if isinstance(instance, str):
+            instance_id = instance
+        else:
+            instance_id = instance["instance_id"]
         image_name = f"sweb.eval.x86_64.{instance_id}".replace("__", "_s_")
         docker_prefix = DOCKER_IMAGE_PREFIX.rstrip("/")
     else:
