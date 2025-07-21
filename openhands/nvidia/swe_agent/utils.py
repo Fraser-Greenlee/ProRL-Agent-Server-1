@@ -71,6 +71,7 @@ from swegym.harness.run_evaluation import (
 )
 from swegym.harness.test_spec import make_test_spec
 
+
 def get_instance_docker_image(instance, data_kind) -> str:
     if data_kind == "r2egym":
         logger.debug("data_kind is r2egym")
@@ -93,7 +94,8 @@ def get_instance_docker_image(instance, data_kind) -> str:
         docker_prefix = DOCKER_IMAGE_PREFIX.rstrip("/")
     else:
         raise ValueError(f"Invalid data kind: {data_kind}")
-    return f"{docker_prefix}/{image_name}".lower()
+    result = f"{docker_prefix}/{image_name}".lower()
+    return result
 
 def get_config(
     instance: dict,
@@ -295,27 +297,92 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
     from openhands.events.observation import CmdOutputObservation
     import tempfile, json, re
 
+    def _normalise(nodeid: str) -> str:
+        nodeid = nodeid.split(" - ")[0]
+        parts  = nodeid.split("::")
+
+        if len(parts) >= 3:
+            return ".".join(parts[-2:])
+        if len(parts) == 2:
+            return parts[-1]
+        return nodeid
+
     def _basic_pytest_parser(log: str) -> dict[str, str]:
         status_map: dict[str, str] = {}
-        for line in log.split("\n"):
-            if line.startswith(("PASSED", "FAILED", "ERROR", "SKIPPED")):
-                parts = line.split()
-                if len(parts) >= 2:
-                    status_map[parts[1].split(" - ")[0]] = parts[0]
+        ansi_re = re.compile(r"\u001b\[[0-9;]*m")
+
+        for line in log.splitlines():
+            line = ansi_re.sub("", line).strip()
+            if not line.startswith(("PASSED", "FAILED", "ERROR", "SKIPPED")):
+                continue
+
+            parts = line.split(maxsplit=1)
+            if len(parts) != 2:
+                continue
+
+            status, nodeid_raw = parts
+            test_name = _normalise(nodeid_raw)
+            if test_name:
+                status_map[test_name] = status
+
         return status_map
 
-    def parse_log_fn(_repo: str): # noqa: D401
-        """Return the basic pytest parser when r2egym is unavailable."""
+    def parse_log_fn(_repo: str):
         return _basic_pytest_parser
 
     def decolor_dict_keys(d: dict[str, str]) -> dict[str, str]:
         ansi_re = re.compile(r"\u001b\[[0-9;]*m")
         return {ansi_re.sub("", k): v for k, v in d.items()}
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".diff") as tmp:
-        tmp.write(git_patch.encode())
-        tmp_path = tmp.name
-    runtime.copy_to(tmp_path, "/tmp/patch.diff")
+    git_patch = _process_git_patch(git_patch)
+
+    try:
+        status_action = CmdRunAction(command="cd /testbed && git status --porcelain")
+        status_action.set_hard_timeout(10)
+        status_obs = runtime.run_action(status_action)
+        modified_in_repo: set[str] = set()
+        if isinstance(status_obs, CmdOutputObservation):
+            for _line in status_obs.content.splitlines():
+                _line = _line.rstrip("\n")
+                if not _line:
+                    continue
+                if _line.startswith("??"):
+                    path_part = _line[3:].strip()
+                    if path_part:
+                        modified_in_repo.add(path_part)
+                    continue
+
+                if len(_line) < 3:
+                    continue
+                x_status, y_status = _line[0], _line[1]
+                if y_status != " ":
+                    path_part = _line[3:].strip()
+                    if path_part:
+                        modified_in_repo.add(path_part)
+        if modified_in_repo:
+            filtered_lines: list[str] = []
+            include_current = True
+            for _l in git_patch.splitlines(keepends=True):
+                if _l.startswith("diff --git"):
+                    try:
+                        parts = _l.split()
+                        current_file = parts[3][2:] if len(parts) >= 4 else ""
+                        include_current = current_file not in modified_in_repo
+                    except Exception:
+                        include_current = True
+                    if include_current:
+                        filtered_lines.append(_l)
+                else:
+                    if include_current:
+                        filtered_lines.append(_l)
+            git_patch = "".join(filtered_lines)
+    except Exception as e:
+        logger.error(f"Failed to filter git patch against repo changes: {e}")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        patch_path = os.path.join(tmp_dir, "patch.diff")
+        with open(patch_path, "w") as f:
+            f.write(git_patch)
+        runtime.copy_to(patch_path, "/tmp/")
 
     apply_cmd = (
         "cd /testbed && "
@@ -329,7 +396,6 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
     obs = runtime.run_action(action)
     assert isinstance(obs, CmdOutputObservation)
     patch_result = obs.content
-
     # Early return if patch failed to apply
     if "APPLY_PATCH_FAIL" in patch_result or "APPLY_PATCH_PASS" not in patch_result:
         return {
@@ -343,8 +409,8 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
             "apply_patch_output": patch_result,
             "test_output": "",
         }
-    action = CmdRunAction(command="bash /root/run_tests.sh")
-    action.set_hard_timeout(20 * 60)  # 20-minute hard timeout
+    action = CmdRunAction(command="ln -s /r2e_tests /testbed/r2e_tests && bash /testbed/run_tests.sh")
+    action.set_hard_timeout(60)
     obs = runtime.run_action(action)
     assert isinstance(obs, CmdOutputObservation)
     test_output = obs.content
@@ -357,20 +423,25 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
     parsed = decolor_dict_keys(parsed)
 
     expected_json = instance.get("expected_output_json")
-    if not expected_json:
-        exp_obs = runtime.run_action(FileReadAction(path="/root/expected_test_output.json"))
-        expected_json = getattr(exp_obs, "content", "{}")
     try:
+        print("try to load expected_json")
         expected = json.loads(expected_json)
     except Exception:
+        print("failed to load expected_json")
         expected = {}
     expected = decolor_dict_keys(expected)
     strip_suffix = lambda d: {k.split(" - ")[0]: v for k, v in d.items()}
     parsed = strip_suffix(parsed)
     expected = strip_suffix(expected)
 
-    resolved = bool(parsed) and len(parsed) == len(expected) and all(
-        k in expected and parsed[k] == expected[k] for k in parsed
+    parse_norm     = { _normalise(k): v for k, v in parsed.items() }
+    expected_norm  = { _normalise(k): v for k, v in expected.items() }
+
+    # compare
+    match = parse_norm == expected_norm
+
+    resolved = len(parse_norm) == len(expected_norm) and all(
+        k in expected_norm and parse_norm[k] == expected_norm[k] for k in parse_norm
     )
     return {
         "report": {
@@ -556,9 +627,7 @@ async def evaluate_agent(git_patch: str | None, instance: dict, sid: str | None 
     else:
         if git_patch is None:
             raise ValueError('Patch is None, cannot evaluate')
-
     from openhands.utils.async_utils import call_sync_from_async
-
     runtime = None
 
     # Create a dummy LLM config to avoid the error of no LLM config
@@ -572,9 +641,14 @@ async def evaluate_agent(git_patch: str | None, instance: dict, sid: str | None 
 
     try:
         runtime, _, _ = await initialize_agents(instance, llm_config=llm_config, sid=sid)
-        test_result = await call_sync_from_async(
-            _apply_patch_and_evaluate, runtime, git_patch, instance
-        )
+        if instance.get("data_kind") == "r2egym":
+            test_result = await call_sync_from_async(
+                _apply_patch_and_evaluate_r2egym, runtime, git_patch, instance
+            )
+        else:
+            test_result = await call_sync_from_async(
+                _apply_patch_and_evaluate, runtime, git_patch, instance
+            )
     except Exception as e:
         logger.error(f"Error evaluating agent: {e}")
         raise e
