@@ -397,7 +397,7 @@ OpenHands server supports three variants of the SWE-Bench task family. Each vari
 
 1. **SWE-Gym/SWE-Bench**
    • *Inference*: The container image name is derived from `instance_id` as `xingyaoww/sweb.eval.x86_64.<instance_id>` and executed inside an isolated sandbox. The runtime resource factor is dynamically scaled with task difficulty.
-   • *Evaluation*: By default the pipeline invokes `swegym.harness.*` to apply the generated patch and run the test-suite. If `swegym` is not available, it gracefully falls back to the official `swebench.harness.*` implementation.
+   • *Evaluation*: By default the pipeline invokes `swegym.harness.*` to apply the generated patch and run the test-suite.
    • *Extra dependency*: `pip install git+https://github.com/SWE-Gym/SWE-Bench-Package.git`
 
 2. **SWE-Bench Multimodal**
@@ -407,7 +407,6 @@ OpenHands server supports three variants of the SWE-Bench task family. Each vari
 
 3. **R2E-Gym**
    • *Inference*: Each instance contains an explicit `docker_image` field. OpenHands pulls and executes this image directly; the runtime resource factor is fixed at 1 to minimise resource variance.
-   • *Evaluation*: Uses the internal helper `_apply_patch_and_evaluate_r2egym`. The overall procedure mirrors SWE-Bench but includes a custom parser tailored to the R2E-Gym test-log format.
    • *Evaluation*: Uses the internal helper `_apply_patch_and_evaluate_r2egym`. The overall procedure mirrors SWE-Bench but includes a custom parser tailored to the R2E-Gym test-log format.
     In addition, the evaluator **pre-filters the patch**: any hunk that edits files already modified inside the Docker image is discarded. Consequently, patches that touch such files will be partially (or fully) ignored and may not apply cleanly.
 
