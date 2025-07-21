@@ -408,7 +408,6 @@ OpenHands server supports three variants of the SWE-Bench task family. Each vari
 3. **R2E-Gym**
    • *Inference*: Each instance contains an explicit `docker_image` field. OpenHands pulls and executes this image directly; the runtime resource factor is fixed at 1 to minimise resource variance.
    • *Evaluation*: Uses the internal helper `_apply_patch_and_evaluate_r2egym`. The overall procedure mirrors SWE-Bench but includes a custom parser tailored to the R2E-Gym test-log format.
-   • *Extra dependency*: `pip install git+https://github.com/R2E-Gym/R2E-Gym.git`
    • *Evaluation*: Uses the internal helper `_apply_patch_and_evaluate_r2egym`. The overall procedure mirrors SWE-Bench but includes a custom parser tailored to the R2E-Gym test-log format.
     In addition, the evaluator **pre-filters the patch**: any hunk that edits files already modified inside the Docker image is discarded. Consequently, patches that touch such files will be partially (or fully) ignored and may not apply cleanly.
 

@@ -8,8 +8,7 @@ import pandas as pd
 import hashlib
 from openhands.nvidia.swe_agent.utils import evaluate_agent as _evaluate_agent
 from openhands.nvidia.async_server import OpenHandsServer
-from r2egym.commit_models.diff_classes import ParsedCommit
-from r2egym.logging import setup_logging
+from openhands.nvidia.swe_agent.r2egym_parser import ParsedCommit
 
 def pre_process_r2egym_instance(r2egym_instance):
     r2egym_instance = pd.Series(r2egym_instance)
@@ -64,13 +63,13 @@ def _parse_args():
     parser.add_argument(
         '--num-instances',
         type=int,
-        default=None,
+        default=1,
         help='Number of instances to evaluate (default: 1).',
     )
     parser.add_argument(
         '--concurrency',
         type=int,
-        default=64,
+        default=1,
         help='Maximum number of concurrent evaluations to run (default: 64, matching run_swebench.py).',
     )
     parser.add_argument(

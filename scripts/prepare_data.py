@@ -4,6 +4,7 @@ import argparse
 import os
 from pathlib import Path
 import json
+from openhands.nvidia.swe_agent.r2egym_parser import ParsedCommit
 
 def merge_multiple_dataframes(dataframes):
     merged_df = pd.concat(dataframes, ignore_index=True, sort=False)
