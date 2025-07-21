@@ -391,7 +391,26 @@ job_details.start_eval_time = 1234567980.0
 
 #### SWE Agent Handler Example
 
-To illustrate the pipeline with a concrete example, here's how the SWE Agent Handler (for SWEBench tasks) uses the pipeline:
+To illustrate the pipeline with a concrete example, here's how the SWE Agent Handler (for SWEBench-style tasks) uses the pipeline:
+
+OpenHands server supports three variants of the SWE-Bench task family. Each variant is handled slightly differently in the *inference* and *evaluation* phases:
+
+1. **SWE-Gym/SWE-Bench**
+   • *Inference*: The container image name is derived from `instance_id` as `xingyaoww/sweb.eval.x86_64.<instance_id>` and executed inside an isolated sandbox. The runtime resource factor is dynamically scaled with task difficulty.
+   • *Evaluation*: By default the pipeline invokes `swegym.harness.*` to apply the generated patch and run the test-suite.
+   • *Extra dependency*: `pip install git+https://github.com/SWE-Gym/SWE-Bench-Package.git`
+
+2. **SWE-Bench Multimodal**
+   • *Inference*: Builds the official image path `docker.io/swebench/sweb.eval.x86_64.<repo>_1776_<issue>:latest` from `instance_id` and mounts the dataset-provided `image_assets` directory to support vision-related tests.
+   • *Evaluation*: Utilises `swebench.harness` for patch application and testing; the multimodal harness automatically locates and loads the required image assets.
+   • *Extra dependency*: `pip install swebench` (or install the SWE-Bench-Package above for the latest commits)
+
+3. **R2E-Gym**
+   • *Inference*: Each instance contains an explicit `docker_image` field. OpenHands pulls and executes this image directly; the runtime resource factor is fixed at 1 to minimise resource variance.
+   • *Evaluation*: Uses the internal helper `_apply_patch_and_evaluate_r2egym`. The overall procedure mirrors SWE-Bench but includes a custom parser tailored to the R2E-Gym test-log format.
+    In addition, the evaluator **pre-filters the patch**: any hunk that edits files already modified inside the Docker image is discarded. Consequently, patches that touch such files will be partially (or fully) ignored and may not apply cleanly.
+
+*Tip*: If the evaluation images are not present locally, run `scripts/pull_swe_images.py` to download them in bulk.
 
 **SWE Agent Init Stage:**
 ```python

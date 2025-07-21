@@ -7,16 +7,16 @@ import time
 
 import numpy as np
 import pandas as pd
-
+import json
 from openhands.nvidia.async_server import OpenHandsServer
-
+from openhands.nvidia.swe_agent.r2egym_parser import ParsedCommit
 
 def pre_process_r2egym_instance(r2egym_instance):
     r2egym_instance = pd.Series(r2egym_instance)
     r2egym_instance = r2egym_instance.apply(
         lambda x: x.tolist() if isinstance(x, np.ndarray) else x
     )
-    r2egym_instance['data_source'] = 'swebench'  # keep using swebench handler logic
+    r2egym_instance['data_source'] = 'swebench'
     r2egym_instance['instance_id'] = (
         r2egym_instance['docker_image'].replace('/', '_').replace(':', '_')
     )
@@ -37,8 +37,11 @@ def pre_process_r2egym_instance(r2egym_instance):
             r2egym_instance['base_commit'] = r2egym_instance['commit_hash']
         else:
             r2egym_instance['base_commit'] = version_part
+    r2egym_instance['data_kind'] = 'r2egym'
+    parsed_commit = ParsedCommit(**json.loads(r2egym_instance['parsed_commit_content']))
+    old_commit = parsed_commit.old_commit_hash
+    r2egym_instance['old_commit'] = old_commit
     return r2egym_instance
-
 
 def test_server(
     total_jobs: int = 4, max_parallel_jobs: int = 2, allow_skip_eval: bool = False
@@ -48,11 +51,10 @@ def test_server(
     import pandas as pd
 
     r2egym_dataset = pd.read_parquet(
-        '/lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/r2egym/data/train-00000-of-00008.parquet'
+        '/lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/r2egym/data/train-00003-of-00008.parquet'
     )
     r2egym_instance = r2egym_dataset.iloc[-2]
     r2egym_instance = pre_process_r2egym_instance(r2egym_instance)
-
     requests = []
     for i in range(total_jobs):
         cur = r2egym_instance.copy(deep=True)
@@ -61,13 +63,14 @@ def test_server(
 
     llm_server_address = 'http://127.0.0.1:8000/v1'
     sampling_params = {
-        'model': 'hosted_vllm/Qwen/Qwen3-8B',
+        'model': 'hosted_vllm/Qwen2.5-7B-Instruct',
         'api_key': 'mykey',
         'modify_params': False,
-        'log_completions': True,
+        'log_completions': False,
         'native_tool_calling': True,
         'temperature': 0.6,
-        'max_iterations': 2,
+        'top_p': 0.9,
+        'max_iterations': 30,
     }
 
     print('Starting server')
@@ -97,10 +100,9 @@ def test_server(
     server.stop()
     return results
 
-
 if __name__ == '__main__':
     start = time.time()
-    results = test_server(total_jobs=2, max_parallel_jobs=2, allow_skip_eval=False)
+    results = test_server(total_jobs=5, max_parallel_jobs=5, allow_skip_eval=False)
     # Don't print full messages
     for result in results:
         assert type(result['messages']) is list, (

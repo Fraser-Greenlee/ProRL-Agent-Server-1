@@ -106,6 +106,12 @@ Follow these steps to reproduce the issue:
 {test_instructions}Your thinking should be thorough and so it's fine if it's very long.
 """
     else:
+        # Decide FINAL REVIEW sentence based on the dataset kind
+        final_review_line = (
+            "6. FINAL REVIEW: Carefully re-read the problem description and compare your changes with the base commit."
+            if instance.get("data_kind") == "r2egym"
+            else f"6. FINAL REVIEW: Carefully re-read the problem description and compare your changes with the base commit {instance['base_commit']}."
+        )
         instruction = f"""
 <uploaded_files>
 /workspace/{workspace_dir_name}
@@ -150,7 +156,7 @@ Follow these steps to resolve the issue:
    - Run existing tests related to the modified code to ensure you haven't broken anything. Use `grep` to look at existing test files to find relevant tests.
    - Avoid running the all the tests and only select tests that you think are relevant when running `pytest`
 
-6. FINAL REVIEW: Carefully re-read the problem description and compare your changes with the base commit {instance["base_commit"]}.
+{final_review_line}
    - Ensure you've fully addressed all requirements
    - Run any tests in the repository related to:
      * The issue you are fixing
@@ -546,9 +552,14 @@ def complete_runtime(
     n_retries = 0
     git_patch = None
     while n_retries < 5:
-        action = CmdRunAction(
-            command=f'git diff --no-color --cached {instance["base_commit"]} > patch.diff'
-        )
+        if instance.get("data_kind") == "r2egym":
+            action = CmdRunAction(
+                command=f'git diff --no-color --cached {instance["old_commit"]} > patch.diff'
+            )
+        else:
+            action = CmdRunAction(
+                command=f'git diff --no-color --cached {instance["base_commit"]} > patch.diff'
+            )
         action.set_hard_timeout(max(30 + 20 * n_retries, 100))
         logger.info(action, extra={'msg_type': 'ACTION'})
         obs = runtime.run_action(action)

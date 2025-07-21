@@ -3,11 +3,44 @@ import asyncio
 import json
 import time
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
-
+import hashlib
 from openhands.nvidia.swe_agent.utils import evaluate_agent as _evaluate_agent
+from openhands.nvidia.async_server import OpenHandsServer
+from openhands.nvidia.swe_agent.r2egym_parser import ParsedCommit
+
+def pre_process_r2egym_instance(r2egym_instance):
+    r2egym_instance = pd.Series(r2egym_instance)
+    r2egym_instance = r2egym_instance.apply(
+        lambda x: x.tolist() if isinstance(x, np.ndarray) else x
+    )
+    r2egym_instance['data_source'] = 'swebench'
+    r2egym_instance['instance_id'] = (
+        r2egym_instance['docker_image'].replace('/', '_').replace(':', '_')
+    )
+    docker_image = r2egym_instance['docker_image']
+    if ':' in docker_image:
+        repo_part, version_part = docker_image.split(':', 1)
+    else:
+        repo_part, version_part = docker_image, 'latest'
+    r2egym_instance['repo'] = repo_part
+    r2egym_instance['version'] = version_part
+
+    if ('base_commit' not in r2egym_instance) or pd.isna(
+        r2egym_instance['base_commit']
+    ):
+        if 'commit_hash' in r2egym_instance and not pd.isna(
+            r2egym_instance['commit_hash']
+        ):
+            r2egym_instance['base_commit'] = r2egym_instance['commit_hash']
+        else:
+            r2egym_instance['base_commit'] = version_part
+    r2egym_instance['data_kind'] = 'r2egym'
+    parsed_commit = ParsedCommit(**json.loads(r2egym_instance['parsed_commit_content']))
+    old_commit = parsed_commit.old_commit_hash
+    r2egym_instance['old_commit'] = old_commit
+    return r2egym_instance
 
 
 def _parse_args():
@@ -20,6 +53,7 @@ def _parse_args():
         default='/lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/80-data/train.parquet',
         help="Path to a parquet file that contains the SWE-bench dataset with an 'instance' column.",
     )
+    # r2e_gym: /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/r2egym/data/train-00003-of-00008.parquet
     parser.add_argument(
         '--output',
         type=str,
@@ -29,13 +63,13 @@ def _parse_args():
     parser.add_argument(
         '--num-instances',
         type=int,
-        default=None,
+        default=1,
         help='Number of instances to evaluate (default: 1).',
     )
     parser.add_argument(
         '--concurrency',
         type=int,
-        default=64,
+        default=1,
         help='Maximum number of concurrent evaluations to run (default: 64, matching run_swebench.py).',
     )
     parser.add_argument(
@@ -46,9 +80,7 @@ def _parse_args():
     return parser.parse_args()
 
 
-async def _evaluate_instances(
-    instances: list[dict], concurrency: int, allow_skip: bool
-):
+async def _evaluate_instances(instances: list[dict], concurrency: int, allow_skip: bool):
     semaphore = asyncio.Semaphore(concurrency)
 
     async def _evaluate_single(idx: int, inst: dict):
@@ -89,36 +121,83 @@ async def _evaluate_instances(
     tasks = [_evaluate_single(i, inst) for i, inst in enumerate(instances)]
     return await asyncio.gather(*tasks)
 
+async def _evaluate_r2egym(
+    instances: list[dict], concurrency: int, allow_skip: bool
+):
+    semaphore = asyncio.Semaphore(concurrency)
+    async def _evaluate_single(idx: int, inst: dict):
+        async with semaphore:
+            data_instance = inst
+            try:
+                parsed_commit = ParsedCommit(**json.loads(data_instance['parsed_commit_content']))
+                gt_patch = parsed_commit.get_patch(test_file=False, non_test_file=True)
+                rep = await _evaluate_agent(
+                    gt_patch, pd.Series(inst), sid=f'gold_{idx}', allow_skip=allow_skip
+                )
+                resolved_flag = False
+                if isinstance(rep, dict):
+                    if 'report' in rep and isinstance(rep['report'], dict):
+                        resolved_flag = rep['report'].get('resolved', False)
+                    elif 'resolved' in rep:
+                        resolved_flag = rep.get('resolved', False)
+                return {
+                    'instance_id': inst.get('instance_id', idx),
+                    'trajectory_id': inst.get('trajectory_id', idx),
+                    'resolved': resolved_flag,
+                    'evaluation': rep,
+                }
+            except Exception as e:
+                return {
+                    'instance_id': inst.get('instance_id', idx),
+                    'trajectory_id': inst.get('trajectory_id', idx),
+                    'resolved': False,
+                    'error': str(e),
+                }
+
+    tasks = [_evaluate_single(i, inst) for i, inst in enumerate(instances)]
+    return await asyncio.gather(*tasks)
 
 def main():
     args = _parse_args()
-
     dataset_df = pd.read_parquet(args.dataset_path)
-    if 'instance' not in dataset_df.columns:
-        raise ValueError("The provided parquet file must contain an 'instance' column.")
-
     if args.num_instances is not None:
         dataset_df = dataset_df.head(args.num_instances)
-    len(dataset_df)
 
+    is_r2egym = dataset_df.get('docker_image') is not None
     instances: list[dict] = []
-    for idx, row in dataset_df.iterrows():
-        inst_series = pd.Series(row['instance'])
-        inst_series = inst_series.apply(
-            lambda x: x.tolist() if isinstance(x, np.ndarray) else x
-        )
-        if 'trajectory_id' not in inst_series or pd.isna(
-            inst_series.get('trajectory_id')
-        ):
-            inst_series['trajectory_id'] = idx
-        instances.append(inst_series.to_dict())
+    if is_r2egym:
+        for idx, row in dataset_df.iterrows():
+            inst_series = pre_process_r2egym_instance(row)
+            if 'trajectory_id' not in inst_series or pd.isna(
+                inst_series.get('trajectory_id')
+            ):
+                inst_series['trajectory_id'] = idx
+            instances.append(inst_series.to_dict())
+    else:
+        for idx, row in dataset_df.iterrows():
+            inst_series = pd.Series(row['instance'])
+            inst_series = inst_series.apply(
+                lambda x: x.tolist() if isinstance(x, np.ndarray) else x
+            )
+            if 'trajectory_id' not in inst_series or pd.isna(
+                inst_series.get('trajectory_id')
+            ):
+                inst_series['trajectory_id'] = idx
+            instances.append(inst_series.to_dict())
 
     start_ts = time.time()
-    results = asyncio.run(
-        _evaluate_instances(
-            instances, concurrency=args.concurrency, allow_skip=args.allow_skip_eval
+    if is_r2egym:
+        results = asyncio.run(
+            _evaluate_r2egym(
+                instances, concurrency=args.concurrency, allow_skip=args.allow_skip_eval
+            )
         )
-    )
+    else:
+        results = asyncio.run(
+            _evaluate_instances(
+                instances, concurrency=args.concurrency, allow_skip=args.allow_skip_eval
+            )
+        )
     time.time() - start_ts
 
     output_path = Path(args.output)
@@ -133,7 +212,6 @@ def main():
     print(
         f'[evaluate_gold] Resolved {resolved_cnt}/{len(results)} instances ({resolved_cnt / len(results):.2%})'
     )
-
 
 if __name__ == '__main__':
     main()
