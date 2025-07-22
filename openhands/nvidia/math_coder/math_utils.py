@@ -38,6 +38,7 @@ def get_config(
     instance: dict,
     metadata: EvalMetadata,
 ) -> OpenHandsConfig:
+    # Docker image from xingyaoww/od-eval-logic-reasoning:v1.0
     base_container_image = 'xingyaoww_od-eval-logic-reasoning'
     logger.debug(
         f'Using instance container image: {base_container_image}. '
@@ -55,6 +56,9 @@ def get_config(
     # run as fakeroot
     # Currently set to False as some container require GLIBC_2.38
     sandbox_config.run_as_fakeroot = False
+
+    # Disable browser, stops openhands from spawning 100+ threads
+    sandbox_config.browsergym_eval_env = 'skip'
 
     config = OpenHandsConfig(
         default_agent=metadata.agent_class,

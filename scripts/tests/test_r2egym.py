@@ -3,13 +3,15 @@ Migrated test script originally from openhands.nvidia.async_server
 """
 
 import hashlib
+import json
 import time
 
 import numpy as np
 import pandas as pd
-import json
+
 from openhands.nvidia.async_server import OpenHandsServer
 from openhands.nvidia.swe_agent.r2egym_parser import ParsedCommit
+
 
 def pre_process_r2egym_instance(r2egym_instance):
     r2egym_instance = pd.Series(r2egym_instance)
@@ -42,6 +44,7 @@ def pre_process_r2egym_instance(r2egym_instance):
     old_commit = parsed_commit.old_commit_hash
     r2egym_instance['old_commit'] = old_commit
     return r2egym_instance
+
 
 def test_server(
     total_jobs: int = 4, max_parallel_jobs: int = 2, allow_skip_eval: bool = False
@@ -99,6 +102,7 @@ def test_server(
     print('Job submission finished')
     server.stop()
     return results
+
 
 if __name__ == '__main__':
     start = time.time()

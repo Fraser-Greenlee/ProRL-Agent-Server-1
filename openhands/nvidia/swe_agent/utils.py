@@ -129,6 +129,9 @@ def get_config(
     # Currently set to False as some container require GLIBC_2.38
     sandbox_config.run_as_fakeroot = False
 
+    # Disable browser, stops openhands from spawning 100+ threads
+    sandbox_config.browsergym_eval_env = 'skip'
+
     config = OpenHandsConfig(
         default_agent=metadata.agent_class,
         run_as_openhands=False,

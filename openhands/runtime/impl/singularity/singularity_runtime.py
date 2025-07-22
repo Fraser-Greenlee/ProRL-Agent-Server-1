@@ -498,6 +498,7 @@ class SingularityRuntime(ActionExecutionClient):
             'MCP_HTTP_PORT': str(self._mcp_http_port),
             'PIP_BREAK_SYSTEM_PACKAGES': '1',
             'OPENHANDS_SESSION_ID': self.sid,
+            'OMP_NUM_THREADS': '4', # Limit threads at container startup
         }
         if self.config.debug or DEBUG:
             env_vars['DEBUG'] = 'true'

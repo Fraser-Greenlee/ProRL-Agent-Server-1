@@ -3,12 +3,13 @@ import asyncio
 import json
 import time
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
-import hashlib
-from openhands.nvidia.swe_agent.utils import evaluate_agent as _evaluate_agent
-from openhands.nvidia.async_server import OpenHandsServer
+
 from openhands.nvidia.swe_agent.r2egym_parser import ParsedCommit
+from openhands.nvidia.swe_agent.utils import evaluate_agent as _evaluate_agent
+
 
 def pre_process_r2egym_instance(r2egym_instance):
     r2egym_instance = pd.Series(r2egym_instance)
@@ -80,7 +81,9 @@ def _parse_args():
     return parser.parse_args()
 
 
-async def _evaluate_instances(instances: list[dict], concurrency: int, allow_skip: bool):
+async def _evaluate_instances(
+    instances: list[dict], concurrency: int, allow_skip: bool
+):
     semaphore = asyncio.Semaphore(concurrency)
 
     async def _evaluate_single(idx: int, inst: dict):
@@ -121,15 +124,17 @@ async def _evaluate_instances(instances: list[dict], concurrency: int, allow_ski
     tasks = [_evaluate_single(i, inst) for i, inst in enumerate(instances)]
     return await asyncio.gather(*tasks)
 
-async def _evaluate_r2egym(
-    instances: list[dict], concurrency: int, allow_skip: bool
-):
+
+async def _evaluate_r2egym(instances: list[dict], concurrency: int, allow_skip: bool):
     semaphore = asyncio.Semaphore(concurrency)
+
     async def _evaluate_single(idx: int, inst: dict):
         async with semaphore:
             data_instance = inst
             try:
-                parsed_commit = ParsedCommit(**json.loads(data_instance['parsed_commit_content']))
+                parsed_commit = ParsedCommit(
+                    **json.loads(data_instance['parsed_commit_content'])
+                )
                 gt_patch = parsed_commit.get_patch(test_file=False, non_test_file=True)
                 rep = await _evaluate_agent(
                     gt_patch, pd.Series(inst), sid=f'gold_{idx}', allow_skip=allow_skip
@@ -156,6 +161,7 @@ async def _evaluate_r2egym(
 
     tasks = [_evaluate_single(i, inst) for i, inst in enumerate(instances)]
     return await asyncio.gather(*tasks)
+
 
 def main():
     args = _parse_args()
@@ -212,6 +218,7 @@ def main():
     print(
         f'[evaluate_gold] Resolved {resolved_cnt}/{len(results)} instances ({resolved_cnt / len(results):.2%})'
     )
+
 
 if __name__ == '__main__':
     main()
