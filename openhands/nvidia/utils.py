@@ -492,23 +492,11 @@ def eval_exception(job_details: JobDetails, e: Exception):
 def final_result(job_details: JobDetails):
     if job_details.results is None:
         if job_details.run_results is None:
-            instance_id = (
-                job_details.instance.get('instance_id', None)
-                if job_details.instance is not None
-                else None
-            )
-            trajectory_id = (
-                job_details.instance.get('trajectory_id', None)
-                if job_details.instance is not None
-                else None
-            )
             partial_result = get_messages_from_partial_result(job_details)
             messages = partial_result['messages']
             tools = partial_result['tools']
             end_properly = partial_result['end_properly']
             result = {
-                'instance_id': instance_id,
-                'trajectory_id': trajectory_id,
                 'resolved': job_details.eval_results['resolved']
                 if job_details.eval_results is not None
                 else False,
@@ -529,5 +517,21 @@ def final_result(job_details: JobDetails):
         result = copy.deepcopy(job_details.results)
         if job_details.timeout_error:
             result['critical_error'] = 'timeout'
+
+    if 'instance_id' not in result:
+        instance_id = (
+            job_details.instance.get('instance_id', None)
+            if job_details.instance is not None
+            else None
+        )
+        result['instance_id'] = instance_id
+
+    if 'trajectory_id' not in result:
+        trajectory_id = (
+            job_details.instance.get('trajectory_id', None)
+            if job_details.instance is not None
+            else None
+        )
+        result['trajectory_id'] = trajectory_id
 
     return result
