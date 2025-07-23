@@ -87,9 +87,6 @@ async def evaluate(args):
                     res = await process_instance(session, args.host, args.port, inst, params)
                     return res
                 except Exception as e:
-                    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-                    print(str(e))
-                    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                     return {
                         "instance_id": inst.get("instance_id", i),
                         "trajectory_id": inst.get("trajectory_id", i),
