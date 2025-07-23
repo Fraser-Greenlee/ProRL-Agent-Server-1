@@ -67,6 +67,9 @@ async def evaluate(args):
     if args.sampling_params:
         params.update(json.loads(args.sampling_params))
 
+    # Set timeout to None to avoid timeout errors
+    # timeout will be controlled by the server
+    timeout = aiohttp.ClientTimeout(total=None)
     async with aiohttp.ClientSession() as session:
         for addr in args.llm_addresses:
             await add_llm_server(session, args.host, args.port, addr)

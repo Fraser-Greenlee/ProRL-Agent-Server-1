@@ -70,7 +70,10 @@ async def evaluate(args):
     if args.disable_thinking:
         params["enable_thinking"] = False
 
-    async with aiohttp.ClientSession() as session:
+    # Set timeout to None to avoid timeout errors
+    # timeout will be controlled by the server
+    timeout = aiohttp.ClientTimeout(total=None)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         for addr in args.llm_addresses:
             await add_llm_server(session, args.host, args.port, addr)
         await start_server(session, args.host, args.port)
@@ -84,6 +87,9 @@ async def evaluate(args):
                     res = await process_instance(session, args.host, args.port, inst, params)
                     return res
                 except Exception as e:
+                    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                    print(str(e))
+                    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
                     return {
                         "instance_id": inst.get("instance_id", i),
                         "trajectory_id": inst.get("trajectory_id", i),
