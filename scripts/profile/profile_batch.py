@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -19,6 +20,9 @@ class OpenHandsBatchProcessor:
         openhands_base_urls: list[str],
         openhands_num_workers: int = 4,
         server_addresses: list[str] = None,
+        strict: bool = True,
+        save_file: str = None,
+        log_freq: int = 10,
     ):
         """Initialize the OpenHands batch processor.
 
@@ -52,7 +56,13 @@ class OpenHandsBatchProcessor:
         time.sleep(0.1)
 
         # Send LLM server addresses to OpenHands servers
-        self._send_llm_addresses_to_openhands()
+        self._send_llm_addresses_to_openhands(strict=strict)
+
+        self.save_file = save_file
+        if save_file:
+            self.file_lock = threading.Lock()
+
+        self.log_freq = log_freq
 
     def _run_event_loop(self):
         """Run the event loop in a separate thread"""
@@ -375,23 +385,35 @@ class OpenHandsBatchProcessor:
 
                 if isinstance(result, Exception):
                     logger.error(f'Error processing message {message_index}: {result}')
-                    all_responses[instance_id][trajectory_id] = {
+                    result_data = {
                         'error': str(result),
                         'success': False,
                     }
+                    all_responses[instance_id][trajectory_id] = result_data
                 elif result is not None:
                     all_responses[instance_id][trajectory_id] = result
+                    result_data = result
                 else:
                     logger.warning(f'Message {message_index} returned empty response')
-                    all_responses[instance_id][trajectory_id] = {
+                    result_data = {
                         'error': 'Empty response',
                         'success': False,
                     }
+                    all_responses[instance_id][trajectory_id] = result_data
+
+                # Save result to file if file saving is enabled
+                self._save_result_to_file(
+                    instance_id,
+                    trajectory_id,
+                    all_responses[instance_id][trajectory_id],
+                )
 
                 completed_count += 1
 
                 # Log progress periodically
-                if completed_count % 10 == 0 or completed_count == len(messages):
+                if completed_count % self.log_freq == 0 or completed_count == len(
+                    messages
+                ):
                     current_time = time.time()
                     elapsed_time = current_time - processing_start_time
                     progress_percent = (completed_count / len(messages)) * 100
@@ -484,7 +506,7 @@ class OpenHandsBatchProcessor:
             logger.error(f'Error sending message {message_index} to OpenHands: {e}')
             return None, True  # Retry needed
 
-    def assign_llm_addresses_to_openhands(self):
+    def assign_llm_addresses_to_openhands(self, strict=True):
         def url_to_ip(url):
             # remove http:// and https://
             url = url.replace('http://', '').replace('https://', '')
@@ -514,6 +536,8 @@ class OpenHandsBatchProcessor:
                     == openhands_urls2ips[openhands_url]
                 ):
                     assigned_addresses.append(server_address)
+                if not strict:
+                    assigned_addresses.append(server_address)
             address_assignments[openhands_url] = assigned_addresses
             assert len(assigned_addresses) == addresses_per_openhands, (
                 f'len(assigned_addresses) {len(assigned_addresses)} must be equal to addresses_per_openhands {addresses_per_openhands}'
@@ -525,14 +549,14 @@ class OpenHandsBatchProcessor:
 
         return address_assignments
 
-    def _send_llm_addresses_to_openhands(self):
+    def _send_llm_addresses_to_openhands(self, strict=True):
         """Distribute and send LLM server addresses to multiple OpenHands servers"""
         if not self.openhands_urls:
             logger.warning(
                 'No OpenHands base URLs configured, skipping LLM address distribution'
             )
             return
-        address_assignments = self.assign_llm_addresses_to_openhands()
+        address_assignments = self.assign_llm_addresses_to_openhands(strict=strict)
 
         # Clear addresses in async event loop
         future = asyncio.run_coroutine_threadsafe(
@@ -546,7 +570,8 @@ class OpenHandsBatchProcessor:
 
         # Send addresses in async event loop
         future = asyncio.run_coroutine_threadsafe(
-            self._send_addresses_async(address_assignments), self.chat_scheduler_loop
+            self._send_addresses_async(address_assignments, strict=strict),
+            self.chat_scheduler_loop,
         )
         try:
             future.result(timeout=60)  # 60 second timeout
@@ -577,14 +602,16 @@ class OpenHandsBatchProcessor:
             f'Successfully sent {success_count}/{len(results)} LLM addresses to OpenHands servers'
         )
 
-    async def _send_addresses_async(self, address_assignments: dict[str, list[str]]):
+    async def _send_addresses_async(
+        self, address_assignments: dict[str, list[str]], strict=True
+    ):
         """Asynchronously send LLM addresses to multiple OpenHands servers"""
         tasks = []
 
         for openhands_url, addresses in address_assignments.items():
             for address in addresses:
                 task = self._add_llm_server_to_openhands(
-                    openhands_url, f'http://{address}/v1'
+                    openhands_url, f'http://{address}/v1' if strict else address
                 )
                 tasks.append(task)
 
@@ -673,6 +700,26 @@ class OpenHandsBatchProcessor:
                 f'Error adding LLM server {address} to {openhands_base_url}: {e}'
             )
             raise
+
+    def _save_result_to_file(self, instance_id: str, trajectory_id: str, result: dict):
+        """Save a single result to file with thread-safe locking."""
+        if not self.save_file:
+            return
+
+        # Prepare the result data for saving
+        result_data = {
+            'instance_id': instance_id,
+            'trajectory_id': trajectory_id,
+            **result,
+        }
+
+        # Use file lock for thread-safe writing
+        with self.file_lock:
+            try:
+                with open(self.save_file, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(result_data) + '\n')
+            except Exception as e:
+                logger.error(f'Error saving result to file {self.save_file}: {e}')
 
 
 # Example usage
