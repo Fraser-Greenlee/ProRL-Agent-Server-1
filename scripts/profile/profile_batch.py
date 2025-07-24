@@ -536,12 +536,13 @@ class OpenHandsBatchProcessor:
                     == openhands_urls2ips[openhands_url]
                 ):
                     assigned_addresses.append(server_address)
-                if not strict:
-                    assigned_addresses.append(server_address)
-            address_assignments[openhands_url] = assigned_addresses
-            assert len(assigned_addresses) == addresses_per_openhands, (
-                f'len(assigned_addresses) {len(assigned_addresses)} must be equal to addresses_per_openhands {addresses_per_openhands}'
-            )
+            if strict:
+                address_assignments[openhands_url] = assigned_addresses
+                assert len(assigned_addresses) == addresses_per_openhands, (
+                    f'len(assigned_addresses) {len(assigned_addresses)} must be equal to addresses_per_openhands {addresses_per_openhands}'
+                )
+            else:
+                address_assignments[openhands_url] = self.server_addresses
 
             logger.info(
                 f'Assigned LLM server addresses to {openhands_url}: {assigned_addresses}'
