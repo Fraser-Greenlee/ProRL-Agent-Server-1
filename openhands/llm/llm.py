@@ -152,11 +152,31 @@ class LLM(RetryMixin, DebugMixin):
         if self.is_function_calling_active():
             logger.debug('LLM: model supports function calling')
 
-        # if using a custom tokenizer, make sure it's loaded and accessible in the format expected by litellm
-        if self.config.custom_tokenizer is not None:
-            self.tokenizer = create_pretrained_tokenizer(self.config.custom_tokenizer)
+        self.token_level_generation = self.config.token_level_generation
+        if not self.token_level_generation:
+            # if using a custom tokenizer, make sure it's loaded and accessible in the format expected by litellm
+            if self.config.custom_tokenizer is not None:
+                self.tokenizer = create_pretrained_tokenizer(
+                    self.config.custom_tokenizer
+                )
+            else:
+                self.tokenizer = None
         else:
-            self.tokenizer = None
+            logger.info(f'Using token-level generation for {self.config.model}')
+
+            from transformers import AutoTokenizer
+
+            assert self.config.custom_tokenizer is not None, (
+                'custom_tokenizer is required for token-level generation'
+            )
+            self.tokenizer = AutoTokenizer.from_pretrained(self.config.custom_tokenizer)
+
+            self.cost_metric_supported = False
+
+            model_name = self.config.model.split('/')[-1]
+            assert 'qwen3' in model_name.lower(), (
+                'Qwen3 is the only supported model for token-level generation'
+            )
 
         # set up the completion function
         kwargs: dict[str, Any] = {
@@ -188,202 +208,234 @@ class LLM(RetryMixin, DebugMixin):
         ):
             kwargs['chat_template_kwargs'] = {'enable_thinking': False}
 
-        self._completion = partial(
-            litellm_completion,
-            model=self.config.model,
-            api_key=self.config.api_key.get_secret_value()
-            if self.config.api_key
-            else None,
-            base_url=self.config.base_url,
-            api_version=self.config.api_version,
-            custom_llm_provider=self.config.custom_llm_provider,
-            timeout=self.config.timeout,
-            top_p=self.config.top_p,
-            drop_params=self.config.drop_params,
-            seed=self.config.seed,
-            **kwargs,
-        )
+        if self.token_level_generation:
+            from openhands.llm.nvidia.qwen3 import request_response_tokens
+
+            self._completion = partial(
+                request_response_tokens,
+                model=self.config.model,
+                tokenizer=self.tokenizer,
+                base_url=self.config.base_url,
+                timeout=self.config.timeout,
+                top_p=self.config.top_p,
+                seed=self.config.seed,
+                **kwargs,
+            )
+        else:
+            self._completion = partial(
+                litellm_completion,
+                model=self.config.model,
+                api_key=self.config.api_key.get_secret_value()
+                if self.config.api_key
+                else None,
+                base_url=self.config.base_url,
+                api_version=self.config.api_version,
+                custom_llm_provider=self.config.custom_llm_provider,
+                timeout=self.config.timeout,
+                top_p=self.config.top_p,
+                drop_params=self.config.drop_params,
+                seed=self.config.seed,
+                **kwargs,
+            )
 
         self._completion_unwrapped = self._completion
 
-        @self.retry_decorator(
-            num_retries=self.config.num_retries,
-            retry_exceptions=LLM_RETRY_EXCEPTIONS,
-            retry_min_wait=self.config.retry_min_wait,
-            retry_max_wait=self.config.retry_max_wait,
-            retry_multiplier=self.config.retry_multiplier,
-            retry_listener=self.retry_listener,
-        )
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            """Wrapper for the litellm completion function. Logs the input and output of the completion function."""
-            from openhands.io import json
+        if not self.token_level_generation:
 
-            messages_kwarg: list[dict[str, Any]] | dict[str, Any] = []
-            mock_function_calling = not self.is_function_calling_active()
-
-            # some callers might send the model and messages directly
-            # litellm allows positional args, like completion(model, messages, **kwargs)
-            if len(args) > 1:
-                # ignore the first argument if it's provided (it would be the model)
-                # design wise: we don't allow overriding the configured values
-                # implementation wise: the partial function set the model as a kwarg already
-                # as well as other kwargs
-                messages_kwarg = args[1] if len(args) > 1 else args[0]
-                kwargs['messages'] = messages_kwarg
-
-                # remove the first args, they're sent in kwargs
-                args = args[2:]
-            elif 'messages' in kwargs:
-                messages_kwarg = kwargs['messages']
-
-            # ensure we work with a list of messages
-            messages: list[dict[str, Any]] = (
-                messages_kwarg if isinstance(messages_kwarg, list) else [messages_kwarg]
+            @self.retry_decorator(
+                num_retries=self.config.num_retries,
+                retry_exceptions=LLM_RETRY_EXCEPTIONS,
+                retry_min_wait=self.config.retry_min_wait,
+                retry_max_wait=self.config.retry_max_wait,
+                retry_multiplier=self.config.retry_multiplier,
+                retry_listener=self.retry_listener,
             )
+            def wrapper(*args: Any, **kwargs: Any) -> Any:
+                """Wrapper for the litellm completion function. Logs the input and output of the completion function."""
+                from openhands.io import json
 
-            # handle conversion of to non-function calling messages if needed
-            original_fncall_messages = copy.deepcopy(messages)
-            mock_fncall_tools = None
-            # if the agent or caller has defined tools, and we mock via prompting, convert the messages
-            if mock_function_calling and 'tools' in kwargs:
-                add_in_context_learning_example = True
-                if (
-                    'openhands-lm' in self.config.model
-                    or 'devstral' in self.config.model
-                ):
-                    add_in_context_learning_example = False
+                messages_kwarg: list[dict[str, Any]] | dict[str, Any] = []
+                mock_function_calling = not self.is_function_calling_active()
 
-                messages = convert_fncall_messages_to_non_fncall_messages(
-                    messages,
-                    kwargs['tools'],
-                    add_in_context_learning_example=add_in_context_learning_example,
-                )
-                kwargs['messages'] = messages
+                # some callers might send the model and messages directly
+                # litellm allows positional args, like completion(model, messages, **kwargs)
+                if len(args) > 1:
+                    # ignore the first argument if it's provided (it would be the model)
+                    # design wise: we don't allow overriding the configured values
+                    # implementation wise: the partial function set the model as a kwarg already
+                    # as well as other kwargs
+                    messages_kwarg = args[1] if len(args) > 1 else args[0]
+                    kwargs['messages'] = messages_kwarg
 
-                # add stop words if the model supports it
-                if self.config.model not in MODELS_WITHOUT_STOP_WORDS:
-                    kwargs['stop'] = STOP_WORDS
+                    # remove the first args, they're sent in kwargs
+                    args = args[2:]
+                elif 'messages' in kwargs:
+                    messages_kwarg = kwargs['messages']
 
-                mock_fncall_tools = kwargs.pop('tools')
-                if 'openhands-lm' in self.config.model:
-                    # If we don't have this, we might run into issue when serving openhands-lm
-                    # using SGLang
-                    # BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'object': 'error', 'message': '400', 'type': 'Failed to parse fc related info to json format!', 'param': None, 'code': 400}
-                    kwargs['tool_choice'] = 'none'
-                else:
-                    # tool_choice should not be specified when mocking function calling
-                    kwargs.pop('tool_choice', None)
-
-            # if we have no messages, something went very wrong
-            if not messages:
-                raise ValueError(
-                    'The messages list is empty. At least one message is required.'
+                # ensure we work with a list of messages
+                messages: list[dict[str, Any]] = (
+                    messages_kwarg
+                    if isinstance(messages_kwarg, list)
+                    else [messages_kwarg]
                 )
 
-            # log the entire LLM prompt
-            self.log_prompt(messages)
+                # handle conversion of to non-function calling messages if needed
+                original_fncall_messages = copy.deepcopy(messages)
+                mock_fncall_tools = None
+                # if the agent or caller has defined tools, and we mock via prompting, convert the messages
+                if mock_function_calling and 'tools' in kwargs:
+                    add_in_context_learning_example = True
+                    if (
+                        'openhands-lm' in self.config.model
+                        or 'devstral' in self.config.model
+                    ):
+                        add_in_context_learning_example = False
 
-            # set litellm modify_params to the configured value
-            # True by default to allow litellm to do transformations like adding a default message, when a message is empty
-            # NOTE: this setting is global; unlike drop_params, it cannot be overridden in the litellm completion partial
-            litellm.modify_params = self.config.modify_params
+                    messages = convert_fncall_messages_to_non_fncall_messages(
+                        messages,
+                        kwargs['tools'],
+                        add_in_context_learning_example=add_in_context_learning_example,
+                    )
+                    kwargs['messages'] = messages
 
-            # if we're not using litellm proxy, remove the extra_body
-            if 'litellm_proxy' not in self.config.model:
-                kwargs.pop('extra_body', None)
+                    # add stop words if the model supports it
+                    if self.config.model not in MODELS_WITHOUT_STOP_WORDS:
+                        kwargs['stop'] = STOP_WORDS
 
-            # Record start time for latency measurement
-            start_time = time.time()
-            # we don't support streaming here, thus we get a ModelResponse
-            resp: ModelResponse = self._completion_unwrapped(*args, **kwargs)
+                    mock_fncall_tools = kwargs.pop('tools')
+                    if 'openhands-lm' in self.config.model:
+                        # If we don't have this, we might run into issue when serving openhands-lm
+                        # using SGLang
+                        # BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'object': 'error', 'message': '400', 'type': 'Failed to parse fc related info to json format!', 'param': None, 'code': 400}
+                        kwargs['tool_choice'] = 'none'
+                    else:
+                        # tool_choice should not be specified when mocking function calling
+                        kwargs.pop('tool_choice', None)
 
-            # Calculate and record latency
-            latency = time.time() - start_time
-            response_id = resp.get('id', 'unknown')
-            self.metrics.add_response_latency(latency, response_id)
+                # if we have no messages, something went very wrong
+                if not messages:
+                    raise ValueError(
+                        'The messages list is empty. At least one message is required.'
+                    )
 
-            non_fncall_response = copy.deepcopy(resp)
+                # log the entire LLM prompt
+                self.log_prompt(messages)
 
-            # if we mocked function calling, and we have tools, convert the response back to function calling format
-            if mock_function_calling and mock_fncall_tools is not None:
-                if len(resp.choices) < 1:
+                # set litellm modify_params to the configured value
+                # True by default to allow litellm to do transformations like adding a default message, when a message is empty
+                # NOTE: this setting is global; unlike drop_params, it cannot be overridden in the litellm completion partial
+                litellm.modify_params = self.config.modify_params
+
+                # if we're not using litellm proxy, remove the extra_body
+                if 'litellm_proxy' not in self.config.model:
+                    kwargs.pop('extra_body', None)
+
+                # Record start time for latency measurement
+                start_time = time.time()
+                # we don't support streaming here, thus we get a ModelResponse
+                resp: ModelResponse = self._completion_unwrapped(*args, **kwargs)
+
+                # Calculate and record latency
+                latency = time.time() - start_time
+                response_id = resp.get('id', 'unknown')
+                self.metrics.add_response_latency(latency, response_id)
+
+                non_fncall_response = copy.deepcopy(resp)
+
+                # if we mocked function calling, and we have tools, convert the response back to function calling format
+                if mock_function_calling and mock_fncall_tools is not None:
+                    if len(resp.choices) < 1:
+                        raise LLMNoResponseError(
+                            'Response choices is less than 1 - This is only seen in Gemini models so far. Response: '
+                            + str(resp)
+                        )
+
+                    non_fncall_response_message = resp.choices[0].message
+                    # messages is already a list with proper typing from line 223
+                    fn_call_messages_with_response = (
+                        convert_non_fncall_messages_to_fncall_messages(
+                            messages + [non_fncall_response_message], mock_fncall_tools
+                        )
+                    )
+                    fn_call_response_message = fn_call_messages_with_response[-1]
+                    if not isinstance(fn_call_response_message, LiteLLMMessage):
+                        fn_call_response_message = LiteLLMMessage(
+                            **fn_call_response_message
+                        )
+                    resp.choices[0].message = fn_call_response_message
+
+                # Check if resp has 'choices' key with at least one item
+                if not resp.get('choices') or len(resp['choices']) < 1:
                     raise LLMNoResponseError(
                         'Response choices is less than 1 - This is only seen in Gemini models so far. Response: '
                         + str(resp)
                     )
 
-                non_fncall_response_message = resp.choices[0].message
-                # messages is already a list with proper typing from line 223
-                fn_call_messages_with_response = (
-                    convert_non_fncall_messages_to_fncall_messages(
-                        messages + [non_fncall_response_message], mock_fncall_tools
+                message_back: str = resp['choices'][0]['message']['content'] or ''
+                tool_calls: list[ChatCompletionMessageToolCall] = resp['choices'][0][
+                    'message'
+                ].get('tool_calls', [])
+                if tool_calls:
+                    for tool_call in tool_calls:
+                        fn_name = tool_call.function.name
+                        fn_args = tool_call.function.arguments
+                        message_back += f'\nFunction call: {fn_name}({fn_args})'
+
+                # log the LLM response
+                self.log_response(message_back)
+
+                # post-process the response first to calculate cost
+                cost = self._post_completion(resp)
+
+                # log for evals or other scripts that need the raw completion
+                if self.config.log_completions:
+                    assert self.config.log_completions_folder is not None
+                    log_file = os.path.join(
+                        self.config.log_completions_folder,
+                        # use the metric model name (for draft editor)
+                        f'{self.metrics.model_name.replace("/", "__")}-{time.time()}.json',
                     )
-                )
-                fn_call_response_message = fn_call_messages_with_response[-1]
-                if not isinstance(fn_call_response_message, LiteLLMMessage):
-                    fn_call_response_message = LiteLLMMessage(
-                        **fn_call_response_message
-                    )
-                resp.choices[0].message = fn_call_response_message
 
-            # Check if resp has 'choices' key with at least one item
-            if not resp.get('choices') or len(resp['choices']) < 1:
-                raise LLMNoResponseError(
-                    'Response choices is less than 1 - This is only seen in Gemini models so far. Response: '
-                    + str(resp)
-                )
+                    # set up the dict to be logged
+                    _d = {
+                        'messages': messages,
+                        'response': resp,
+                        'args': args,
+                        'kwargs': {
+                            k: v
+                            for k, v in kwargs.items()
+                            if k not in ('messages', 'client')
+                        },
+                        'timestamp': time.time(),
+                        'cost': cost,
+                    }
 
-            message_back: str = resp['choices'][0]['message']['content'] or ''
-            tool_calls: list[ChatCompletionMessageToolCall] = resp['choices'][0][
-                'message'
-            ].get('tool_calls', [])
-            if tool_calls:
-                for tool_call in tool_calls:
-                    fn_name = tool_call.function.name
-                    fn_args = tool_call.function.arguments
-                    message_back += f'\nFunction call: {fn_name}({fn_args})'
+                    # if non-native function calling, save messages/response separately
+                    if mock_function_calling:
+                        # Overwrite response as non-fncall to be consistent with messages
+                        _d['response'] = non_fncall_response
 
-            # log the LLM response
-            self.log_response(message_back)
+                        # Save fncall_messages/response separately
+                        _d['fncall_messages'] = original_fncall_messages
+                        _d['fncall_response'] = resp
+                    with open(log_file, 'w') as f:
+                        f.write(json.dumps(_d))
 
-            # post-process the response first to calculate cost
-            cost = self._post_completion(resp)
+                return resp
+        else:
 
-            # log for evals or other scripts that need the raw completion
-            if self.config.log_completions:
-                assert self.config.log_completions_folder is not None
-                log_file = os.path.join(
-                    self.config.log_completions_folder,
-                    # use the metric model name (for draft editor)
-                    f'{self.metrics.model_name.replace("/", "__")}-{time.time()}.json',
-                )
-
-                # set up the dict to be logged
-                _d = {
-                    'messages': messages,
-                    'response': resp,
-                    'args': args,
-                    'kwargs': {
-                        k: v
-                        for k, v in kwargs.items()
-                        if k not in ('messages', 'client')
-                    },
-                    'timestamp': time.time(),
-                    'cost': cost,
-                }
-
-                # if non-native function calling, save messages/response separately
-                if mock_function_calling:
-                    # Overwrite response as non-fncall to be consistent with messages
-                    _d['response'] = non_fncall_response
-
-                    # Save fncall_messages/response separately
-                    _d['fncall_messages'] = original_fncall_messages
-                    _d['fncall_response'] = resp
-                with open(log_file, 'w') as f:
-                    f.write(json.dumps(_d))
-
-            return resp
+            @self.retry_decorator(
+                num_retries=self.config.num_retries,
+                retry_exceptions=LLM_RETRY_EXCEPTIONS,
+                retry_min_wait=self.config.retry_min_wait,
+                retry_max_wait=self.config.retry_max_wait,
+                retry_multiplier=self.config.retry_multiplier,
+                retry_listener=self.retry_listener,
+            )
+            def wrapper(**kwargs: Any) -> Any:
+                # extremely simple wrapper to allow token-level generation to be used with retry decorator
+                # Assume *args tuple will not be passed in. always will be passing full dict of kwargs
+                return self._completion_unwrapped(**kwargs)
 
         self._completion = wrapper
 

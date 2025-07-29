@@ -66,6 +66,8 @@ class Message(BaseModel):
     name: str | None = None  # name of the tool
     # force string serializer
     force_string_serializer: bool = False
+    input_ids: list[int] | None = None
+    output_ids: list[int] | None = None
 
     @property
     def contains_image(self) -> bool:
@@ -89,7 +91,12 @@ class Message(BaseModel):
         content = '\n'.join(
             item.text for item in self.content if isinstance(item, TextContent)
         )
-        message_dict: dict[str, Any] = {'content': content, 'role': self.role}
+        message_dict: dict[str, Any] = {
+            'content': content,
+            'role': self.role,
+            'input_ids': self.input_ids,
+            'output_ids': self.output_ids,
+        }
 
         # add tool call keys if we have a tool call or response
         return self._add_tool_call_keys(message_dict)
@@ -120,7 +127,12 @@ class Message(BaseModel):
                 # We know d is a list for ImageContent
                 content.extend([d] if isinstance(d, dict) else d)
 
-        message_dict: dict[str, Any] = {'content': content, 'role': self.role}
+        message_dict: dict[str, Any] = {
+            'content': content,
+            'role': self.role,
+            'input_ids': self.input_ids,
+            'output_ids': self.output_ids,
+        }
 
         if role_tool_with_prompt_caching:
             message_dict['cache_control'] = {'type': 'ephemeral'}

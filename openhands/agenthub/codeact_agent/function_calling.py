@@ -235,12 +235,17 @@ def response_to_actions(
             )
             actions.append(action)
     else:
-        actions.append(
-            MessageAction(
-                content=str(assistant_msg.content) if assistant_msg.content else '',
-                wait_for_response=True,
-            )
+        action = MessageAction(
+            content=str(assistant_msg.content) if assistant_msg.content else '',
+            wait_for_response=True,
         )
+        action.tool_call_metadata = ToolCallMetadata(
+                tool_call_id='',
+                function_name='',
+                model_response=response,
+                total_calls_in_response=0,
+        )
+        actions.append(action)
 
     # Add response id to actions
     # This will ensure we can match both actions without tool calls (e.g. MessageAction)

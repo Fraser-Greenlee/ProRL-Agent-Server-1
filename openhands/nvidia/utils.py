@@ -9,12 +9,17 @@ from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel
+from transformers import AutoTokenizer
 
 from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
 from openhands.controller.state.state import State
 from openhands.events.action import (
     Action,
     AgentFinishAction,
+)
+from openhands.llm.nvidia.qwen3 import (
+    convert_messages_to_tokens,
+    qwen3_chat_template,
 )
 from openhands.nvidia.logger import nvidia_logger as logger
 from openhands.nvidia.registry import JobDetails
@@ -207,7 +212,9 @@ def is_last_action_finish(state: State) -> bool:
 
 
 def process_messages_from_agent_state(
-    agent: CodeActAgent, state: State
+    agent: CodeActAgent,
+    state: State,
+    job_details: JobDetails | None = None,
 ) -> dict[str, Any]:
     """
     Process the messages from the agent state. We reuse logic from CodeActAgent to process state.history into litellm messages.
@@ -227,6 +234,29 @@ def process_messages_from_agent_state(
     The above breaks the hf tokenizer because it does not recognize the <think> tag.
     We thus compress all tool calls into content and append a </think> tag: {'role': 'assistant', 'content': '<think>\n{tool_call}\n{tool_call}\n</tool_call>\n</think>'}
     """
+    if job_details is not None:
+        assert job_details.llm_config is not None, (
+            'llm_config is required in job_details.'
+        )
+        token_level_generation = job_details.llm_config.token_level_generation
+        enable_thinking = job_details.llm_config.enable_thinking
+        if token_level_generation:
+            model_name = job_details.llm_config.custom_tokenizer
+            # Default to Qwen3-8B if custom_tokenizer is not set.
+            if model_name is None:
+                model_name = 'Qwen/Qwen3-8B'
+            else:
+                assert 'qwen3' in model_name.lower(), (
+                    'token_level_generation is only supported for Qwen3 models.'
+                )
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            chat_template = qwen3_chat_template
+    else:
+        logger.warning(
+            'No job_details provided in process_messages_from_agent_state. Assuming token_level_generation is False.'
+        )
+        token_level_generation = False
+
     initial_user_message = agent._get_initial_user_message(state.history)
     raw_messages = agent._get_messages(state.history, initial_user_message)
 
@@ -266,6 +296,23 @@ def process_messages_from_agent_state(
             new_message['tool_calls'] = [
                 tool_call['function'] for tool_call in message['tool_calls']
             ]
+
+        # Update token_ids, currently this only works for Qwen3 models.
+        if token_level_generation:
+            input_ids = message.get('input_ids', None)
+            output_ids = message.get('output_ids', None)
+            if output_ids is not None:
+                new_message['token_ids'] = output_ids
+            else:
+                new_message['token_ids'] = convert_messages_to_tokens(
+                    [new_message],
+                    tokenizer,
+                    chat_template=chat_template,
+                    add_generation_prompt=True,
+                    enable_thinking=enable_thinking,
+                    tools=tools,
+                )[0]
+            new_message['input_ids'] = input_ids
 
         # Handle the case where the agent did not end properly reasoning properly
         # This largely formats the message to be consistent with the expected output from Qwen3 models.
@@ -316,7 +363,7 @@ def get_messages_from_partial_result(job_details: JobDetails) -> dict[str, Any]:
     assert state is not None, (
         'Error in get_messages_from_partial_result: state is None.'
     )
-    return process_messages_from_agent_state(job_details.agent, state)
+    return process_messages_from_agent_state(job_details.agent, state, job_details)
 
 
 def get_instance_id(instance: dict) -> str:

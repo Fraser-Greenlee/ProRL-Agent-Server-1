@@ -46,6 +46,7 @@ class LLMConfig(BaseModel):
         reasoning_effort: The effort to put into reasoning. This is a string that can be one of 'low', 'medium', 'high', or 'none'. Exclusive for o1 models.
         seed: The seed to use for the LLM.
         enable_thinking: Whether to enable thinking mode for Qwen3 models. (Default: True)
+        token_level_generation: Whether to use token-level generation for Qwen3 models. Make sure the LLM server supports this. (Default: False)
     """
 
     model: str = Field(default='claude-sonnet-4-20250514')
@@ -88,6 +89,7 @@ class LLMConfig(BaseModel):
     reasoning_effort: str | None = Field(default='high')
     seed: int | None = Field(default=None)
     enable_thinking: bool = Field(default=True)
+    token_level_generation: bool = Field(default=False)
 
     model_config = {'extra': 'forbid'}
 

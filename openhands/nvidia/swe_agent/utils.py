@@ -275,7 +275,7 @@ async def run_agent(
 
     # get messages from agent history
     try:
-        run_results = process_messages_from_agent_state(agent, state) # type: ignore
+        run_results = process_messages_from_agent_state(agent, state, job_details) # type: ignore
     except Exception as e:
         logger.error(f"Error while running, failed to retrieve agent messages: {e}")
         raise Exception(f"Failed to retrieve agent messages: {str(e)}")

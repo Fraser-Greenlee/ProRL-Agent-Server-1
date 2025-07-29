@@ -347,6 +347,8 @@ class TestRunAgent:
         job_details.metadata = Mock()
         job_details.config = Mock()
         job_details.instance = pd.Series({'instance_id': 'test'})
+        job_details.llm_config = Mock()
+        job_details.llm_config.token_level_generation = False
 
         with patch('openhands.llm.llm_utils.check_tools') as mock_check_tools:
             mock_check_tools.return_value = []
