@@ -35,7 +35,7 @@ def test_server(
         'model': 'hosted_vllm/Qwen/Qwen3-14B',
         'api_key': 'mykey',
         'modify_params': False,
-        'log_completions': True,
+        'log_completions': False,
         'native_tool_calling': True,
         'temperature': 0.6,
         'max_iterations': 35,

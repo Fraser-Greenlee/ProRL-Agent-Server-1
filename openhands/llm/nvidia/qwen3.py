@@ -6,7 +6,7 @@ from typing import Any, Text
 import re
 import json
 import uuid
-from litellm import ModelResponse
+from litellm import ModelResponse, ContextWindowExceededError
 
 """ 
 We modify the original chat template. The main issue for Qwen3 models is that the thinking content will be dropped from the content field under some conditions.
@@ -165,6 +165,7 @@ def parse_response_ids(
         tool_call_strings = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", tool_text, re.DOTALL)
         tool_calls = [json.loads(tc) for tc in tool_call_strings]
     except Exception as e:
+        # TODO: probably want to raise an exception here.
         tool_calls = []
     
     format_tool_calls = []
@@ -184,6 +185,7 @@ def request_response_tokens(
     timeout: int | None,
     top_p: float,
     seed: int | None,
+    max_model_len: int,
     **kwargs,
 ) -> ModelResponse:
 
@@ -227,6 +229,13 @@ def request_response_tokens(
 
     if 'max_completion_tokens' in kwargs:
         kwargs['max_tokens'] = kwargs.pop('max_completion_tokens')
+
+    if len(input_ids) + kwargs['max_tokens'] > max_model_len:
+        raise ContextWindowExceededError(
+            message=f'input length and `max_tokens` exceed context limit. input length: {len(input_ids)}, max_tokens: {kwargs["max_tokens"]}, max_model_len: {max_model_len}.',
+            model=model,
+            llm_provider='hosted_vllm',
+        )
     
     resp = httpx.post(
         url=f'{base_url}/generate',

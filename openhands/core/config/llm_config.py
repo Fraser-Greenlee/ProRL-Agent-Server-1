@@ -47,6 +47,7 @@ class LLMConfig(BaseModel):
         seed: The seed to use for the LLM.
         enable_thinking: Whether to enable thinking mode for Qwen3 models. (Default: True)
         token_level_generation: Whether to use token-level generation for Qwen3 models. Make sure the LLM server supports this. (Default: False)
+        max_model_len: The maximum length of the model. This is used to limit the length of the model's response. (Default: 32768)
     """
 
     model: str = Field(default='claude-sonnet-4-20250514')
@@ -79,7 +80,7 @@ class LLMConfig(BaseModel):
     # This setting can be sent in each call to litellm
     drop_params: bool = Field(default=True)
     # Note: this setting is actually global, unlike drop_params
-    modify_params: bool = Field(default=True)
+    modify_params: bool = Field(default=False)
     disable_vision: bool | None = Field(default=None)
     caching_prompt: bool = Field(default=True)
     log_completions: bool = Field(default=False)
@@ -90,6 +91,7 @@ class LLMConfig(BaseModel):
     seed: int | None = Field(default=None)
     enable_thinking: bool = Field(default=True)
     token_level_generation: bool = Field(default=False)
+    max_model_len: int = Field(default=32768)
 
     model_config = {'extra': 'forbid'}
 
