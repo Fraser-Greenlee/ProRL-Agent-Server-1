@@ -71,6 +71,7 @@ from openhands.runtime.plugins import (
 )
 from openhands.runtime.utils.async_bash import AsyncBashSession
 from openhands.runtime.utils.bash import BashSession
+from openhands.runtime.utils.efficient_bash import EfficientBashSession
 from openhands.runtime.utils.files import insert_lines, read_lines
 from openhands.runtime.utils.log_capture import capture_logs
 from openhands.runtime.utils.memory_monitor import MemoryMonitor
@@ -191,7 +192,7 @@ class ActionExecutor:
         if _updated_user_id is not None:
             self.user_id = _updated_user_id
 
-        self.bash_session: BashSession | 'WindowsPowershellSession' | None = None  # type: ignore[name-defined]
+        self.bash_session: BashSession | EfficientBashSession | None = None  # type: ignore[name-defined]
         self.lock = asyncio.Lock()
         self.plugins: dict[str, Plugin] = {}
         self.file_editor = OHEditor(workspace_root=self._initial_cwd)
@@ -238,6 +239,7 @@ class ActionExecutor:
 
     async def _ensure_browser_ready(self):
         """Ensure the browser is ready for use."""
+
         if self.browser is None:
             if self.browser_init_task is None:
                 # Start browser initialization if it hasn't been started
@@ -271,7 +273,8 @@ class ActionExecutor:
                 max_memory_mb=self.max_memory_gb * 1024 if self.max_memory_gb else None,
             )
         else:
-            self.bash_session = BashSession(
+            self.bash_session = EfficientBashSession(
+                # self.bash_session = BashSession(
                 work_dir=self._initial_cwd,
                 username=self.username,
                 no_change_timeout_seconds=int(
@@ -282,9 +285,12 @@ class ActionExecutor:
             self.bash_session.initialize()
         logger.debug('Bash session initialized')
 
-        # Start browser initialization in the background
-        self.browser_init_task = asyncio.create_task(self._init_browser_async())
-        logger.debug('Browser initialization started in background')
+        if self.browsergym_eval_env == 'skip':
+            logger.debug('Skipping browser initialization')
+            self.browser_init_task = None
+        else:
+            self.browser_init_task = asyncio.create_task(self._init_browser_async())
+            logger.debug('Browser initialization started in background')
 
         await wait_all(
             (self._init_plugin(plugin) for plugin in self.plugins_to_load),
@@ -403,7 +409,10 @@ class ActionExecutor:
                 return obs
 
             assert self.bash_session is not None
-            obs = await call_sync_from_async(self.bash_session.execute, action)
+            if isinstance(self.bash_session, EfficientBashSession):
+                obs = await self.bash_session.execute(action)  # type: ignore
+            else:
+                obs = await call_sync_from_async(self.bash_session.execute, action)
             return obs
         except Exception as e:
             logger.error(f'Error running command: {e}')
@@ -602,6 +611,8 @@ class ActionExecutor:
         )
 
     async def browse(self, action: BrowseURLAction) -> Observation:
+        if self.browsergym_eval_env == 'skip':
+            return ErrorObservation('Browser functionality is disabled.')
         if self.browser is None:
             return ErrorObservation(
                 'Browser functionality is not supported on Windows.'
@@ -610,6 +621,8 @@ class ActionExecutor:
         return await browse(action, self.browser, self.initial_cwd)
 
     async def browse_interactive(self, action: BrowseInteractiveAction) -> Observation:
+        if self.browsergym_eval_env == 'skip':
+            return ErrorObservation('Browser functionality is disabled.')
         if self.browser is None:
             return ErrorObservation(
                 'Browser functionality is not supported on Windows.'
