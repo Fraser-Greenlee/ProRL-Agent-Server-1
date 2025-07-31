@@ -82,7 +82,11 @@ class TestSweAgentHandler:
 
         # Verify the mock was called with default parameters
         mock_initialize_agents.assert_called_once_with(
-            instance=instance, llm_config=None, sid=None, max_iterations=1, ensure_thinking_end_properly=False
+            instance=instance,
+            llm_config=None,
+            sid=None,
+            max_iterations=1,
+            ensure_thinking_end_properly=False,
         )
 
     @pytest.mark.asyncio
