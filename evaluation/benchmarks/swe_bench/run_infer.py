@@ -529,7 +529,7 @@ def complete_runtime(
 
     # add all files
     action = CmdRunAction(command='git add -A')
-    action.set_hard_timeout(5)
+    action.set_hard_timeout(30)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
@@ -540,7 +540,7 @@ def complete_runtime(
 
     # Remove binary files from git staging
     action = CmdRunAction(command=remove_binary_files_from_git())
-    action.set_hard_timeout(10)
+    action.set_hard_timeout(30)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})

@@ -2,7 +2,7 @@
 How to run the server:
 
 1. Start the server. This is run in openhands isolated environment seperate (and before) from running verl training loop.
-    python start_server.py --max-init-workers 64 --max-run-workers 64 &
+    python start_server.py --max-init-workers 32 --max-run-workers 32 --timeout 1000 &
 
 2. A one time initialization is needed to add the LLM server address to the server. Make sure address is collocated with openhands server.
 They should have same ip but different port. You can add multiple llm addresses to the server. You address should also contain /v1 at the end.
@@ -165,9 +165,9 @@ if __name__ == '__main__':
     for res in results_single:
         assert res['critical_error'] is None, f'Critical error in single task: {res}'
 
-    # Test with 64 tasks
+    # Test with 32 tasks
     start_time = time.time()
-    results_multi = asyncio.run(process(instance, num_tasks=64))
+    results_multi = asyncio.run(process(instance, num_tasks=32))
     end_time = time.time()
     print(f'\nTime2 taken: {end_time - start_time} seconds')
     for res in results_multi:

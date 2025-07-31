@@ -167,7 +167,7 @@ if __name__ == '__main__':
         preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
     )
 
-    async def _wait_until_ready(timeout: int = 15):
+    async def _wait_until_ready(timeout: int = 60):
         url = _url(args.host, args.port, '/status')
         start_t = time.time()
         while time.time() - start_t < timeout:
