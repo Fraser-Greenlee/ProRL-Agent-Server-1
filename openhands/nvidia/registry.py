@@ -30,6 +30,9 @@ class JobDetails:
     event: threading.Event | None = None
     timeout_error: bool = False
     timer: Optional['PausableTimer'] = None  # Import handled in async_server.py
+    ensure_thinking_end_properly: bool = (
+        False  # set only to true if using text based server for training.
+    )
 
 
 class AgentHandler(ABC):

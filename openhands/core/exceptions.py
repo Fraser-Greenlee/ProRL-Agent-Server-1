@@ -42,6 +42,14 @@ class AgentStuckInLoopError(AgentError):
         super().__init__(message)
 
 
+class AgentFormatError(AgentError):
+    def __init__(
+        self,
+        message: str = 'Agent did not return a valid format. For example reasoning did not end properly.',
+    ) -> None:
+        super().__init__(message)
+
+
 # ============================================
 # Agent Controller Exceptions
 # ============================================

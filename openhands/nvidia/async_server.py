@@ -222,6 +222,10 @@ class OpenHandsServer:
         job_details.instance = instance
         if 'max_iterations' in sampling_params:
             job_details.max_iterations = sampling_params.pop('max_iterations')
+        if 'ensure_thinking_end_properly' in sampling_params:
+            job_details.ensure_thinking_end_properly = sampling_params.pop(
+                'ensure_thinking_end_properly'
+            )
         llm_config = self.create_llm_config(sampling_params)
         job_details.llm_config = llm_config
         job_details.event = threading.Event()

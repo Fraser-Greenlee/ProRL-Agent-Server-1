@@ -77,7 +77,8 @@ async def add_llm_server(address: str):
 
 
 async def process_request(instance: dict, sampling_params: dict | None = None):
-    async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(total=3000)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
         url = 'http://localhost:8006/process'
         payload = {'instance': instance, 'sampling_params': sampling_params or {}}
 
@@ -85,7 +86,13 @@ async def process_request(instance: dict, sampling_params: dict | None = None):
             if response.status == 200:
                 result = await response.json()
                 # Don't print full messages
-                result['messages'] = len(result['messages'])
+                for message in result['messages']:
+                    message['content'] = len(message['content'])
+                    if 'tool_calls' in message and message['tool_calls'] is not None:
+                        message['tool_calls'] = len(message['tool_calls'])
+                    if 'input_ids' in message and message['input_ids'] is not None:
+                        message['input_ids'] = len(message['input_ids'])
+                    message['token_ids'] = len(message['token_ids'])
                 result['tools'] = len(result['tools'])
                 print('Process completed successfully:', result)
                 return result

@@ -46,7 +46,8 @@ class MathHandler(AgentHandler):
             instance=instance,
             llm_config=llm_config,
             sid=sid,
-            max_iterations=max_iterations
+            max_iterations=max_iterations,
+            ensure_thinking_end_properly=job_details.ensure_thinking_end_properly,
         )
 
     async def run(
@@ -113,7 +114,8 @@ class CodeHandler(AgentHandler):
             instance=instance,
             llm_config=llm_config,
             sid=sid,
-            max_iterations=max_iterations
+            max_iterations=max_iterations,
+            ensure_thinking_end_properly=job_details.ensure_thinking_end_properly,
         )
 
     async def run(

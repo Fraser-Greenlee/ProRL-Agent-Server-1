@@ -37,6 +37,7 @@ from openhands.nvidia.controller import run_controller_with_controller
 def get_config(
     instance: dict,
     metadata: EvalMetadata,
+    ensure_thinking_end_properly: bool = False,
 ) -> OpenHandsConfig:
     # Docker image from xingyaoww/od-eval-logic-reasoning:v1.0
     base_container_image = 'xingyaoww_od-eval-logic-reasoning'
@@ -89,7 +90,7 @@ def get_config(
         enable_prompt_extensions=False,
         enable_think=False, # not too sure what this does.
         enable_history_truncation=False, # turn off history truncation
-        ensure_thinking_end_properly=True, # set to true. might need to be false for eval other models.
+        ensure_thinking_end_properly=ensure_thinking_end_properly, # set to true only if using text based server for training.
     )
     config.set_agent_config(agent_config)
     return config
@@ -164,6 +165,7 @@ async def initialize_agents(
         dataset:str = "deepcoder",
         data_split:str = "train",
         max_iterations:int = 1,
+        ensure_thinking_end_properly: bool = False,
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
 
     if llm_config is None:
@@ -184,7 +186,7 @@ async def initialize_agents(
     )
 
 
-    config = get_config(instance, metadata)
+    config = get_config(instance, metadata, ensure_thinking_end_properly)
     runtime = create_runtime(config, sid=sid)
 
     await runtime.connect()

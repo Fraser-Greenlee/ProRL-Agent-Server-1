@@ -317,7 +317,9 @@ def process_messages_from_agent_state(
         # Handle the case where the agent did not end properly reasoning properly
         # This largely formats the message to be consistent with the expected output from Qwen3 models.
         if (
-            message['role'] == 'assistant'
+            job_details is not None
+            and job_details.ensure_thinking_end_properly
+            and message['role'] == 'assistant'
             and '<think>' in new_message['content']
             and '</think>' not in new_message['content']
         ):

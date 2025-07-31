@@ -37,7 +37,7 @@ from openhands.runtime.plugins import (
     PluginRequirement,
 )
 from openhands.utils.prompt import PromptManager
-from openhands.core.exceptions import AgentStuckInLoopError
+from openhands.core.exceptions import AgentFormatError
 
 
 class CodeActAgent(Agent):
@@ -170,7 +170,7 @@ class CodeActAgent(Agent):
         if self.config.ensure_thinking_end_properly:
             latest_agent_thought = state.get_last_agent_thought()
             if latest_agent_thought and '<think>' in latest_agent_thought and '</think>' not in latest_agent_thought:
-                raise AgentStuckInLoopError("LLM does not end properly reasoning properly")
+                raise AgentFormatError("LLM does not end properly reasoning properly")
 
         # Condense the events from the state. If we get a view we'll pass those
         # to the conversation manager for processing, but if we get a condensation
