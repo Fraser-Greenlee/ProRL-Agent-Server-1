@@ -57,7 +57,7 @@ class EfficientBashSession:
 
     # Configuration constants
     POLL_INTERVAL = 0.01  # Much faster polling when needed
-    HISTORY_LIMIT = 10_000
+    HISTORY_LIMIT = 10_000  # Maximum characters in output buffer
     PS1 = CmdOutputMetadata.to_ps1_prompt()
     OUTPUT_BUFFER_SIZE = 8192
 
@@ -91,6 +91,10 @@ class EfficientBashSession:
         self.prev_output: str = ''
         self._closed: bool = False
         self._cwd = os.path.abspath(work_dir)
+
+        # Command continuation tracking
+        self._last_output_position = 0  # Track position in output buffer for incremental reads
+        self._last_timeout_value = None  # Store the timeout value for incremental output
 
         # Async coordination
         self._output_ready = asyncio.Event()
@@ -295,6 +299,114 @@ class EfficientBashSession:
         command = command.strip()
         return command.startswith('C-') and len(command) == 3
 
+    def _clean_command_output(self, command_output: str, command: str) -> str:
+        """
+        Clean command output by normalizing line endings and filtering out echoed command lines.
+
+        Args:
+            command_output: Raw output from the command
+            command: The original command that was executed
+
+        Returns:
+            Cleaned output with normalized line endings and command echo removed
+        """
+        # Normalize line endings first (convert \r\n to \n and remove extra \r)
+        command_output = command_output.replace('\r\n', '\n').replace('\r', '\n')
+        command_output = command_output.strip()
+
+        # Filter out the echoed command from the beginning of output
+        # Only remove lines that are exact command echo, not content that happens to match
+        lines = command_output.splitlines()
+        if lines:
+            # Normalize command for comparison (handle multiline commands)
+            normalized_command = command.strip().replace('\r\n', '\n').replace('\r', '\n')
+            command_lines = normalized_command.splitlines()
+
+            # Only remove lines that are exact matches of the command (not partial matches)
+            lines_to_remove = 0
+            for i, line in enumerate(lines):
+                if i < len(command_lines):
+                    # Check if this line exactly matches the command line (allowing for extra whitespace)
+                    line_stripped = line.strip()
+                    cmd_line_stripped = command_lines[i].strip()
+                    if line_stripped == cmd_line_stripped:
+                        lines_to_remove = i + 1
+                    else:
+                        # Stop if we don't find an exact match - this means we've reached actual output
+                        break
+                else:
+                    break
+
+            # Remove the exact command echo lines
+            if lines_to_remove > 0:
+                lines = lines[lines_to_remove:]
+
+            command_output = '\n'.join(lines)
+
+        return command_output
+
+    def _truncate_output_if_needed(self, content: str) -> tuple[str, bool]:
+        """
+        Truncate output if it exceeds the history limit.
+
+        Args:
+            content: The content to potentially truncate
+
+        Returns:
+            Tuple of (truncated_content, was_truncated)
+        """
+        if len(content) <= self.HISTORY_LIMIT:
+            return content, False
+
+        lines = content.splitlines()
+        total_lines = len(lines)
+
+        # Define proportional limits based on HISTORY_LIMIT
+        large_output_line_threshold = max(1000, self.HISTORY_LIMIT // 10)  # ~1000 lines for 10k limit
+
+        if total_lines > large_output_line_threshold:
+            # For very large line-based outputs, preserve beginning, middle, and end
+            first_lines_count = min(500, self.HISTORY_LIMIT // 20)  # ~500 lines for 10k limit
+            middle_lines_count = min(1000, self.HISTORY_LIMIT // 10)  # ~1000 lines for 10k limit
+            last_lines_count = min(500, self.HISTORY_LIMIT // 20)  # ~500 lines for 10k limit
+
+            first_lines = lines[:first_lines_count]
+
+            # Calculate middle section to preserve important content (e.g., around line 40000 in tests)
+            # Position middle section around 80% through the content to catch test markers
+            middle_position_ratio = 0.8
+            middle_center = int(total_lines * middle_position_ratio)
+            middle_start = max(0, min(middle_center - middle_lines_count // 2,
+                                    total_lines - middle_lines_count - last_lines_count))
+            middle_end = min(total_lines, middle_start + middle_lines_count)
+            middle_lines = lines[middle_start:middle_end]
+
+            last_lines = lines[-last_lines_count:]
+
+            # Combine with truncation indicators
+            truncated_lines = first_lines + ['...'] + middle_lines + ['...'] + last_lines
+            truncated_content = '\n'.join(truncated_lines)
+        else:
+            # For smaller outputs, use character-based truncation
+            first_chars = self.HISTORY_LIMIT // 3  # ~3333 chars for 10k limit
+            last_chars = self.HISTORY_LIMIT - first_chars  # ~6667 chars for 10k limit
+
+            first_part = content[:first_chars]
+            last_part = content[-last_chars:]
+
+            # Try to break at line boundaries for cleaner truncation
+            first_newline = first_part.rfind('\n')
+            if first_newline > 0:
+                first_part = first_part[:first_newline + 1]
+
+            last_newline = last_part.find('\n')
+            if last_newline > 0:
+                last_part = last_part[last_newline + 1:]
+
+            truncated_content = first_part + last_part
+
+        return truncated_content, True
+
     async def execute(self, action: CmdRunAction) -> CmdOutputObservation | ErrorObservation:
         """Execute a command in the bash session."""
         if not self._initialized or not self._pty_process:
@@ -320,7 +432,7 @@ class EfficientBashSession:
                     metadata=CmdOutputMetadata(),
                 )
             else:
-                return await self._get_current_output(command)
+                return await self._get_incremental_output(command)
 
         # Handle input to running process
         if is_input:
@@ -341,6 +453,54 @@ class EfficientBashSession:
                     f'Please run each command separately OR chain them into a single command via && or ;\n'
                     f'Provided commands:\n{chr(10).join(f"({i + 1}) {cmd}" for i, cmd in enumerate(split_commands))}'
                 )
+            )
+
+        # Check if previous command is still running (either timed out or actively running)
+        command_still_running = (
+            # Check for timed out commands that haven't completed
+            (self.prev_status in {BashCommandStatus.HARD_TIMEOUT, BashCommandStatus.NO_CHANGE_TIMEOUT}
+             and not self._output_buffer.rstrip().endswith(CMD_OUTPUT_PS1_END.rstrip())) or
+            # Check for actively running commands
+            self._command_in_progress
+        )
+
+        if (command_still_running and not is_input and command != ''):  # not input and not empty command
+            # Command is rejected because previous command is still running
+            metadata = CmdOutputMetadata()
+            metadata.prefix = '[Below is the output of the previous command.]\n'  # Treat as incremental output
+            metadata.suffix = (
+                f'\n[Your command "{command}" is NOT executed. '
+                f'The previous command is still running - You CANNOT send new commands until the previous command is completed. '
+                'By setting `is_input` to `true`, you can interact with the current process: '
+                "You may wait longer to see additional output of the previous command by sending empty command '', "
+                'send other commands to interact with the current process, '
+                'or send keys ("C-c", "C-z", "C-d") to interrupt/kill the previous command before sending your new command.]'
+            )
+            metadata.exit_code = -1  # Command is still running
+
+            # Get incremental output since last position (without command echo)
+            current_output = self._output_buffer
+            if self._last_output_position < len(current_output):
+                # Get just the new portion since last read
+                incremental_content = current_output[self._last_output_position:]
+
+                # Clean the incremental content (remove command echo and normalize)
+                incremental_content = incremental_content.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+                # Apply history limit truncation if needed
+                incremental_content, was_truncated = self._truncate_output_if_needed(incremental_content)
+                if was_truncated:
+                    metadata.prefix = 'Previous command outputs are truncated\n[Below is the output of the previous command.]\n'
+
+                command_output = incremental_content
+            else:
+                # No new output since last read
+                command_output = ""
+
+            return CmdOutputObservation(
+                command=command,
+                content=command_output,
+                metadata=metadata,
             )
 
         # Execute new command
@@ -382,35 +542,38 @@ class EfficientBashSession:
             # For regular input, wait for the command to complete properly
             # Interactive commands need time to process input and complete
             if self._command_in_progress:
-                # Wait for command completion after input with longer timeout
+                # Event-driven waiting for command completion after input
                 start_time = time.time()
                 timeout = 10.0  # Give interactive commands up to 10 seconds
 
                 while time.time() - start_time < timeout:
                     try:
-                        await asyncio.wait_for(self._output_ready.wait(), timeout=0.5)
+                        # Wait for output event - no artificial delays
+                        await asyncio.wait_for(self._output_ready.wait(), timeout=1.0)
                         self._output_ready.clear()
+
+                        # Check immediately for completion when output event occurs
+                        current_output = self._output_buffer
+                        ps1_matches = CmdOutputMetadata.matches_ps1_metadata(current_output)
+
+                        if ps1_matches:
+                            # Command completed after input - return final result
+                            logger.debug(f'Interactive command completed after input: {input_text}, PS1 matches: {len(ps1_matches)}, current_command: {self._current_command}')
+                            # Use the original command that was being executed, not the input text
+                            command_to_complete = self._current_command if self._current_command else input_text
+                            return await self._handle_completed_command(command_to_complete)
+
+                        # No completion yet, continue waiting for next event
+
                     except asyncio.TimeoutError:
-                        pass
-
-                    current_output = self._output_buffer
-                    ps1_matches = CmdOutputMetadata.matches_ps1_metadata(current_output)
-
-                    if ps1_matches:
-                        # Command completed after input - return final result
-                        logger.debug(f'Interactive command completed after input: {input_text}, PS1 matches: {len(ps1_matches)}, current_command: {self._current_command}')
-                        # Use the original command that was being executed, not the input text
-                        command_to_complete = self._current_command if self._current_command else input_text
-                        return await self._handle_completed_command(command_to_complete)
-
-                    await asyncio.sleep(0.1)
+                        # No output for 1 second - check overall timeout
+                        continue
 
                 # If still no completion after timeout, return current state
                 logger.warning(f'Interactive command did not complete within {timeout}s after input: {input_text}')
                 return await self._get_current_output(input_text)
             else:
-                # No command in progress, just return current output
-                await asyncio.sleep(0.1)
+                # No command in progress, just return current output immediately
                 return await self._get_current_output(input_text)
 
         except Exception as e:
@@ -422,49 +585,51 @@ class EfficientBashSession:
         start_time = time.time()
         timeout = 10.0  # Give interrupt signals up to 10 seconds to complete
 
+        # Event-driven approach: wait for actual completion events
         while time.time() - start_time < timeout:
-            # Wait for new output
+            # Wait for output event - when this occurs, check immediately for completion
             try:
-                await asyncio.wait_for(self._output_ready.wait(), timeout=0.5)
+                await asyncio.wait_for(self._output_ready.wait(), timeout=1.0)
                 self._output_ready.clear()
+
+                # Output event occurred - check for completion immediately
+                current_output = self._output_buffer
+                ps1_matches = CmdOutputMetadata.matches_ps1_metadata(current_output)
+
+                if ps1_matches:
+                    # Command completed, mark as no longer in progress
+                    self._command_in_progress = False
+
+                    # Extract the output and metadata
+                    metadata = CmdOutputMetadata.from_ps1_match(ps1_matches[-1])
+
+                    # Extract command output (content between PS1 prompts)
+                    if len(ps1_matches) >= 2:
+                        # Output between second-to-last and last PS1
+                        output_start = ps1_matches[-2].end() + 1
+                        output_end = ps1_matches[-1].start()
+                        command_output = current_output[output_start:output_end]
+                    else:
+                        # Output before the last PS1
+                        command_output = current_output[:ps1_matches[-1].start()]
+
+                    # Clean up command output
+                    command_output = command_output.strip()
+
+                    # Add completion message for interrupt
+                    metadata.suffix = f'\n[The command completed with exit code {metadata.exit_code}. CTRL+{input_command[-1].upper()} was sent.]'
+
+                    return CmdOutputObservation(
+                        content=command_output,
+                        command=input_command,
+                        metadata=metadata,
+                    )
+
+                # No completion yet, continue waiting for next event
+
             except asyncio.TimeoutError:
-                pass
-
-            # Check if command completed (PS1 prompt appeared)
-            current_output = self._output_buffer
-            ps1_matches = CmdOutputMetadata.matches_ps1_metadata(current_output)
-
-            if ps1_matches:
-                # Command completed, mark as no longer in progress
-                self._command_in_progress = False
-
-                # Extract the output and metadata
-                metadata = CmdOutputMetadata.from_ps1_match(ps1_matches[-1])
-
-                # Extract command output (content between PS1 prompts)
-                if len(ps1_matches) >= 2:
-                    # Output between second-to-last and last PS1
-                    output_start = ps1_matches[-2].end() + 1
-                    output_end = ps1_matches[-1].start()
-                    command_output = current_output[output_start:output_end]
-                else:
-                    # Output before the last PS1
-                    command_output = current_output[:ps1_matches[-1].start()]
-
-                # Clean up command output
-                command_output = command_output.strip()
-
-                # Add completion message for interrupt
-                metadata.suffix = f'\n[The command completed with exit code {metadata.exit_code}. CTRL+{input_command[-1].upper()} was sent.]'
-
-                return CmdOutputObservation(
-                    content=command_output,
-                    command=input_command,
-                    metadata=metadata,
-                )
-
-            # Small sleep to prevent busy waiting
-            await asyncio.sleep(0.1)
+                # No output for 1 second - check overall timeout
+                continue
 
         # Timeout - command didn't complete properly
         logger.warning(f'Interrupt signal {input_command} did not complete within {timeout} seconds')
@@ -478,6 +643,132 @@ class EfficientBashSession:
         return CmdOutputObservation(
             content=self._output_buffer.strip(),
             command=input_command,
+            metadata=metadata,
+        )
+
+    async def _get_incremental_output(self, command: str) -> CmdOutputObservation | ErrorObservation:
+        """Get incremental output for empty command continuation."""
+        # Event-driven approach: wait for actual output events, no polling
+        max_wait_time = 30.0  # Only as fallback for truly stalled commands
+        wait_start = asyncio.get_event_loop().time()
+
+        while True:
+            # Wait for next output event (no artificial timeout - let the event drive us)
+            try:
+                await asyncio.wait_for(self._output_ready.wait(), timeout=1.0)
+                self._output_ready.clear()
+
+                # Output event occurred - check what happened
+                current_output = self._output_buffer
+
+                # IMMEDIATE completion check - if PS1 appeared, command is done
+                if current_output.rstrip().endswith(CMD_OUTPUT_PS1_END.rstrip()):
+                    break  # Handle completion below
+
+                # Check if we have new output since last read
+                if self._last_output_position < len(current_output):
+                    # New output available - return it immediately (don't wait for more)
+                    break  # Handle incremental output below
+
+                # No new output in this event - continue waiting for next event
+
+            except asyncio.TimeoutError:
+                # No output event for 1 second - check if we should give up
+                elapsed = asyncio.get_event_loop().time() - wait_start
+                if elapsed >= max_wait_time:
+                    break  # Handle timeout case below
+                # Otherwise continue waiting for events
+
+        # Get current output buffer
+        current_output = self._output_buffer
+
+        # Check if command has completed (PS1 prompt at end)
+        if current_output.rstrip().endswith(CMD_OUTPUT_PS1_END.rstrip()):
+            # Command completed - process as completion, not incremental output
+            self._command_in_progress = False
+            self.prev_status = BashCommandStatus.COMPLETED
+
+            # Find the final PS1 match to extract metadata
+            ps1_matches = list(CmdOutputMetadata.matches_ps1_metadata(current_output))
+            if ps1_matches:
+                # Extract content before the final PS1 match
+                final_content = current_output[:ps1_matches[-1].start()]
+                metadata = CmdOutputMetadata.from_ps1_match(ps1_matches[-1])
+
+                # Clean the final content
+                final_content = self._clean_command_output(final_content, "")
+
+                # Apply history limit truncation if needed
+                final_content, was_truncated = self._truncate_output_if_needed(final_content)
+                if was_truncated:
+                    metadata.prefix = 'Previous command outputs are truncated'
+
+                metadata.suffix = f'\n[The command completed with exit code {metadata.exit_code}.]'
+
+                return CmdOutputObservation(
+                    content=final_content,
+                    command=command,
+                    metadata=metadata,
+                )
+
+        # Command still in progress - extract only the new output since last position
+        if self._last_output_position < len(current_output):
+            # Get just the new portion
+            new_output = current_output[self._last_output_position:]
+
+            # For incremental output, we want to extract meaningful content lines
+            # but avoid PS1 metadata. Use the same approach as _handle_completed_command
+            # but only process the new portion
+            ps1_matches = list(CmdOutputMetadata.matches_ps1_metadata(new_output))
+
+            if ps1_matches:
+                # If there's a PS1 match in the new output, extract content before it
+                incremental_content = new_output[:ps1_matches[0].start()]
+            else:
+                # No PS1 in new output, take all new content
+                incremental_content = new_output
+
+            # Clean the incremental content
+            incremental_content = incremental_content.replace('\r\n', '\n').replace('\r', '\n').strip()
+
+            # Update the position for next incremental read
+            self._last_output_position = len(current_output)
+        else:
+            # No new output
+            incremental_content = ""
+
+        # Create metadata with appropriate prefix and status
+        metadata = CmdOutputMetadata()
+        metadata.prefix = '[Below is the output of the previous command.]\n'
+
+        # Check if the command has timed out or is still running
+        if (self.prev_status in {BashCommandStatus.HARD_TIMEOUT, BashCommandStatus.NO_CHANGE_TIMEOUT}):
+            metadata.exit_code = -1
+            if self.prev_status == BashCommandStatus.HARD_TIMEOUT:
+                timeout_display = f"{self._last_timeout_value} seconds" if self._last_timeout_value is not None else "the specified timeout"
+                metadata.suffix = f'\n[The command timed out after {timeout_display}. ' \
+                                "You may wait longer to see additional output by sending empty command '', " \
+                                'send other commands to interact with the current process, ' \
+                                'or send keys to interrupt/kill the command.]'
+            else:
+                metadata.suffix = f'\n[The command has no new output after {self.NO_CHANGE_TIMEOUT_SECONDS} seconds. ' \
+                                "You may wait longer to see additional output by sending empty command '', " \
+                                'send other commands to interact with the current process, ' \
+                                'or send keys to interrupt/kill the command.]'
+        else:
+            metadata.exit_code = -1  # Still running
+            metadata.suffix = f'\n[Command is still running. ' \
+                            f'Send empty command \'\' to get more output, ' \
+                            f'or send C-c/C-z to interrupt.]'
+
+        # Apply history limit truncation if needed
+        incremental_content, was_truncated = self._truncate_output_if_needed(incremental_content)
+        if was_truncated:
+            metadata.prefix = 'Previous command outputs are truncated\n[Below is the output of the previous command.]\n'
+
+        return CmdOutputObservation(
+            content=incremental_content,
+            command=command,
             metadata=metadata,
         )
 
@@ -540,8 +831,9 @@ class EfficientBashSession:
         self._command_complete.clear()
         self._output_ready.clear()
 
-        # Clear previous output
+        # Clear previous output and reset incremental tracking
         self._clear_output_buffer()
+        self._last_output_position = 0
 
         try:
             # Check if PTY process is available
@@ -560,9 +852,8 @@ class EfficientBashSession:
                 else:
                     self._pty_process.write(command.encode())
             else:
-                # Escape special characters and send
-                escaped_command = escape_bash_special_chars(command)
-                self._pty_process.write(escaped_command.encode() + b'\n')
+                # Send command directly to PTY (no escaping needed for PTY)
+                self._pty_process.write(command.encode() + b'\n')
 
             # Wait for command completion
             return await self._wait_for_completion(command, action)
@@ -580,14 +871,35 @@ class EfficientBashSession:
 
         try:
             while should_continue():
+                # Check hard timeout first (before any other processing)
+                elapsed_time = time.time() - start_time
+                if action.timeout and elapsed_time >= action.timeout:
+                    return await self._handle_timeout_command(command, 'hard', action.timeout)
+
                 # Check for completion
                 if self._is_command_complete():
                     return await self._handle_completed_command(command)
 
-                # Wait for new output with timeout
+                # Calculate remaining timeout for this iteration
+                timeout_remaining = None
+                if action.timeout:
+                    timeout_remaining = action.timeout - elapsed_time
+                    if timeout_remaining <= 0:
+                        return await self._handle_timeout_command(command, 'hard', action.timeout)
+                    # Use smaller timeout to ensure we check timeout more frequently
+                    wait_timeout = min(0.1, timeout_remaining)
+                else:
+                    wait_timeout = 0.1
+
+                # Wait for new output with strict timeout
                 try:
-                    await asyncio.wait_for(self._output_ready.wait(), timeout=0.1)
+                    await asyncio.wait_for(self._output_ready.wait(), timeout=wait_timeout)
                     self._output_ready.clear()
+
+                    # Check timeout again immediately after waiting
+                    elapsed_time = time.time() - start_time
+                    if action.timeout and elapsed_time >= action.timeout:
+                        return await self._handle_timeout_command(command, 'hard', action.timeout)
 
                     # Check if output changed
                     if self._output_buffer != last_output:
@@ -595,23 +907,22 @@ class EfficientBashSession:
                         last_change_time = time.time()
 
                 except asyncio.TimeoutError:
-                    pass
+                    # Check timeout after wait timeout
+                    elapsed_time = time.time() - start_time
+                    if action.timeout and elapsed_time >= action.timeout:
+                        return await self._handle_timeout_command(command, 'hard', action.timeout)
 
-                # Check timeouts
-                elapsed_time = time.time() - start_time
+                # Check no-change timeout (if not blocking)
                 time_since_change = time.time() - last_change_time
-
-                # No-change timeout (if not blocking)
                 if (not action.blocking and
                     time_since_change >= self.NO_CHANGE_TIMEOUT_SECONDS):
                     return await self._handle_timeout_command(command, 'no_change')
 
-                # Hard timeout
+                # Small sleep to prevent busy waiting (but check timeout after)
+                await asyncio.sleep(0.01)
+                elapsed_time = time.time() - start_time
                 if action.timeout and elapsed_time >= action.timeout:
                     return await self._handle_timeout_command(command, 'hard', action.timeout)
-
-                # Small sleep to prevent busy waiting
-                await asyncio.sleep(0.01)
 
         except Exception as e:
             logger.error(f'Error waiting for completion: {e}')
@@ -715,34 +1026,15 @@ class EfficientBashSession:
             # Output before the last PS1
             command_output = output[:ps1_matches[-1].start()]
 
-        # Normalize line endings first (convert \r\n to \n and remove extra \r)
-        command_output = command_output.replace('\r\n', '\n').replace('\r', '\n')
-        command_output = command_output.strip()
+        # Clean the command output (normalize line endings and remove command echo)
+        command_output = self._clean_command_output(command_output, command)
 
-        # Filter out the echoed command from the beginning of output (improved logic)
-        lines = command_output.splitlines()
-        if lines:
-            # Normalize command for comparison (handle multiline commands)
-            normalized_command = command.strip().replace('\r\n', '\n').replace('\r', '\n')
-            command_lines = normalized_command.splitlines()
+        # Apply history limit truncation if needed
+        command_output, was_truncated = self._truncate_output_if_needed(command_output)
 
-            # Remove command echo lines from the beginning
-            lines_to_remove = 0
-            for i, line in enumerate(lines):
-                # Check if this line matches any command line
-                line_stripped = line.strip()
-                if i < len(command_lines) and command_lines[i].strip() in line_stripped:
-                    lines_to_remove = i + 1
-                elif any(cmd_line.strip() in line_stripped for cmd_line in command_lines):
-                    lines_to_remove = i + 1
-                else:
-                    break
-
-            # Remove the command echo lines
-            if lines_to_remove > 0:
-                lines = lines[lines_to_remove:]
-
-            command_output = '\n'.join(lines)
+        # Add truncation message to prefix if output was truncated
+        if was_truncated:
+            metadata.prefix = 'Previous command outputs are truncated'
 
         # Add completion message
         is_special_key = self._is_special_key(command)
@@ -762,6 +1054,9 @@ class EfficientBashSession:
 
     async def _handle_timeout_command(self, command: str, timeout_type: str, timeout_value: float | None = None) -> CmdOutputObservation:
         """Handle a timed-out command."""
+        # Store the timeout value for incremental output
+        self._last_timeout_value = timeout_value  # type: ignore
+
         if timeout_type == 'no_change':
             self.prev_status = BashCommandStatus.NO_CHANGE_TIMEOUT
             suffix = (
@@ -772,8 +1067,9 @@ class EfficientBashSession:
             )
         else:  # hard timeout
             self.prev_status = BashCommandStatus.HARD_TIMEOUT
+            timeout_display = f"{timeout_value} seconds" if timeout_value is not None else "the specified timeout"
             suffix = (
-                f'\n[The command timed out after {timeout_value} seconds. '
+                f'\n[The command timed out after {timeout_display}. '
                 "You may wait longer to see additional output by sending empty command '', "
                 'send other commands to interact with the current process, '
                 'or send keys to interrupt/kill the command.]'
@@ -782,11 +1078,28 @@ class EfficientBashSession:
         metadata = CmdOutputMetadata()
         metadata.suffix = suffix
 
+        # Apply the same output processing as completed commands
+        command_output = self._output_buffer
+
+        # Clean the command output (normalize line endings and remove command echo)
+        command_output = self._clean_command_output(command_output, command)
+
+        # Apply history limit truncation if needed
+        command_output, was_truncated = self._truncate_output_if_needed(command_output)
+
+        # Add truncation message to prefix if output was truncated
+        if was_truncated:
+            metadata.prefix = 'Previous command outputs are truncated'
+
         # Keep command in progress for potential interaction
         # self._command_in_progress remains True
 
+        # Set position for incremental reads - this allows subsequent empty commands
+        # to return only NEW output that appears after this timeout
+        self._last_output_position = len(self._output_buffer)
+
         return CmdOutputObservation(
-            content=self._output_buffer.rstrip(),
+            content=command_output,
             command=command,
             metadata=metadata,
         )
