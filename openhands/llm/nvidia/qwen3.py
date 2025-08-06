@@ -256,10 +256,15 @@ def request_response_tokens(
 
     try:
         response_ids = resp['response_ids']
+        if 'logprobs' in resp:
+            logprobs = resp['logprobs']
+        else:
+            logprobs = None
         result =  parse_response_ids(response_ids, tokenizer)
         result = {
             'input_ids': input_ids,
             'output_ids': response_ids,
+            'logprobs': logprobs,
             'message': result,
         }
         model_response = ModelResponse(

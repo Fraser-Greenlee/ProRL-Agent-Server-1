@@ -68,6 +68,7 @@ class Message(BaseModel):
     force_string_serializer: bool = False
     input_ids: list[int] | None = None
     output_ids: list[int] | None = None
+    logprobs: list[float] | None = None
 
     @property
     def contains_image(self) -> bool:
@@ -96,6 +97,7 @@ class Message(BaseModel):
             'role': self.role,
             'input_ids': self.input_ids,
             'output_ids': self.output_ids,
+            'logprobs': self.logprobs,
         }
 
         # add tool call keys if we have a tool call or response
@@ -132,6 +134,7 @@ class Message(BaseModel):
             'role': self.role,
             'input_ids': self.input_ids,
             'output_ids': self.output_ids,
+            'logprobs': self.logprobs,
         }
 
         if role_tool_with_prompt_caching:

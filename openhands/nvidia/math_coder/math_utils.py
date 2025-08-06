@@ -203,7 +203,7 @@ def initialize_runtime(runtime: Runtime, instance: dict, metadata: EvalMetadata)
     assert obs.exit_code == 0
 
     action = IPythonRunCellAction(code='%pip install numpy scipy sympy')
-    action.set_hard_timeout(30)
+    action.set_hard_timeout(90)
     openhands_logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
 

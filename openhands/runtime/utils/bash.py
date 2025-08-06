@@ -32,12 +32,7 @@ def split_bash_commands(commands: str) -> list[str]:
         AttributeError,
     ):
         # Added AttributeError to catch 'str' object has no attribute 'kind' error (issue #8369)
-        logger.debug(
-            f'Failed to parse bash commands\n'
-            f'[input]: {commands}\n'
-            f'[warning]: {traceback.format_exc()}\n'
-            f'The original command will be returned as is.'
-        )
+        logger.debug(f'Complex bash command will be executed as-is: {commands[:100]}...')
         # If parsing fails, return the original commands
         return [commands]
 

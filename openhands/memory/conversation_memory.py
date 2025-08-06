@@ -228,6 +228,7 @@ class ConversationMemory:
             assistant_msg = getattr(llm_response.choices[0], 'message')
             input_ids = getattr(llm_response.choices[0], 'input_ids', None)
             output_ids = getattr(llm_response.choices[0], 'output_ids', None)
+            logprobs = getattr(llm_response.choices[0], 'logprobs', None)
 
             # Add the LLM message (assistant) that initiated the tool calls
             # (overwrites any previous message with the same response_id)
@@ -243,6 +244,7 @@ class ConversationMemory:
                 tool_calls=assistant_msg.tool_calls,
                 input_ids=input_ids,
                 output_ids=output_ids,
+                logprobs=logprobs,
             )
             return []
         elif isinstance(action, AgentFinishAction):
@@ -263,6 +265,9 @@ class ConversationMemory:
                 output_ids = getattr(
                     tool_metadata.model_response.choices[0], 'output_ids', None
                 )
+                logprobs = getattr(
+                    tool_metadata.model_response.choices[0], 'logprobs', None
+                )
                 content = assistant_msg.content or ''
 
                 # save content if any, to thought
@@ -278,6 +283,7 @@ class ConversationMemory:
             else:
                 input_ids = None
                 output_ids = None
+                logprobs = None
             if role not in ('user', 'system', 'assistant', 'tool'):
                 raise ValueError(f'Invalid role: {role}')
             return [
@@ -286,6 +292,7 @@ class ConversationMemory:
                     content=[TextContent(text=action.thought)],
                     input_ids=input_ids,
                     output_ids=output_ids,
+                    logprobs=logprobs,
                 )
             ]
         elif isinstance(action, MessageAction):
@@ -306,15 +313,22 @@ class ConversationMemory:
                     'output_ids',
                     None,
                 )
+                logprobs = getattr(
+                    action.tool_call_metadata.model_response.choices[0],
+                    'logprobs',
+                    None,
+                )
             else:
                 input_ids = None
                 output_ids = None
+                logprobs = None
             return [
                 Message(
                     role=role,  # type: ignore[arg-type]
                     content=content,
                     input_ids=input_ids,
                     output_ids=output_ids,
+                    logprobs=logprobs,
                 )
             ]
         elif isinstance(action, CmdRunAction) and action.source == 'user':

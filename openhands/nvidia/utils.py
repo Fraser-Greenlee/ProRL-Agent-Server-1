@@ -301,6 +301,7 @@ def process_messages_from_agent_state(
         if token_level_generation:
             input_ids = message.get('input_ids', None)
             output_ids = message.get('output_ids', None)
+            logprobs = message.get('logprobs', None)
             if output_ids is not None:
                 new_message['token_ids'] = output_ids
             else:
@@ -313,6 +314,7 @@ def process_messages_from_agent_state(
                     tools=tools,
                 )[0]
             new_message['input_ids'] = input_ids
+            new_message['logprobs'] = logprobs
 
         # Handle the case where the agent did not end properly reasoning properly
         # This largely formats the message to be consistent with the expected output from Qwen3 models.

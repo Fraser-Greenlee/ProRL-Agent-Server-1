@@ -16,8 +16,10 @@ import asyncio
 import os
 import re
 import signal
+import termios
 import time
 import traceback
+import tty
 import uuid
 from enum import Enum
 from typing import Any, Optional
@@ -100,6 +102,11 @@ class EfficientBashSession:
         self._output_ready = asyncio.Event()
         self._command_complete = asyncio.Event()
         self._output_reader_task: Optional[asyncio.Task] = None
+
+        # Robust completion detection using file-based signaling
+        self._completion_file: Optional[str] = None
+        self._completion_exit_code: Optional[int] = None
+        self._completion_detected: bool = False
 
     def initialize(self) -> None:
         """Initialize the bash session with PTY."""
@@ -249,12 +256,139 @@ class EfficientBashSession:
             logger.debug('Output reader stopped')
 
     def _is_command_complete(self) -> bool:
-        """Check if the current command has completed by looking for PS1 prompt."""
-        if not self._command_in_progress:
+        """
+        Check if the command is complete using file-based detection.
+        This works for both subshell and main shell commands.
+        """
+        if not self._command_in_progress or not self._completion_file:
+            return True  # Not waiting for any command
+
+        # If we already detected completion, don't look again
+        if self._completion_detected:
             return True
 
-        # Look for PS1 prompt at the end of output
-        return self._output_buffer.rstrip().endswith(CMD_OUTPUT_PS1_END.rstrip())
+        # File-based completion detection
+        try:
+            if os.path.exists(self._completion_file):
+                with open(self._completion_file, 'r') as f:
+                    content = f.read().strip()
+                    if content:
+                        self._completion_exit_code = int(content)
+                        self._completion_detected = True
+                        logger.debug(f'Completion detected via file! Exit code: {self._completion_exit_code}')
+
+                        # Clean up the completion file
+                        try:
+                            os.unlink(self._completion_file)
+                        except OSError:
+                            pass  # File already gone, that's fine
+
+                        return True
+        except (OSError, ValueError) as e:
+            logger.debug(f'Error checking completion file: {e}')
+
+        return False
+
+    def _extract_clean_output(self) -> str:
+        """Extract clean command output from stty wrapper or interactive commands."""
+        buffer = self._output_buffer
+
+        # Check if this was a file-based completion command (has stty wrapper)
+        if self._completion_file:
+            # Commands with file-based completion use stty wrapper
+            # Structure: wrapper { ... } + output + PS1 metadata
+            wrapper_end = buffer.find('}\n')
+            if wrapper_end == -1:
+                wrapper_end = buffer.find('}\r\n')
+
+            if wrapper_end != -1:
+                # Found wrapper end - start after the wrapper block
+                content_start = wrapper_end + 2  # Skip '}\n' or '}\r\n'
+                raw_output = buffer[content_start:]
+            else:
+                # No wrapper end found with newline - check for standalone '}' (timed-out command)
+                # Look for '}' that appears on its own line (the wrapper closing brace)
+                lines = buffer.split('\n')
+                wrapper_end_line = -1
+                for i, line in enumerate(lines):
+                    if line.strip() == '}':
+                        wrapper_end_line = i
+                        break
+
+                if wrapper_end_line != -1:
+                    # Found the wrapper closing line - everything after it is real output
+                    output_lines = lines[wrapper_end_line + 1:]
+                    raw_output = '\n'.join(output_lines)
+                else:
+                    # No standalone '}' found - fallback to whole buffer
+                    raw_output = buffer
+        else:
+            # Interactive commands don't use stty wrapper
+            # Structure: just output + PS1 metadata
+            raw_output = buffer
+
+        # Remove PS1 metadata completely (both start and end markers)
+        # PS1 format: ###PS1JSON###...###PS1END###
+        ps1_start = raw_output.find('###PS1JSON###')
+        if ps1_start != -1:
+            clean_output = raw_output[:ps1_start]
+        else:
+            # Also check for PS1END marker that might appear without start
+            ps1_end = raw_output.find('###PS1END###')
+            if ps1_end != -1:
+                clean_output = raw_output[:ps1_end]
+            else:
+                clean_output = raw_output
+
+        return clean_output.strip()
+
+    def _parse_ps1_metadata(self) -> CmdOutputMetadata:
+        """Parse PS1 metadata from output buffer while keeping file-based completion."""
+        # Use existing PS1 parsing logic but with our robust completion detection
+        ps1_matches = list(CmdOutputMetadata.matches_ps1_metadata(self._output_buffer))
+        if ps1_matches:
+            # Get the latest PS1 metadata and convert match to metadata object
+            return CmdOutputMetadata.from_ps1_match(ps1_matches[-1])
+        else:
+            # Fallback to basic metadata if no PS1 found
+            metadata = CmdOutputMetadata()
+            return metadata
+
+    def _generate_completion_file(self) -> str:
+        """Generates a unique temporary file path for completion signaling."""
+        import tempfile
+        fd, path = tempfile.mkstemp(prefix='ohands_completion_', suffix='.tmp')
+        os.close(fd)  # Close the file descriptor, we just want the path
+        os.unlink(path)  # Remove the file, we just want a unique path
+        return path
+
+    def _wrap_command_with_completion_file(self, command: str) -> str:
+        """
+        Ultimate wrapper: Uses `stty -echo` to disable command echoing for perfectly
+        clean output, and `trap` to ensure terminal state is always restored.
+
+        This is the industry-standard approach for PTY automation.
+        """
+        self._completion_file = self._generate_completion_file()
+        self._completion_exit_code = None  # Reset for the new command
+        self._completion_detected = False  # Reset completion detection
+
+        # The ultimate wrapper: stty + trap for bulletproof execution
+        wrapped_command = (
+            "{\n"
+            "    _original_stty=$(stty -g)\n"
+            "    trap 'stty $_original_stty' EXIT\n"
+            "    stty -echo\n"
+            f"    {command}\n"
+            "    _exit_code=$?\n"
+            "    stty $_original_stty\n"
+            "    trap - EXIT\n"
+            f"    echo \"$_exit_code\" > '{self._completion_file}'\n"
+            "    (exit $_exit_code)\n"
+            "}"
+        )
+        logger.debug(f'Executing with stty wrapper (no echo): {self._completion_file}')
+        return wrapped_command
 
     def close(self) -> None:
         """Clean up the session."""
@@ -267,6 +401,13 @@ class EfficientBashSession:
         # Cancel background tasks
         if self._output_reader_task and not self._output_reader_task.done():
             self._output_reader_task.cancel()
+
+        # Clean up any remaining completion file
+        if self._completion_file and os.path.exists(self._completion_file):
+            try:
+                os.unlink(self._completion_file)
+            except OSError:
+                pass  # File already gone, that's fine
 
         # Terminate process
         if self._pty_process and self._pty_process.isalive():
@@ -459,7 +600,7 @@ class EfficientBashSession:
         command_still_running = (
             # Check for timed out commands that haven't completed
             (self.prev_status in {BashCommandStatus.HARD_TIMEOUT, BashCommandStatus.NO_CHANGE_TIMEOUT}
-             and not self._output_buffer.rstrip().endswith(CMD_OUTPUT_PS1_END.rstrip())) or
+             and not self._is_command_complete()) or
             # Check for actively running commands
             self._command_in_progress
         )
@@ -507,7 +648,7 @@ class EfficientBashSession:
         return await self._execute_new_command(command, action)
 
     async def _send_input(self, input_text: str) -> CmdOutputObservation | ErrorObservation:
-        """Send input to a running process."""
+        """Send input to a running process, with terminal echo disabled for clean output."""
         if not self._pty_process:
             return CmdOutputObservation(
                 content='ERROR: No process available for input.',
@@ -519,25 +660,44 @@ class EfficientBashSession:
             is_special_key = self._is_special_key(input_text)
 
             if is_special_key:
-                # Handle special keys like C-c, C-z
+                # Special keys (like C-c) are control codes and are not echoed anyway.
+                # Send them directly.
                 if input_text == 'C-c':
                     self._pty_process.write(b'\x03')  # Ctrl+C
-                    # For interrupt signals, wait for command to complete
                     return await self._wait_for_interrupt_completion(input_text)
                 elif input_text == 'C-z':
                     self._pty_process.write(b'\x1a')  # Ctrl+Z
-                    # For suspend signals, wait for command to complete
                     return await self._wait_for_interrupt_completion(input_text)
                 elif input_text == 'C-d':
                     self._pty_process.write(b'\x04')  # Ctrl+D
-                    # For EOF signals, wait for command to complete
                     return await self._wait_for_interrupt_completion(input_text)
                 else:
                     logger.warning(f'Unknown special key: {input_text}')
                     self._pty_process.write(input_text.encode() + b'\n')
             else:
-                # Regular input
-                self._pty_process.write(input_text.encode() + b'\n')
+                # For regular text input, we disable echo to keep the output buffer clean.
+                try:
+                    fd = self._pty_process.fd
+                    original_settings = termios.tcgetattr(fd)
+                    try:
+                        # Disable echo
+                        tty.setcbreak(fd)  # A mode that disables line buffering and echo
+
+                        # Send the user's input to the running process
+                        self._pty_process.write(input_text.encode() + b'\n')
+
+                    finally:
+                        # CRITICAL: Always restore the original terminal settings
+                        termios.tcsetattr(fd, termios.TCSADRAIN, original_settings)
+
+                    # Small delay for app to process input
+                    await asyncio.sleep(0.2)
+
+                except (OSError, termios.error) as e:
+                    logger.warning(f'Could not control terminal echo: {e}. Sending input without echo control.')
+                    # Fallback: send input without echo control
+                    self._pty_process.write(input_text.encode() + b'\n')
+                    await asyncio.sleep(0.2)
 
             # For regular input, wait for the command to complete properly
             # Interactive commands need time to process input and complete
@@ -559,6 +719,9 @@ class EfficientBashSession:
                         if ps1_matches:
                             # Command completed after input - return final result
                             logger.debug(f'Interactive command completed after input: {input_text}, PS1 matches: {len(ps1_matches)}, current_command: {self._current_command}')
+                            # For interactive commands that complete via PS1, clear the completion file
+                            # so output extraction doesn't use wrapper-based logic
+                            self._completion_file = None
                             # Use the original command that was being executed, not the input text
                             command_to_complete = self._current_command if self._current_command else input_text
                             return await self._handle_completed_command(command_to_complete)
@@ -661,8 +824,8 @@ class EfficientBashSession:
                 # Output event occurred - check what happened
                 current_output = self._output_buffer
 
-                # IMMEDIATE completion check - if PS1 appeared, command is done
-                if current_output.rstrip().endswith(CMD_OUTPUT_PS1_END.rstrip()):
+                # IMMEDIATE completion check - if completion marker appeared, command is done
+                if self._is_command_complete():
                     break  # Handle completion below
 
                 # Check if we have new output since last read
@@ -682,31 +845,49 @@ class EfficientBashSession:
         # Get current output buffer
         current_output = self._output_buffer
 
-        # Check if command has completed (PS1 prompt at end)
-        if current_output.rstrip().endswith(CMD_OUTPUT_PS1_END.rstrip()):
-            # Command completed - process as completion, not incremental output
+        # Check if command has completed (completion marker present)
+        if self._is_command_complete():
+            # Command completed - process as completion, but return only incremental output
             self._command_in_progress = False
             self.prev_status = BashCommandStatus.COMPLETED
 
             # Find the final PS1 match to extract metadata
             ps1_matches = list(CmdOutputMetadata.matches_ps1_metadata(current_output))
             if ps1_matches:
-                # Extract content before the final PS1 match
-                final_content = current_output[:ps1_matches[-1].start()]
                 metadata = CmdOutputMetadata.from_ps1_match(ps1_matches[-1])
 
-                # Clean the final content
-                final_content = self._clean_command_output(final_content, "")
+                # Get only the new output since last position (like BashSession does)
+                if self._last_output_position < len(current_output):
+                    # Get just the new portion since last read
+                    new_output = current_output[self._last_output_position:]
+
+                    # Find PS1 matches in the new output to extract content before completion
+                    new_ps1_matches = list(CmdOutputMetadata.matches_ps1_metadata(new_output))
+                    if new_ps1_matches:
+                        # Extract content before the PS1 match in new output
+                        incremental_content = new_output[:new_ps1_matches[-1].start()]
+                    else:
+                        # No PS1 in new output, take all new content
+                        incremental_content = new_output
+                else:
+                    # No new output since last position
+                    incremental_content = ""
+
+                # Clean the incremental content
+                incremental_content = incremental_content.replace('\r\n', '\n').replace('\r', '\n').strip()
 
                 # Apply history limit truncation if needed
-                final_content, was_truncated = self._truncate_output_if_needed(final_content)
+                incremental_content, was_truncated = self._truncate_output_if_needed(incremental_content)
                 if was_truncated:
                     metadata.prefix = 'Previous command outputs are truncated'
 
                 metadata.suffix = f'\n[The command completed with exit code {metadata.exit_code}.]'
 
+                # Reset the output position since command is complete
+                self._last_output_position = 0
+
                 return CmdOutputObservation(
-                    content=final_content,
+                    content=incremental_content,
                     command=command,
                     metadata=metadata,
                 )
@@ -852,8 +1033,10 @@ class EfficientBashSession:
                 else:
                     self._pty_process.write(command.encode())
             else:
-                # Send command directly to PTY (no escaping needed for PTY)
-                self._pty_process.write(command.encode() + b'\n')
+                # *** CHANGE HERE: Wrap the command before sending ***
+                # Use robust completion detection with unique markers
+                wrapped_command = self._wrap_command_with_completion_file(command)
+                self._pty_process.write(wrapped_command.encode() + b'\n')
 
             # Wait for command completion
             return await self._wait_for_completion(command, action)
@@ -938,75 +1121,23 @@ class EfficientBashSession:
         self._command_in_progress = False
         self.prev_status = BashCommandStatus.COMPLETED
 
-        # Parse output for PS1 matches
-        output = self._output_buffer
-        ps1_matches = CmdOutputMetadata.matches_ps1_metadata(output)
+        # Clean the output buffer to extract just the actual command output
+        command_output = self._extract_clean_output()
 
-        if not ps1_matches:
-            logger.warning('No PS1 matches found in completed command output')
-            # For commands without PS1 matches, create basic metadata
-            metadata = CmdOutputMetadata()
-            # Try to detect working directory change from command
-            if command.strip().startswith('cd '):
-                # Update working directory based on cd command
-                target_dir = command.strip()[3:].strip().strip('"\'')
-                if target_dir:
-                    if target_dir.startswith('/'):
-                        self._cwd = target_dir
-                    else:
-                        self._cwd = os.path.join(self._cwd, target_dir)
-                    metadata.working_dir = self._cwd
+        # *** CHANGE HERE: Use the reliably captured exit code ***
+        exit_code = self._completion_exit_code if self._completion_exit_code is not None else -1  # Default to -1 if something went wrong
 
-            return CmdOutputObservation(
-                content=output.rstrip(),
-                command=command,
-                metadata=metadata,
-            )
+                # Parse PS1 metadata while keeping file-based completion
+        metadata = self._parse_ps1_metadata()
+        metadata.exit_code = exit_code  # Use our reliable file-based exit code
 
-        # Extract metadata from last PS1 match
-        metadata = CmdOutputMetadata.from_ps1_match(ps1_matches[-1])
 
-        # Debug: log the metadata detection and raw PS1 text
-        ps1_text = ps1_matches[-1].group(0)
-        logger.debug(f'Raw PS1 text: {ps1_text[:200]}...')
-        logger.debug(f'Detected metadata: exit_code={getattr(metadata, "exit_code", None)}, working_dir={getattr(metadata, "working_dir", None)}')
+        # Debug: log the captured exit code
+        logger.debug(f'Command completed with captured exit code: {exit_code}')
 
-        # If standard parsing failed, manually extract exit code
-        if not hasattr(metadata, 'exit_code') or metadata.exit_code is None or metadata.exit_code == "":
-            logger.warning('Failed to parse exit code from PS1 metadata, trying manual extraction')
-            import re
-            import json
-
-            try:
-                # Try to parse the JSON within the PS1 match
-                json_start = ps1_text.find('{')
-                json_end = ps1_text.rfind('}') + 1
-                if json_start != -1 and json_end > json_start:
-                    json_str = ps1_text[json_start:json_end]
-                    parsed_json = json.loads(json_str)
-                    if 'exit_code' in parsed_json:
-                        metadata.exit_code = int(parsed_json['exit_code'])
-                        logger.debug(f'Manually extracted exit code from JSON: {metadata.exit_code}')
-                    else:
-                        # Fallback: look for exit_code pattern
-                        match = re.search(r'"exit_code"\s*:\s*"?(\d+)"?', ps1_text)
-                        if match:
-                            metadata.exit_code = int(match.group(1))
-                            logger.debug(f'Manually extracted exit code via regex: {metadata.exit_code}')
-                        else:
-                            metadata.exit_code = 0
-                else:
-                    metadata.exit_code = 0
-            except Exception as e:
-                logger.warning(f'Failed to manually extract exit code: {e}')
-                metadata.exit_code = 0
-
-        # Update working directory if changed
-        if metadata.working_dir != self._cwd and metadata.working_dir:
-            self._cwd = metadata.working_dir
-            logger.debug(f'Working directory updated to: {self._cwd}')
-        elif command.strip().startswith('cd ') and not metadata.working_dir:
-            # Fallback: parse cd command manually if PS1 doesn't have working dir
+        # Handle working directory changes for cd commands
+        if command.strip().startswith('cd '):
+            # Parse cd command manually since we're not using PS1 metadata
             target_dir = command.strip()[3:].strip().strip('"\'')
             if target_dir:
                 if target_dir.startswith('/'):
@@ -1014,17 +1145,10 @@ class EfficientBashSession:
                 else:
                     self._cwd = os.path.join(self._cwd, target_dir)
                 metadata.working_dir = self._cwd
-                logger.debug(f'Working directory manually updated to: {self._cwd}')
+                logger.debug(f'Working directory updated to: {self._cwd}')
 
-        # Extract command output (content between PS1 prompts)
-        if len(ps1_matches) >= 2:
-            # Output between second-to-last and last PS1
-            output_start = ps1_matches[-2].end() + 1
-            output_end = ps1_matches[-1].start()
-            command_output = output[output_start:output_end]
-        else:
-            # Output before the last PS1
-            command_output = output[:ps1_matches[-1].start()]
+        # Output is already cleaned of the completion marker by _is_command_complete
+        # We just need to clean up the command echo and any other artifacts
 
         # Clean the command output (normalize line endings and remove command echo)
         command_output = self._clean_command_output(command_output, command)
@@ -1039,9 +1163,14 @@ class EfficientBashSession:
         # Add completion message
         is_special_key = self._is_special_key(command)
         if is_special_key:
-            metadata.suffix = f'\n[The command completed with exit code {metadata.exit_code}. CTRL+{command[-1].upper()} was sent.]'
+            metadata.suffix = f'\n[The command completed with exit code {exit_code}. CTRL+{command[-1].upper()} was sent.]'
         else:
-            metadata.suffix = f'\n[The command completed with exit code {metadata.exit_code}.]'
+            metadata.suffix = f'\n[The command completed with exit code {exit_code}.]'
+
+        # Reset for next command
+        self._completion_file = None
+        self._completion_exit_code = None
+        self._completion_detected = False
 
         # Clear previous output
         self.prev_output = ''
@@ -1079,7 +1208,7 @@ class EfficientBashSession:
         metadata.suffix = suffix
 
         # Apply the same output processing as completed commands
-        command_output = self._output_buffer
+        command_output = self._extract_clean_output()
 
         # Clean the command output (normalize line endings and remove command echo)
         command_output = self._clean_command_output(command_output, command)
