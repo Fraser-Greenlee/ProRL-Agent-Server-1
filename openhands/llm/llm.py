@@ -162,7 +162,9 @@ class LLM(RetryMixin, DebugMixin):
             else:
                 self.tokenizer = None
         else:
-            logger.info(f'Using token-level generation for {self.config.model}')
+            logger.info(
+                f'Using token-level generation for {self.config.model}. Only Qwen3 is supported for token-level generation.'
+            )
 
             from transformers import AutoTokenizer
 
@@ -172,11 +174,6 @@ class LLM(RetryMixin, DebugMixin):
             self.tokenizer = AutoTokenizer.from_pretrained(self.config.custom_tokenizer)
 
             self.cost_metric_supported = False
-
-            model_name = self.config.model.split('/')[-1]
-            assert 'qwen3' in model_name.lower(), (
-                'Qwen3 is the only supported model for token-level generation'
-            )
 
         # set up the completion function
         kwargs: dict[str, Any] = {
@@ -201,11 +198,8 @@ class LLM(RetryMixin, DebugMixin):
             kwargs['max_tokens'] = self.config.max_output_tokens
             kwargs.pop('max_completion_tokens')
 
-        # Disble thinking if not set and model is Qwen3
-        if (
-            'Qwen3' in self.config.model.split('/')[-1]
-            and self.config.enable_thinking is False
-        ):
+        # Disble thinking if not set for hosted_vllm models
+        if 'hosted_vllm' in self.config.model and self.config.enable_thinking is False:
             kwargs['chat_template_kwargs'] = {'enable_thinking': False}
 
         if self.token_level_generation:

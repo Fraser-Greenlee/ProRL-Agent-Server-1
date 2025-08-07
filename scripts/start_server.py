@@ -62,7 +62,7 @@ def init_server(
     reward_server_ip: list | None = None,
 ):
     logger.info(
-        f'Initializing server with max_init_workers={max_init_workers}, max_run_workers={max_run_workers}, timeout={timeout}'
+        f'Initializing server with max_init_workers={max_init_workers}, max_run_workers={max_run_workers}, max_eval_workers={max_eval_workers}, timeout={timeout}'
     )
     if allow_skip_eval:
         logger.info(
@@ -236,6 +236,8 @@ async def clear_llm_server():
 
 @app.post('/process')
 async def process(request: ProcessRequest):
+    logger.debug(f'Processing instance: {request.instance}')
+    logger.debug(f'Sampling params: {request.sampling_params}')
     global server, thread_pool
     if server is None or thread_pool is None:
         logger.error('Server is not initialized. This should not happen.')
