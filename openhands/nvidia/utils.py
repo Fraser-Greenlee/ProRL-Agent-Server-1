@@ -271,7 +271,7 @@ def process_messages_from_agent_state(
             raw_messages[-1].tool_calls = assistant_msg.tool_calls
     messages = agent.llm.format_messages_for_llm(raw_messages)
 
-    if messages[-1]['role'] != 'assistant':
+    while len(messages) > 0 and messages[-1]['role'] != 'assistant':
         messages = messages[:-1]
 
     from openhands.llm.llm_utils import check_tools
