@@ -88,7 +88,7 @@ def get_config(
         enable_mcp=False,
         condenser=metadata.condenser_config,
         enable_prompt_extensions=False,
-        enable_think=False, # not too sure what this does.
+        enable_think=True, # enable think tool now for instruct models
         enable_history_truncation=False, # turn off history truncation
         ensure_thinking_end_properly=ensure_thinking_end_properly, # set to true only if using text based server for training.
     )
@@ -117,18 +117,21 @@ Environment:
 - You can also install additional libraries using `%pip install <library>` if necessary.
 
 Instructions:
-1. Read and understand the problem statement.
-2. Plan your solution using a combination of reasoning and code. Always try to solve the problem using code.
-3. Use `execute_ipython_cell` to run calculations, manipulate symbols, or perform verification.
-4. Use code to verify your answer.
-5. When you are confident in your answer:
+1. Read and understand the problem statement. Fist use the `think` tool to log down your thoughts and plan for solving the problem.
+2. Plan your solution using a combination of reasoning and code. Always try to solve the problem using code. Also plan about how to verify your solution.
+3. In subsequent steps after planning, use tools to execute your plan. Use `execute_ipython_cell` to run calculations, manipulate symbols, or perform verification.
+4. Use code to verify your answer. If your answer is not correct, iterate your plan with the `think` tool and continue solving the problem until you are confident in your answer is correct.
+5. Finally, when you are confident in your answer:
+    - Only call the `finish` tool if you are confident in your answer and you have verified your answer with the `execute_ipython_cell` tool.
     - Terminate the conversation by calling the `finish` tool.
     - Put your final answer within \\boxed{{}} in the message with the `finish` tool.
     
 
 Important Guidelines:
+- Always first use the `think` tool to log down your thoughts and plan for solving the problem.
 - Always try to use the `execute_ipython_cell` tool to solve the problem, especially for calculations, symbolic reasoning, or simulations.
-- Try to verify your answer with code and the `execute_ipython_cell` tool.
+- Always verify your answer with code and the `execute_ipython_cell` tool.
+- Only use the `finish` tool is you are confident the answer is correct. If you think there is a mistake, iterate your plan with the `think` tool and continue solving the problem.
 - Put your final answer within \\boxed{{}} in the message with the `finish` tool.
 
 Now begin solving the following problem:

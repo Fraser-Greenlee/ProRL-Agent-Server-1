@@ -88,7 +88,7 @@ def get_config(
         enable_mcp=False,
         condenser=metadata.condenser_config,
         enable_prompt_extensions=False,
-        enable_think=False, # not too sure what this does.
+        enable_think=True, # enable think tool now for instruct models
         enable_history_truncation=False, # turn off history truncation
         ensure_thinking_end_properly=ensure_thinking_end_properly, # set to true only if using text based server for training.
     )
@@ -123,34 +123,47 @@ Consider the following problem:
 Your goal is to implement a correct and efficient solution in Python to fully satisfy the requirements in the problem statement. The Python development environment is already set up for you, and all dependencies are pre-installed.
 Follow these steps to develop your solution:
 
-1. IMPLEMENTATION:
+1. PLANNING:
+    - Use the `think` tool to log down your thoughts and plan for solving the problem and verifying the solution.
+    - Your plan does not need to be specific. You can use high level ideas and steps.
+    - Try to keey your plan short, no more than a couple of sentences.
+
+2. IMPLEMENTATION:
    - Implement your chosen solution by editing `/workspace/solution.py`.
    - Use the `str_replace_editor` tool to create the file and add your code to it.
    - Make sure your code is readable, idiomatic, and efficient.
 
-2. VERIFICATION:
-   - Write test scripts to verify your solution. Create a script to run test cases.
-   - Use the `str_replace_editor` tool to create test script.
-   - Use `bash_execute` to run test script and verify your solution.
+3. VERIFICATION:
+   - Write test scripts to verify your solution. Create a script to run test cases. Run tests and verify the solution.
+   - If you need to obtain inputs and outputs with sys.stdin and sys.stdout, or using `input()` and `print()`, you need to redirect input to the script such as:
+        - Create a input test file such as `test_input.txt`. This file should contain the input for the test case.
+        - Run the test script and redirect input to the script such as `python solution.py < test_input.txt`.
+   - If the code does not require system input, you do not need to redirect input to the script.
+        - Instead create a new test python script `/workspace/test_solution.py` to run the test cases.
+        - In the test script you should import the solution module and run the test cases.
+        - You can use `assert` or `print` to verify the output of the test cases.
+        - Run the test script with `python test_solution.py`.
+   - Use `bash_execute` to run test script with the above commands and verify your solution.
+   - Verify the output of the test script is correct by comparing the returned output with the expected output.
+   - If the output is incorrect, you need to adjust your solution and run the test script again.
+   - You do not need to use all the test cases in the problem statement. Try to only use one or two simple test cases for debugging.
 
-3. SUBMISSION:
+4. ITERATION:
+   - If you think a mistake has been made, use the `think` tool to log down your thoughts and iterate on the solution.
+   - Continue working on the problem until the solution passes the verification and you are confident in your answer.
+
+5. SUBMISSION:
+    - Read the content from the `/workspace/solution.py` file.
     - Use the `finish` tool to submit your solution.
     - Include your final solution in the `finish` tool's message, wrapped the code in ```python\nYour code\n```.
 
 Important Guidelines:
-- First create the solution file. You do not neeed to fully solve the problem in a single step.
+- Create a plan first by using the `think` tool.
 - **Do not install any additional packages**. The environment is pre-configured.
 - **Avoid long-running bash commands**. Use a timeout (preferably 10 seconds, max 30).
 - Use `C-c` to interrupt hanging commands and set `is_input` to `true` when needed.
 - Use `str_replace_editor` for editing source files.
 - Avoid rerunning the same command repeatedly. If something fails, adjust or try a different strategy.
-
-When running tests if your solution requires obtaining inputs and outputs with sys.stdin and sys.stdout, or using `input()` and `print()`, you need to redirect input to the script such as:
-- Create a input test file such as `test_input.txt`. This file should contain the input for the test case.
-- Run the test script and redirect input to the script such as `python solution.py < test_input.txt`.
-- Verify the output of the test script is correct by comparing the returned output with the expected output.
-- If the output is incorrect, you need to adjust your solution and run the test script again.
-- You do not need to use all the test cases in the problem statement. Try to only use one or two simple test cases for debugging.
 
 Be thoughtful, deliberate, and efficient. It's okay if the solution takes several steps—prioritize correctness and precision over speed or verbosity.
 """
