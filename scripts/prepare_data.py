@@ -64,8 +64,12 @@ def pre_process_swebench_mm_instance(swebench_mm_instance):
 
 def _normalise(v):
     if isinstance(v, np.ndarray):
-        return v.tolist()
-    return v
+        list_v = v.tolist()
+        if isinstance(list_v, dict):
+            list_v = [list_v]
+        return np.array(list_v, dtype=object)
+    else:
+        raise ValueError(f"Invalid type: {type(v)}")
 
 def _collect_keys(v):
     if isinstance(v, dict):
@@ -85,7 +89,7 @@ def _align_instance(v, all_instance_keys):
 def main() -> None:
 
     parser = argparse.ArgumentParser(description="Prepare data: merge and pre-process parquet files from a directory (SWE-Bench, R2E-Gym, etc.).")
-    parser.add_argument("--data-dir", type=Path, required=True, help="Directory containing parquet files to process.")
+    parser.add_argument("--data-dir", type=Path, default="/lustre/fsw/portfolios/llmservice/users/shaokunz/project/data/recipe/swe_r2e", help="Directory containing parquet files to process.")
 
     args = parser.parse_args()
     data_dir: Path = args.data_dir.resolve()
