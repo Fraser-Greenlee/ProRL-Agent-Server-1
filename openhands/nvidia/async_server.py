@@ -528,17 +528,8 @@ class OpenHandsServer:
             except Exception as e:
                 logger.warning(f'Failed to put stop signal in eval queue: {e}')
         time.sleep(1)
-        # Step 4: Shutdown executor with timeout
-        logger.info('Shutting down thread pool executor...')
-        if hasattr(self, '_executor') and self._executor:
-            try:
-                # Give workers 30 seconds to finish gracefully
-                self._executor.shutdown(wait=True, cancel_futures=True)
-                logger.info('Thread pool executor shutdown completed')
-            except Exception as e:
-                logger.warning(f'Error during executor shutdown: {e}')
 
-        # Step 5: Force cleanup any remaining runtime resources
+        # Step 4: Force cleanup any remaining runtime resources
         logger.info('Cleaning up remaining job resources...')
         with self._job_details_lock:
             remaining_jobs = list(self._job_details.keys())
@@ -551,7 +542,7 @@ class OpenHandsServer:
                 except Exception as e:
                     logger.warning(f'Error cleaning up job {job_id}: {e}')
 
-        # Step 6: Clear all data structures
+        # Step 5: Clear all data structures
         logger.info('Clearing internal data structures...')
         try:
             with self._state_lock:
@@ -569,7 +560,7 @@ class OpenHandsServer:
         except Exception as e:
             logger.warning(f'Error clearing data structures: {e}')
 
-        # Step 7: Clear all queues
+        # Step 6: Clear all queues
         logger.info('Clearing all queues...')
         try:
             clear_queue(self.init_queue)
@@ -578,7 +569,7 @@ class OpenHandsServer:
         except Exception as e:
             logger.warning(f'Error clearing queues: {e}')
 
-        # Step 8: Clean up any remaining singularity jobs
+        # Step 7: Clean up any remaining singularity jobs
         logger.info('Cleaning up singularity processes...')
         try:
             self.clear_singularity_jobs()
@@ -586,6 +577,15 @@ class OpenHandsServer:
             logger.warning(f'Error cleaning up singularity jobs: {e}')
 
         logger.info(f'Server stopped. Final status: {self.status()}')
+
+         # Step 8: Shutdown executor and return immediately
+        logger.info('Shutting down thread pool executor...')
+        if hasattr(self, '_executor') and self._executor:
+            try:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+                logger.info('Thread pool executor shutdown completed')
+            except Exception as e:
+                logger.warning(f'Error during executor shutdown: {e}')
 
     def status(self):
         """Returns the number of jobs currently being processed in both queues and workers."""
