@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 import uuid
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any, Optional, cast
@@ -349,9 +350,10 @@ class OpenHandsServer:
                     # Execute the appropriate function based on job type
                     if job_type == JobType.INIT:
                         # Use timeout-aware coroutine execution
+                        short_sid = hashlib.sha256(job_id.encode('utf-8')).hexdigest()[:16]
                         init_coro = func(
                             job_details=job_details,
-                            sid=job_id,
+                            sid=short_sid,
                             max_iterations=job_details.max_iterations,
                         )
                         runtime, metadata, config = await run_with_timeout_awareness(
@@ -365,9 +367,10 @@ class OpenHandsServer:
 
                     elif job_type == JobType.RUN:
                         # Use timeout-aware coroutine execution
+                        short_sid = hashlib.sha256(job_id.encode('utf-8')).hexdigest()[:16]
                         run_coro = func(
                             job_details=job_details,
-                            sid=job_id,
+                            sid=short_sid,
                         )
                         run_results = await run_with_timeout_awareness(
                             job_details.timer, run_coro
@@ -382,9 +385,10 @@ class OpenHandsServer:
 
                     elif job_type == JobType.EVAL:
                         # Use timeout-aware coroutine execution
+                        short_sid = hashlib.sha256(job_id.encode('utf-8')).hexdigest()[:16]
                         eval_coro = func(
                             job_details,
-                            sid=f'eval_{job_id}',
+                            sid=f'eval_{short_sid}',
                             allow_skip=self.allow_skip_eval,
                             reward=self.reward,
                         )

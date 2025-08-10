@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from typing import Any
 from zipfile import ZipFile
+import hashlib
 
 import httpcore
 import httpx
@@ -97,8 +98,9 @@ class ActionExecutionClient(Runtime):
         )
 
     def _get_uds_socket_path(self, sid: str) -> str:
-        """Get the UDS socket path for the given session ID."""
-        return f'/tmp/runtime/{sid}.sock'
+        """Get the UDS socket path for the given session ID (short-hashed)."""
+        short_sid = hashlib.sha256(sid.encode('utf-8')).hexdigest()[:16]
+        return f'/tmp/runtime/{short_sid}.sock'
 
     @property
     def action_execution_server_url(self) -> str:
