@@ -1,10 +1,10 @@
 import asyncio
+import hashlib
 import heapq
 import queue
 import threading
 import time
 import uuid
-import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any, Optional, cast
@@ -103,11 +103,11 @@ class OpenHandsServer:
             )
 
     def get_unique_id(self, instance, max_retries=10):
-        base = f"{get_instance_id(instance)}_{instance['trajectory_id']}"
+        base = f'{get_instance_id(instance)}_{instance["trajectory_id"]}'
         base_hash = hashlib.sha256(base.encode('utf-8')).hexdigest()[:16]
         for _ in range(max_retries):
             rand = uuid.uuid4().hex[:8]
-            uid = f"{base_hash}_{rand}"
+            uid = f'{base_hash}_{rand}'
             with self._job_details_lock:
                 if uid not in self._job_details:
                     return uid
