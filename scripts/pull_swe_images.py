@@ -70,7 +70,8 @@ def parquet_to_docker_images(parquet_path: Path) -> Iterable[str]:
         return
     try:
         df = pd.read_parquet(parquet_path, columns=["docker_image"])
-        for img in df["docker_image"]:
+        # Iterate in original row order to preserve dataset sequence
+        for img in df["docker_image"].tolist():
             if img:
                 yield str(img)
     except Exception as e:
@@ -225,25 +226,37 @@ def main() -> None:
     if not args.parquet_file.exists():
         sys.exit(f"[ERROR] Parquet file {args.parquet_file} not found")
 
-    images_set: Set[str] = {img for img in parquet_to_docker_images(args.parquet_file) if img}
+    # Collect images while preserving first-appearance order rather than using a set + sort.
+    def _unique_preserve_order(seq: Iterable[str]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in seq:
+            if item and item not in seen:
+                seen.add(item)
+                ordered.append(item)
+        return ordered
 
-    if images_set:
-        print(f"[INFO] Detected {len(images_set)} images via 'docker_image' column")
+    # Try docker_image column first (keeps row order), otherwise fall back to instance_id conversion order.
+    images_col = list(parquet_to_docker_images(args.parquet_file))
+    if images_col:
+        print(f"[INFO] Detected {len(images_col)} images via 'docker_image' column")
+        images = _unique_preserve_order(images_col)
     else:
         multimodal_detect = "multimodal" in str(args.parquet_file).lower()
-        images_set = {
+        images_iter = (
             instance_id_to_image(iid, multimodal=multimodal_detect, prefix=args.prefix)
             for iid in parquet_to_instance_ids(args.parquet_file)
             if iid
-        }
-        print(f"[INFO] Detected {len(images_set)} images via instance_id conversion")
+        )
+        images = _unique_preserve_order(images_iter)
+        print(f"[INFO] Detected {len(images)} images via instance_id conversion")
 
-    images = sorted(images_set)
     total_images = len(images)
     if total_images == 0:
         sys.exit("[ERROR] No images found – aborting.")
 
-    print(f"[INFO] {total_images} images detected")
+    print("--------------------------------")
+    print(f"[INFO] {total_images} images detected (sequence preserved)")
 
     start_idx = max(1, args.start_index)
     end_idx = args.end_index or total_images
@@ -251,7 +264,7 @@ def main() -> None:
         sys.exit(f"[ERROR] start-index ({start_idx}) exceeds number of images ({total_images})")
     end_idx = min(end_idx, total_images)
 
-    print(f"[INFO] Processing {start_idx}-{end_idx}")
+    print(f"[INFO] Processing {start_idx}-{end_idx} (1-based indices)")
     selected_images = images[start_idx - 1 : end_idx]
 
     processed = 0
