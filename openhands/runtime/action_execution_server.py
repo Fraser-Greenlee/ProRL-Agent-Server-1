@@ -19,7 +19,6 @@ import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 from zipfile import ZipFile
-import hashlib
 
 from binaryornot.check import is_binary
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
@@ -1123,12 +1122,11 @@ if __name__ == '__main__':
 
     logger.debug(f'Starting action execution API on port {args.port}')
 
-    # Create UDS socket path using a short-hashed session_id
+    # Create UDS socket path using session_id
     session_id = os.environ.get('OPENHANDS_SESSION_ID', 'default')
-    short_sid = hashlib.sha256(session_id.encode('utf-8')).hexdigest()[:16]
     socket_dir = '/tmp/runtime'
     os.makedirs(socket_dir, exist_ok=True)
-    socket_path = f'{socket_dir}/{short_sid}.sock'
+    socket_path = f'{socket_dir}/{session_id}.sock'
 
     # Remove existing socket file if it exists
     if os.path.exists(socket_path):

@@ -103,9 +103,11 @@ class OpenHandsServer:
             )
 
     def get_unique_id(self, instance, max_retries=10):
+        base = f"{get_instance_id(instance)}_{instance['trajectory_id']}"
+        base_hash = hashlib.sha256(base.encode('utf-8')).hexdigest()[:16]
         for _ in range(max_retries):
-            uid = str(uuid.uuid4())
-            uid = f'{get_instance_id(instance)}_{instance["trajectory_id"]}_{uid}'
+            rand = uuid.uuid4().hex[:8]
+            uid = f"{base_hash}_{rand}"
             with self._job_details_lock:
                 if uid not in self._job_details:
                     return uid
@@ -350,10 +352,9 @@ class OpenHandsServer:
                     # Execute the appropriate function based on job type
                     if job_type == JobType.INIT:
                         # Use timeout-aware coroutine execution
-                        short_sid = hashlib.sha256(job_id.encode('utf-8')).hexdigest()[:16]
                         init_coro = func(
                             job_details=job_details,
-                            sid=short_sid,
+                            sid=job_id,
                             max_iterations=job_details.max_iterations,
                         )
                         runtime, metadata, config = await run_with_timeout_awareness(
@@ -367,10 +368,9 @@ class OpenHandsServer:
 
                     elif job_type == JobType.RUN:
                         # Use timeout-aware coroutine execution
-                        short_sid = hashlib.sha256(job_id.encode('utf-8')).hexdigest()[:16]
                         run_coro = func(
                             job_details=job_details,
-                            sid=short_sid,
+                            sid=job_id,
                         )
                         run_results = await run_with_timeout_awareness(
                             job_details.timer, run_coro
@@ -385,10 +385,9 @@ class OpenHandsServer:
 
                     elif job_type == JobType.EVAL:
                         # Use timeout-aware coroutine execution
-                        short_sid = hashlib.sha256(job_id.encode('utf-8')).hexdigest()[:16]
                         eval_coro = func(
                             job_details,
-                            sid=f'eval_{short_sid}',
+                            sid=f'eval_{job_id}',
                             allow_skip=self.allow_skip_eval,
                             reward=self.reward,
                         )

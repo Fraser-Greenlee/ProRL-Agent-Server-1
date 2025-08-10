@@ -8,7 +8,6 @@ from typing import Callable
 from uuid import UUID
 from pathlib import Path
 import threading
-import hashlib
 
 import httpx
 import tenacity
@@ -498,7 +497,7 @@ class SingularityRuntime(ActionExecutionClient):
             'APP_PORT_2': str(self._app_ports[1]),
             'MCP_HTTP_PORT': str(self._mcp_http_port),
             'PIP_BREAK_SYSTEM_PACKAGES': '1',
-            'OPENHANDS_SESSION_ID': hashlib.sha256(self.sid.encode('utf-8')).hexdigest()[:16],
+            'OPENHANDS_SESSION_ID': self.sid,
             'OMP_NUM_THREADS': '4', # Limit threads at container startup
         }
         if self.config.debug or DEBUG:
