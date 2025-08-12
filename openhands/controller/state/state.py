@@ -220,6 +220,12 @@ class State:
                 return event.tool_call_metadata.model_response.choices[0].message.content
         return None
 
+    def get_last_agent_format_error(self) -> bool:
+        for event in reversed(self.view):
+            if event.source == EventSource.AGENT and event.tool_call_metadata is not None:
+                return getattr(event.tool_call_metadata.model_response.choices[0].message, 'format_error', False)
+        return False
+
     def to_llm_metadata(self, agent_name: str) -> dict:
         return {
             'session_id': self.session_id,

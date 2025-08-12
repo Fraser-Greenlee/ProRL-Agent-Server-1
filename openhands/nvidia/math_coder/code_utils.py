@@ -91,6 +91,7 @@ def get_config(
         enable_think=True, # enable think tool now for instruct models
         enable_history_truncation=False, # turn off history truncation
         ensure_thinking_end_properly=ensure_thinking_end_properly, # set to true only if using text based server for training.
+        action_timeout=30.0, # 30 seconds per action
     )
     config.set_agent_config(agent_config)
     return config

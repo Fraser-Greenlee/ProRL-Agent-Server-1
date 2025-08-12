@@ -42,10 +42,18 @@ class AgentStuckInLoopError(AgentError):
         super().__init__(message)
 
 
+class AgentEndThinkError(AgentError):
+    def __init__(
+        self,
+        message: str = 'Agent did not end reasoning properly.',
+    ) -> None:
+        super().__init__(message)
+
+
 class AgentFormatError(AgentError):
     def __init__(
         self,
-        message: str = 'Agent did not return a valid format. For example reasoning did not end properly.',
+        message: str = 'LLM did not format the response properly. No <eos> token found or <tool_call> tags are not balanced.',
     ) -> None:
         super().__init__(message)
 

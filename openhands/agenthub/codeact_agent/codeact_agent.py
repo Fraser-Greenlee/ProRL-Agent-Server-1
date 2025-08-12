@@ -37,7 +37,7 @@ from openhands.runtime.plugins import (
     PluginRequirement,
 )
 from openhands.utils.prompt import PromptManager
-from openhands.core.exceptions import AgentFormatError
+from openhands.core.exceptions import AgentFormatError, AgentEndThinkError
 
 
 class CodeActAgent(Agent):
@@ -165,12 +165,15 @@ class CodeActAgent(Agent):
         if latest_user_message and latest_user_message.content.strip() == '/exit':
             return AgentFinishAction()
 
+        if state.get_last_agent_format_error():
+            raise AgentFormatError("LLM did not format the response properly")
+
         # check if last thought is properly ended
         # reuse stuck in loop error to exit agent loop
         if self.config.ensure_thinking_end_properly:
             latest_agent_thought = state.get_last_agent_thought()
             if latest_agent_thought and '<think>' in latest_agent_thought and '</think>' not in latest_agent_thought:
-                raise AgentFormatError("LLM does not end properly reasoning properly")
+                raise AgentEndThinkError("LLM does not end properly reasoning properly")
 
         # Condense the events from the state. If we get a view we'll pass those
         # to the conversation manager for processing, but if we get a condensation
@@ -276,4 +279,5 @@ class CodeActAgent(Agent):
         return codeact_function_calling.response_to_actions(
             response,
             mcp_tool_names=list(self.mcp_tools.keys()),
+            timeout=self.config.action_timeout,
         )
