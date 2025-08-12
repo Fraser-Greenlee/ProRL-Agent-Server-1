@@ -159,20 +159,34 @@ class TestOpenHandsServer(unittest.TestCase):
         uid1 = self.server.get_unique_id(self.mock_instance)
         uid2 = self.server.get_unique_id(self.mock_instance)
         self.assertNotEqual(uid1, uid2)
-        self.assertIn('test_instance', uid1)
-        self.assertIn('test_trajectory', uid1)
+        # The ID format is now hash-based, so we check for the pattern instead
+        # Format: {base_hash}_{random_hex}
+        self.assertRegex(uid1, r'^[a-f0-9]{16}_[a-f0-9]{8}$')
+        self.assertRegex(uid2, r'^[a-f0-9]{16}_[a-f0-9]{8}$')
 
     def test_get_unique_id_max_retries(self):
         """Test unique ID generation with max retries."""
+        # First, get the actual base hash for the mock instance to create realistic fake IDs
+        import hashlib
+
+        from openhands.nvidia.utils import get_instance_id
+
+        base = f'{get_instance_id(self.mock_instance)}_{self.mock_instance["trajectory_id"]}'
+        base_hash = hashlib.sha256(base.encode('utf-8')).hexdigest()[:16]
+
         # Fill up job details to force retries - create IDs that match the pattern
         for i in range(15):
-            fake_id = f'test_instance_test_trajectory_{i}'
+            fake_id = f'{base_hash}_{i:08x}'  # Use hex format to match uuid pattern
             self.server._job_details[fake_id] = JobDetails()
 
-        # Mock uuid.uuid4 to return predictable values that will conflict
+        # Mock uuid.uuid4 to return predictable UUID objects that will conflict
+        class MockUUID:
+            def __init__(self, value):
+                self.hex = f'{value:08x}'
+
         with patch(
             'openhands.nvidia.async_server.uuid.uuid4',
-            side_effect=[str(i) for i in range(15)],
+            side_effect=[MockUUID(i) for i in range(15)],
         ):
             with self.assertRaises(ValueError) as context:
                 self.server.get_unique_id(self.mock_instance)
