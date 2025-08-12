@@ -590,4 +590,21 @@ def final_result(job_details: JobDetails):
         )
         result['trajectory_id'] = trajectory_id
 
+    # Determine if to filter the trajectory
+    # Should filter if:
+    # 1. Environment error (critical_error is not None)
+    # 2. Length exceeded (normally AgentFormatError)
+    def determine_filter(result: dict) -> bool:
+        if 'critical_error' in result and result['critical_error'] is not None:
+            return True
+        if 'success' in result and result['success']:
+            return False
+        # Waive AgentToolCallError they should be trained
+        if 'error' in result:
+            for normal_error in ['AgentToolCallError']:
+                if normal_error in result['error']:
+                    return False
+        return True
+
+    result['filter'] = determine_filter(result)
     return result

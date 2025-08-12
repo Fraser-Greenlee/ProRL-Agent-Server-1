@@ -1,6 +1,7 @@
 from openhands.controller.state.state import State
 from openhands.core.logger import openhands_logger as logger
 from openhands.events.action.action import Action
+from openhands.events.action.agent import AgentThinkAction
 from openhands.events.action.commands import IPythonRunCellAction
 from openhands.events.action.empty import NullAction
 from openhands.events.action.message import MessageAction
@@ -458,6 +459,9 @@ class StrictStuckDetector(StuckDetector):
             if len(last_actions) == 2 and len(last_observations) == 2:
                 break
 
+        if self._is_stuck_useless_action(last_actions):
+            return True
+
         # scenario 1: same action, same observation
         if self._is_stuck_repeating_action_observation(last_actions, last_observations):
             return True
@@ -471,11 +475,24 @@ class StrictStuckDetector(StuckDetector):
             return True
 
         # scenario 4: action, observation pattern on the last four steps
-        if len(filtered_history) >= 4:
+        if len(filtered_history) >= 6:
             if self._is_stuck_action_observation_pattern(filtered_history):
                 return True
 
         return False
+
+    def _is_stuck_useless_action(self, last_actions: list[Event]) -> bool:
+        # scenario 5: useless action
+        # check if the last action is a useless action
+        for action in last_actions:
+            if isinstance(action, MessageAction) or isinstance(
+                action, AgentThinkAction
+            ):
+                continue
+            else:
+                logger.warning('Repeated useless action detected')
+                return False
+        return True
 
     def _is_stuck_repeating_action_observation(
         self, last_actions: list[Event], last_observations: list[Event]
@@ -633,6 +650,18 @@ class StrictStuckDetector(StuckDetector):
                 (last_agent_message_actions[0][1] == action[1])
                 for action in last_agent_message_actions
             ):
-                logger.warning('Repeated MessageAction with source=AGENT detected')
-                return True
+                # check if there are any observations between the repeated MessageActions
+                # then it's not yet a loop, maybe it can recover
+                start_index = last_agent_message_actions[0][0]
+                end_index = last_agent_message_actions[-1][0]
+
+                has_observation_between = False
+                for event in filtered_history[start_index + 1 : end_index]:
+                    if isinstance(event, Observation):
+                        has_observation_between = True
+                        break
+
+                if not has_observation_between:
+                    logger.warning('Repeated MessageAction with source=AGENT detected')
+                    return True
         return False

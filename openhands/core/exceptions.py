@@ -53,7 +53,23 @@ class AgentEndThinkError(AgentError):
 class AgentFormatError(AgentError):
     def __init__(
         self,
-        message: str = 'LLM did not format the response properly. No <eos> token found or <tool_call> tags are not balanced.',
+        message: str = 'LLM did not format the response properly.',
+    ) -> None:
+        super().__init__(message)
+
+
+class AgentToolCallError(AgentError):
+    def __init__(
+        self,
+        message: str = 'LLM did not format the tool call properly.',
+    ) -> None:
+        super().__init__(message)
+
+
+class AgentLengthError(AgentError):
+    def __init__(
+        self,
+        message: str = 'LLM did not format the response properly. No <eos> token found.',
     ) -> None:
         super().__init__(message)
 

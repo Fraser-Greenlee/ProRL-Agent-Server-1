@@ -37,7 +37,12 @@ from openhands.runtime.plugins import (
     PluginRequirement,
 )
 from openhands.utils.prompt import PromptManager
-from openhands.core.exceptions import AgentFormatError, AgentEndThinkError
+from openhands.core.exceptions import (
+    AgentFormatError,
+    AgentEndThinkError,
+    AgentToolCallError,
+    AgentLengthError,
+)
 
 
 class CodeActAgent(Agent):
@@ -165,8 +170,14 @@ class CodeActAgent(Agent):
         if latest_user_message and latest_user_message.content.strip() == '/exit':
             return AgentFinishAction()
 
-        if state.get_last_agent_format_error():
-            raise AgentFormatError("LLM did not format the response properly")
+        format_error = state.get_last_agent_format_error()
+        if format_error and isinstance(format_error, str):
+            if format_error == 'length':
+                raise AgentLengthError("LLM did not format the response properly")
+            elif format_error == 'tool_call':
+                raise AgentToolCallError("LLM did not format the tool call properly")
+            elif format_error != '':
+                logger.error(f"Unknown format error: {format_error}, continue")
 
         # check if last thought is properly ended
         # reuse stuck in loop error to exit agent loop

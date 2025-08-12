@@ -151,17 +151,21 @@ def parse_response_ids(
     response_ids: list[int],
     tokenizer: AutoTokenizer
 ) -> dict[str, Any]:
-    format_error = tokenizer.eos_token_id not in response_ids
+    if tokenizer.eos_token_id not in response_ids:
+        format_error_type = 'length'
+    else:
+        format_error_type = None
     text = tokenizer.decode(response_ids, skip_special_tokens=True)
     split_idx = text.find("<tool_call>")
     # No tool calls
     if split_idx == -1:
-        return {'content': text, 'tool_calls': [], 'format_error': format_error}
+        return {'content': text, 'tool_calls': [], 'format_error_type': format_error_type}
     
     content = text[:split_idx]
     tool_text = text[split_idx:]
 
-    format_error |=  tool_text.count("<tool_call>") != tool_text.count("</tool_call>")
+    if tool_text.count("<tool_call>") != tool_text.count("</tool_call>"):
+        format_error_type = 'tool_call'
 
     try:
         tool_call_strings = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", tool_text, re.DOTALL)
@@ -169,7 +173,7 @@ def parse_response_ids(
     except Exception as e:
         # TODO: probably want to raise an exception here.
         tool_calls = []
-        format_error = True
+        format_error_type = 'tool_call'
     
     format_tool_calls = []
     for tool_call in tool_calls:
@@ -180,7 +184,7 @@ def parse_response_ids(
                 'function': tool_call,
             }
         )
-    return {'content': content, 'tool_calls': format_tool_calls, 'format_error': format_error}
+    return {'content': content, 'tool_calls': format_tool_calls, 'format_error_type': format_error_type}
 
 def request_response_tokens(
     tokenizer: AutoTokenizer,
