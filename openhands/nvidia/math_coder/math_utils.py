@@ -38,6 +38,7 @@ def get_config(
     instance: dict,
     metadata: EvalMetadata,
     ensure_thinking_end_properly: bool = False,
+    strict_loop_detector: bool = False,
 ) -> OpenHandsConfig:
     # Docker image from xingyaoww/od-eval-logic-reasoning:v1.0
     base_container_image = 'xingyaoww_od-eval-logic-reasoning'
@@ -92,6 +93,7 @@ def get_config(
         enable_history_truncation=False, # turn off history truncation
         ensure_thinking_end_properly=ensure_thinking_end_properly, # set to true only if using text based server for training.
         action_timeout=30.0, # 30 seconds per action
+        strict_loop_detector=strict_loop_detector, # set to true only if training
     )
     config.set_agent_config(agent_config)
     return config
@@ -150,6 +152,7 @@ async def initialize_agents(
         data_split:str = "train",
         max_iterations:int = 1,
         ensure_thinking_end_properly: bool = False,
+        strict_loop_detector: bool = False,
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
 
     if llm_config is None:
@@ -170,7 +173,7 @@ async def initialize_agents(
     )
 
 
-    config = get_config(instance, metadata, ensure_thinking_end_properly)
+    config = get_config(instance, metadata, ensure_thinking_end_properly, strict_loop_detector)
     runtime = create_runtime(config, sid=sid)
 
     await runtime.connect()

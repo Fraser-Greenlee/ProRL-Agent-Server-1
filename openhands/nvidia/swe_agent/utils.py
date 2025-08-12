@@ -104,6 +104,7 @@ def get_config(
     instance: dict,
     metadata: EvalMetadata,
     ensure_thinking_end_properly: bool = False,
+    strict_loop_detector: bool = False,
 ) -> OpenHandsConfig:
     data_kind = infer_instance_type(instance)
     base_container_image = get_instance_docker_image(instance, data_kind)
@@ -163,6 +164,7 @@ def get_config(
         enable_think=False, # not too sure what this does.
         enable_history_truncation=False, # turn off history truncation
         ensure_thinking_end_properly=ensure_thinking_end_properly, # set to true only if using text based server for training.
+        strict_loop_detector=strict_loop_detector, # set to true only if training
     )
     config.set_agent_config(agent_config)
     return config
@@ -177,6 +179,7 @@ async def initialize_agents(
         data_split:str = "train",
         max_iterations:int = 1,
         ensure_thinking_end_properly: bool = False,
+        strict_loop_detector: bool = False,
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
     # Fall back to a sensible default if the caller does not provide an
     # explicit ``llm_config`` (mirrors the behaviour of the old
@@ -202,7 +205,7 @@ async def initialize_agents(
     )
 
 
-    config = get_config(instance, metadata, ensure_thinking_end_properly)
+    config = get_config(instance, metadata, ensure_thinking_end_properly, strict_loop_detector)
 
     metadata.details['runtime_failure_count'] = 0  # type: ignore[index]
     metadata.details['remote_runtime_resource_factor'] = (  # type: ignore[index]

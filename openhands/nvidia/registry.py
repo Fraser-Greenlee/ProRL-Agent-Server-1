@@ -34,6 +34,7 @@ class JobDetails:
     ensure_thinking_end_properly: bool = (
         False  # set only to true if using text based server for training.
     )
+    strict_loop_detector: bool = False
     # Task reference for cancellation support
     current_task: Optional[asyncio.Task] = None
 

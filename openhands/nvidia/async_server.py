@@ -264,6 +264,10 @@ class OpenHandsServer:
             job_details.ensure_thinking_end_properly = sampling_params.pop(
                 'ensure_thinking_end_properly'
             )
+        if 'strict_loop_detector' in sampling_params:
+            job_details.strict_loop_detector = sampling_params.pop(
+                'strict_loop_detector'
+            )
         llm_config = self.create_llm_config(sampling_params)
         job_details.llm_config = llm_config
         job_details.event = threading.Event()

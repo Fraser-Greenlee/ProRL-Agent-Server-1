@@ -49,6 +49,7 @@ class SweAgentHandler(AgentHandler):
             sid=sid,
             max_iterations=max_iterations,
             ensure_thinking_end_properly=job_details.ensure_thinking_end_properly,
+            strict_loop_detector=job_details.strict_loop_detector,
         )
 
     async def run(

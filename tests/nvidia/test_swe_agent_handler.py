@@ -57,6 +57,7 @@ class TestSweAgentHandler:
             sid='test_sid',
             max_iterations=5,
             ensure_thinking_end_properly=False,
+            strict_loop_detector=False,
         )
 
     @pytest.mark.asyncio
@@ -87,6 +88,7 @@ class TestSweAgentHandler:
             sid=None,
             max_iterations=1,
             ensure_thinking_end_properly=False,
+            strict_loop_detector=False,
         )
 
     @pytest.mark.asyncio
@@ -420,6 +422,7 @@ class TestSweAgentHandlerIntegration:
             sid='real_test_sid',
             max_iterations=10,
             ensure_thinking_end_properly=False,
+            strict_loop_detector=False,
         )
 
     @pytest.mark.real_data
