@@ -14,6 +14,7 @@ from openhands.nvidia.utils import (
     LLMServerRequest,
     NoLLMServerError,
     ProcessRequest,
+    CancelRequest,
     ServerNotRunningError,
     process_with_timeout,
 )
@@ -198,6 +199,33 @@ async def get_status():
         )
 
 
+@app.post('/cancel')
+async def cancel(request: CancelRequest):
+    """Cancel a specific job by job_id."""
+    global server
+    if server is None:
+        logger.error('Server is not initialized. This should not happen.')
+        raise HTTPException(
+            status_code=500, detail='Server is not initialized. This should not happen.'
+        )
+    if not server._server_running:
+        logger.warning('Server is not running. Cannot cancel job.')
+        raise ServerNotRunningError()
+
+    try:
+        success = server.cancel_job(request.job_id)
+        if success:
+            return {'status': f'Job {request.job_id} canceled successfully'}
+        else:
+            raise HTTPException(
+                status_code=404, detail=f'Job {request.job_id} not found'
+            )
+    except Exception as e:
+        logger.error(f'Failed to cancel job {request.job_id}: {str(e)}')
+        raise HTTPException(
+            status_code=500, detail=f'Failed to cancel job {request.job_id}: {str(e)}'
+        )
+
 @app.post('/add_llm_server')
 async def add_llm_server(request: LLMServerRequest):
     global server
@@ -259,9 +287,12 @@ async def process(request: ProcessRequest):
         logger.error(f'Invalid instance data: {str(e)}')
         raise HTTPException(status_code=400, detail=f'Invalid instance data: {str(e)}')
 
-    result = await process_with_timeout(
-        server, instance, request.sampling_params, global_timeout, thread_pool
-    )
+    try:
+        result = await process_with_timeout(
+            server, instance, request.sampling_params, global_timeout, thread_pool, job_id=request.job_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f'Failed to process job: {str(e)}')
     return result
 
 

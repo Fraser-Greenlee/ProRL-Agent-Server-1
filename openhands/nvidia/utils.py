@@ -129,6 +129,11 @@ class JobTimeoutError(Exception):
 class ProcessRequest(BaseModel):
     instance: dict[str, Any]
     sampling_params: dict[str, Any]
+    job_id: str | None = None
+
+
+class CancelRequest(BaseModel):
+    job_id: str
 
 
 class LLMServerRequest(BaseModel):
@@ -355,7 +360,7 @@ def process_messages_from_agent_state(
     return {
         'messages': new_messages,
         'tools': tools,
-        'end_properly': True,
+        'end_properly': not state.get_last_agent_format_error(),
     }
 
 

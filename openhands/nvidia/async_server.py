@@ -78,6 +78,7 @@ class OpenHandsServer:
         self._active_init_jobs: set[str] = set()  # Track jobs being initialized
         self._active_run_jobs: set[str] = set()  # Track jobs being run
         self._active_eval_jobs: set[str] = set()  # Track jobs being evaluated
+        self._discarded_jobs: set[str] = set()  # Track jobs that have been discarded
         self._exclude_pids: set[str] = set()
 
         self._server_running: bool = False
@@ -202,6 +203,36 @@ class OpenHandsServer:
             self._executor.submit(self._run_worker_in_thread, i, JobType.EVAL)
 
         self.clear_singularity_jobs()
+
+    def cancel_job(self, job_id: str):
+        if not self._server_running:
+            raise RuntimeError('Server is not running')
+
+        if job_id not in self._job_details:
+            raise ValueError(f'Job {job_id} not found')
+
+        with self._job_details_lock:
+            job = self._job_details.get(job_id)
+            if job is not None:
+                # Mark as timed out and signal completion
+                job.timeout_error = True
+                if job.event is not None:
+                    job.event.set()
+                # Clean up runtime if it exists
+                if job.runtime:
+                    self._cleanup_job_runtime(job.runtime, job_id)
+                    job.runtime = None
+            del self._job_details[job_id]
+
+        with self._state_lock:
+            self._active_eval_jobs.discard(job_id)
+            self._active_run_jobs.discard(job_id)
+            self._active_init_jobs.discard(job_id)
+            # If job_id is in init/run/eval queue, mark it as discarded
+            self._discarded_jobs.add(job_id)
+
+        logger.info(f'Job {job_id} canceled')
+        return True
 
     def process(self, instance, sampling_params, job_id=None, timeout: float = 300.0):
         if not self._server_running:
@@ -331,6 +362,14 @@ class OpenHandsServer:
 
             # Thread-safe active jobs tracking
             with self._state_lock:
+                if job_id in self._discarded_jobs:
+                    logger.warning(
+                        f'[{worker_name}-{wid}] Job {job_id} discarded, skipping'
+                    )
+                    queue_obj.task_done()
+                    self._discarded_jobs.discard(job_id)
+                    continue
+
                 active_jobs_set.add(job_id)
 
             if job_details.instance is None:
@@ -552,6 +591,7 @@ class OpenHandsServer:
                 self._active_init_jobs.clear()
                 self._active_run_jobs.clear()
                 self._active_eval_jobs.clear()
+                self._discarded_jobs.clear()
 
             with self._job_details_lock:
                 self._job_details.clear()
@@ -581,7 +621,7 @@ class OpenHandsServer:
 
         logger.info(f'Server stopped. Final status: {self.status()}')
 
-         # Step 8: Shutdown executor and return immediately
+        # Step 8: Shutdown executor and return immediately
         logger.info('Shutting down thread pool executor...')
         if hasattr(self, '_executor') and self._executor:
             try:
