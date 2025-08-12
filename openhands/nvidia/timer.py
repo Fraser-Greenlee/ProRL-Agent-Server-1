@@ -174,7 +174,7 @@ async def timeout_aware_phase_context(timer: PausableTimer, phase: str):
     return TimeoutAwareContext(timer, phase)
 
 
-async def run_with_timeout_awareness(timer: PausableTimer, coro):
+async def run_with_timeout_awareness(timer: PausableTimer, coro, job_details=None):
     """Run a coroutine with timeout awareness using efficient asyncio.wait_for approach."""
     # Get initial remaining timeout
     remaining_timeout = timer.get_remaining_timeout()
@@ -191,10 +191,26 @@ async def run_with_timeout_awareness(timer: PausableTimer, coro):
         timer.trigger_timeout()
         raise TimeoutError('Operation timed out')
     else:
-        # Use asyncio.wait_for with calculated remaining time
+        # Create a task from the coroutine to enable cancellation
+        task = asyncio.create_task(coro)
+
+        # Store task reference in job_details for external cancellation
+        if job_details is not None:
+            job_details.current_task = task
+
         try:
-            return await asyncio.wait_for(coro, timeout=remaining_timeout)
+            # Use asyncio.wait_for with the task
+            return await asyncio.wait_for(task, timeout=remaining_timeout)
         except asyncio.TimeoutError:
-            # Timeout occurred, trigger our timeout handling
+            # Timeout occurred, cancel the task and trigger our timeout handling
+            task.cancel()
             timer.trigger_timeout()
             raise TimeoutError('Operation timed out')
+        except asyncio.CancelledError:
+            # Task was cancelled externally
+            timer.trigger_timeout()
+            raise TimeoutError('Operation cancelled')
+        finally:
+            # Clear task reference
+            if job_details is not None:
+                job_details.current_task = None

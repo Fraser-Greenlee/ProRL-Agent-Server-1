@@ -222,6 +222,10 @@ class OpenHandsServer:
                 if job.runtime:
                     self._cleanup_job_runtime(job.runtime, job_id)
                     job.runtime = None
+                # Cancel the current asyncio task if it exists
+                if job.current_task is not None and not job.current_task.done():
+                    job.current_task.cancel()
+                    logger.info(f'Cancelled running task for job {job_id}')
             del self._job_details[job_id]
 
         with self._state_lock:
@@ -397,7 +401,7 @@ class OpenHandsServer:
                             max_iterations=job_details.max_iterations,
                         )
                         runtime, metadata, config = await run_with_timeout_awareness(
-                            job_details.timer, init_coro
+                            job_details.timer, init_coro, job_details
                         )
                         job_details.runtime = runtime
                         job_details.metadata = metadata
@@ -412,7 +416,7 @@ class OpenHandsServer:
                             sid=job_id,
                         )
                         run_results = await run_with_timeout_awareness(
-                            job_details.timer, run_coro
+                            job_details.timer, run_coro, job_details
                         )
                         job_details.run_results = run_results
                         # Close runtime (automatically in "others" phase - doesn't count toward timeout)
@@ -431,7 +435,7 @@ class OpenHandsServer:
                             reward=self.reward,
                         )
                         eval_report = await run_with_timeout_awareness(
-                            job_details.timer, eval_coro
+                            job_details.timer, eval_coro, job_details
                         )
                         # Only keep the 'report' field if present
                         if isinstance(eval_report, dict) and 'report' in eval_report:

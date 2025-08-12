@@ -1,3 +1,4 @@
+import asyncio
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -33,6 +34,8 @@ class JobDetails:
     ensure_thinking_end_properly: bool = (
         False  # set only to true if using text based server for training.
     )
+    # Task reference for cancellation support
+    current_task: Optional[asyncio.Task] = None
 
 
 class AgentHandler(ABC):
