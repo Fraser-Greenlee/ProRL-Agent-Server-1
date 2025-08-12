@@ -18,11 +18,8 @@ import re
 import signal
 import termios
 import time
-import traceback
 import tty
-import uuid
-from enum import Enum
-from typing import Any, Optional
+from typing import Optional
 
 try:
     import ptyprocess
@@ -39,7 +36,6 @@ from openhands.events.observation.commands import (
 )
 from openhands.runtime.utils.bash import (
     BashCommandStatus,
-    escape_bash_special_chars,
     split_bash_commands,
 )
 from openhands.utils.shutdown_listener import should_continue
@@ -108,9 +104,12 @@ class EfficientBashSession:
         self._completion_exit_code: Optional[int] = None
         self._completion_detected: bool = False
 
+    def _debug(self, msg):
+        pass
+
     def initialize(self) -> None:
         """Initialize the bash session with PTY."""
-        logger.debug('Initializing EfficientBashSession with PTY')
+        self._debug('Initializing EfficientBashSession with PTY')
 
         # Build shell command - use su like BashSession for consistency
         if self.username in ['root', 'openhands']:
@@ -128,7 +127,7 @@ class EfficientBashSession:
         env['SHELL'] = '/bin/bash'
         if self.max_memory_mb:
             # Note: Memory limiting would be handled by container/systemd in production
-            logger.debug(f'Memory limit requested: {self.max_memory_mb}MB (not enforced in PTY mode)')
+            self._debug(f'Memory limit requested: {self.max_memory_mb}MB (not enforced in PTY mode)')
 
         try:
             # Create PTY process
@@ -138,7 +137,7 @@ class EfficientBashSession:
                 env=env,
                 dimensions=(24, 80)  # Standard terminal size
             )
-            logger.debug(f'PTY process started with PID: {self._pty_process.pid}')
+            self._debug(f'PTY process started with PID: {self._pty_process.pid}')
 
             # Start output reader in background
             self._output_reader_task = asyncio.create_task(self._read_output_continuously())
@@ -147,7 +146,7 @@ class EfficientBashSession:
             self._setup_bash_environment()
 
             self._initialized = True
-            logger.debug(f'EfficientBashSession initialized in: {self.work_dir}')
+            self._debug(f'EfficientBashSession initialized in: {self.work_dir}')
 
         except Exception as e:
             logger.error(f'Failed to initialize EfficientBashSession: {e}')
@@ -158,7 +157,7 @@ class EfficientBashSession:
         if not self._pty_process:
             return
 
-        logger.debug('Setting up bash environment')
+        self._debug('Setting up bash environment')
 
         # Wait for shell to be ready
         time.sleep(0.2)
@@ -173,7 +172,7 @@ class EfficientBashSession:
         ]
 
         for cmd in setup_commands:
-            logger.debug(f'Sending setup command: {cmd}')
+            self._debug(f'Sending setup command: {cmd}')
             self._pty_process.write(f"{cmd}\n".encode())
             time.sleep(0.05)  # Small delay between commands
 
@@ -182,7 +181,7 @@ class EfficientBashSession:
 
         # Clear initial output
         self._clear_output_buffer()
-        logger.debug('Bash environment setup completed')
+        self._debug('Bash environment setup completed')
 
     def _clear_output_buffer(self) -> None:
         """Clear the output buffer."""
@@ -195,7 +194,7 @@ class EfficientBashSession:
                     try:
                         # Read with small buffer to avoid blocking
                         data = self._pty_process.read(size=1024)
-                        logger.debug(f'Cleared buffer data: {data[:100]}...')
+                        self._debug(f'Cleared buffer data: {data[:100]}...')
                     except (OSError, EOFError):
                         pass
             except ImportError:
@@ -208,7 +207,7 @@ class EfficientBashSession:
         if not self._pty_process:
             return
 
-        logger.debug('Starting continuous output reader')
+        self._debug('Starting continuous output reader')
 
         try:
             import select
@@ -232,14 +231,14 @@ class EfficientBashSession:
                                 self._output_buffer += cleaned_output
                                 self._output_ready.set()
 
-                                logger.debug(f'Read output: {cleaned_output[:100]}...')
+                                self._debug(f'Read output: {cleaned_output[:100]}...')
 
                                 # Check for command completion
                                 if self._is_command_complete():
                                     self._command_complete.set()
 
                         except (OSError, EOFError) as e:
-                            logger.debug(f'PTY read error (process may have died): {e}')
+                            self._debug(f'PTY read error (process may have died): {e}')
                             break
 
                     else:
@@ -247,13 +246,13 @@ class EfficientBashSession:
                         await asyncio.sleep(0.01)
 
                 except Exception as e:
-                    logger.debug(f'Output read error: {e}')
+                    self._debug(f'Output read error: {e}')
                     await asyncio.sleep(0.01)
 
         except Exception as e:
             logger.error(f'Output reader crashed: {e}')
         finally:
-            logger.debug('Output reader stopped')
+            self._debug('Output reader stopped')
 
     def _is_command_complete(self) -> bool:
         """
@@ -275,7 +274,7 @@ class EfficientBashSession:
                     if content:
                         self._completion_exit_code = int(content)
                         self._completion_detected = True
-                        logger.debug(f'Completion detected via file! Exit code: {self._completion_exit_code}')
+                        self._debug(f'Completion detected via file! Exit code: {self._completion_exit_code}')
 
                         # Clean up the completion file
                         try:
@@ -285,7 +284,7 @@ class EfficientBashSession:
 
                         return True
         except (OSError, ValueError) as e:
-            logger.debug(f'Error checking completion file: {e}')
+            self._debug(f'Error checking completion file: {e}')
 
         return False
 
@@ -387,7 +386,7 @@ class EfficientBashSession:
             "    (exit $_exit_code)\n"
             "}"
         )
-        logger.debug(f'Executing with stty wrapper (no echo): {self._completion_file}')
+        self._debug(f'Executing with stty wrapper (no echo): {self._completion_file}')
         return wrapped_command
 
     def close(self) -> None:
@@ -395,7 +394,7 @@ class EfficientBashSession:
         if self._closed:
             return
 
-        logger.debug('Closing EfficientBashSession')
+        self._debug('Closing EfficientBashSession')
         self._closed = True
 
         # Cancel background tasks
@@ -424,7 +423,7 @@ class EfficientBashSession:
                     self._pty_process.kill(signal.SIGTERM)
 
             except Exception as e:
-                logger.debug(f'Error during process cleanup: {e}')
+                self._debug(f'Error during process cleanup: {e}')
 
     def __del__(self) -> None:
         """Ensure cleanup on destruction."""
@@ -562,7 +561,7 @@ class EfficientBashSession:
         command = action.command.strip()
         is_input = action.is_input
 
-        logger.debug(f'Executing command: {command!r} (is_input: {is_input})')
+        self._debug(f'Executing command: {command!r} (is_input: {is_input})')
 
         # Handle empty command (get current output)
         if command == '':
@@ -718,7 +717,7 @@ class EfficientBashSession:
 
                         if ps1_matches:
                             # Command completed after input - return final result
-                            logger.debug(f'Interactive command completed after input: {input_text}, PS1 matches: {len(ps1_matches)}, current_command: {self._current_command}')
+                            self._debug(f'Interactive command completed after input: {input_text}, PS1 matches: {len(ps1_matches)}, current_command: {self._current_command}')
                             # For interactive commands that complete via PS1, clear the completion file
                             # so output extraction doesn't use wrapper-based logic
                             self._completion_file = None
@@ -1133,7 +1132,7 @@ class EfficientBashSession:
 
 
         # Debug: log the captured exit code
-        logger.debug(f'Command completed with captured exit code: {exit_code}')
+        self._debug(f'Command completed with captured exit code: {exit_code}')
 
         # Handle working directory changes for cd commands
         if command.strip().startswith('cd '):
@@ -1145,7 +1144,7 @@ class EfficientBashSession:
                 else:
                     self._cwd = os.path.join(self._cwd, target_dir)
                 metadata.working_dir = self._cwd
-                logger.debug(f'Working directory updated to: {self._cwd}')
+                self._debug(f'Working directory updated to: {self._cwd}')
 
         # Output is already cleaned of the completion marker by _is_command_complete
         # We just need to clean up the command echo and any other artifacts
