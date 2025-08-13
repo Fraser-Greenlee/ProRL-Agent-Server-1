@@ -42,14 +42,14 @@ async def run(instance):
         job_id='test_job',
         instance=instance,
         llm_config=llm_config,
-        max_iterations=max_iterations,
     )
+    job_details.agent_config['max_iterations'] = max_iterations
     job_details.timer = PausableTimer(timeout=500)
     job_details.timer.start()
 
     # run agent
     runtime, metadata, config = await initialize_agents(
-        instance, llm_config=llm_config, max_iterations=max_iterations
+        instance, llm_config=llm_config, agent_config=job_details.agent_config
     )
     job_details.runtime = runtime
     job_details.metadata = metadata

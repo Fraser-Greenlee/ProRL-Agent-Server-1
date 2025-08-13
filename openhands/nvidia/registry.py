@@ -1,7 +1,7 @@
 import asyncio
 import threading
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from evaluation.utils.shared import EvalMetadata  # type: ignore
@@ -13,12 +13,18 @@ from openhands.nvidia.reward import Reward
 from openhands.nvidia.timer import PausableTimer
 from openhands.runtime.base import Runtime
 
+_DEFAULT_AGENT_CONFIG = {
+    'max_iterations': 2,
+    'ensure_thinking_end_properly': False,
+    'strict_loop_detector': False,
+}
+
 
 @dataclass
 class JobDetails:
     job_id: str | None = None
     instance: dict | None = None
-    max_iterations: int = 2
+    agent_config: dict = field(default_factory=lambda: _DEFAULT_AGENT_CONFIG.copy())
     llm_config: LLMConfig | None = None
     runtime: Runtime | None = None
     metadata: EvalMetadata | None = None
@@ -31,10 +37,6 @@ class JobDetails:
     event: threading.Event | None = None
     timeout_error: bool = False
     timer: Optional['PausableTimer'] = None  # Import handled in async_server.py
-    ensure_thinking_end_properly: bool = (
-        False  # set only to true if using text based server for training.
-    )
-    strict_loop_detector: bool = False
     # Task reference for cancellation support
     current_task: Optional[asyncio.Task] = None
 
@@ -53,7 +55,6 @@ class AgentHandler(ABC):
         self,
         job_details: JobDetails,
         sid: str | None = None,
-        max_iterations: int = 1,
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
         """Initialize the agent with instance and config."""
         pass

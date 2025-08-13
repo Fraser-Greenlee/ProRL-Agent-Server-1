@@ -37,7 +37,6 @@ class SweAgentHandler(AgentHandler):
         self,
         job_details: JobDetails,
         sid: str | None = None,
-        max_iterations: int = 1
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
         """Initialize the SWE Agent with instance and config using utils functions."""
         instance = job_details.instance
@@ -47,9 +46,7 @@ class SweAgentHandler(AgentHandler):
             instance=instance,
             llm_config=llm_config,
             sid=sid,
-            max_iterations=max_iterations,
-            ensure_thinking_end_properly=job_details.ensure_thinking_end_properly,
-            strict_loop_detector=job_details.strict_loop_detector,
+            agent_config=job_details.agent_config,
         )
 
     async def run(

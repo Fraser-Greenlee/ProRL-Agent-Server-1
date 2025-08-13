@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch  # noqa: E402
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
 
-from openhands.nvidia.registry import JobDetails  # noqa: E402
+from openhands.nvidia.registry import _DEFAULT_AGENT_CONFIG, JobDetails  # noqa: E402
 from openhands.nvidia.swe_agent.swe_agent_handler import SweAgentHandler  # noqa: E402
 
 
@@ -44,7 +44,6 @@ class TestSweAgentHandler:
         result = await handler.init(
             job_details=job_details,
             sid='test_sid',
-            max_iterations=5,
         )
 
         # Verify the result
@@ -55,9 +54,7 @@ class TestSweAgentHandler:
             instance=instance,
             llm_config=minimal_llm_config,
             sid='test_sid',
-            max_iterations=5,
-            ensure_thinking_end_properly=False,
-            strict_loop_detector=False,
+            agent_config=_DEFAULT_AGENT_CONFIG,
         )
 
     @pytest.mark.asyncio
@@ -86,9 +83,7 @@ class TestSweAgentHandler:
             instance=instance,
             llm_config=None,
             sid=None,
-            max_iterations=1,
-            ensure_thinking_end_properly=False,
-            strict_loop_detector=False,
+            agent_config=_DEFAULT_AGENT_CONFIG,
         )
 
     @pytest.mark.asyncio
@@ -409,7 +404,6 @@ class TestSweAgentHandlerIntegration:
         result = await handler.init(
             job_details=job_details,
             sid='real_test_sid',
-            max_iterations=10,
         )
 
         # Verify the result
@@ -420,9 +414,7 @@ class TestSweAgentHandlerIntegration:
             instance=real_instance,
             llm_config=minimal_llm_config,
             sid='real_test_sid',
-            max_iterations=10,
-            ensure_thinking_end_properly=False,
-            strict_loop_detector=False,
+            agent_config=_DEFAULT_AGENT_CONFIG,
         )
 
     @pytest.mark.real_data
@@ -608,7 +600,6 @@ class TestSweAgentHandlerEdgeCases:
             init_tasks = [
                 handler.init(
                     job_details=job_details,
-                    max_iterations=i + 1,
                 )
                 for i, (handler, job_details) in enumerate(
                     zip(handlers, job_details_list)

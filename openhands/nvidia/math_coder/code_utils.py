@@ -29,7 +29,7 @@ from evaluation.utils.shared import codeact_user_response, is_fatal_evaluation_e
 from openhands.nvidia.utils import process_messages_from_agent_state, is_last_action_finish, get_messages_from_partial_result
 import json
 from openhands.nvidia.reward import Reward
-from openhands.nvidia.registry import JobDetails
+from openhands.nvidia.registry import JobDetails, _DEFAULT_AGENT_CONFIG
 from openhands.nvidia.utils import get_instance_id
 from openhands.nvidia.controller import run_controller_with_controller
 
@@ -37,8 +37,7 @@ from openhands.nvidia.controller import run_controller_with_controller
 def get_config(
     instance: dict,
     metadata: EvalMetadata,
-    ensure_thinking_end_properly: bool = False,
-    strict_loop_detector: bool = False,
+    agent_config: dict=_DEFAULT_AGENT_CONFIG,
 ) -> OpenHandsConfig:
     # Docker image from xingyaoww/od-eval-logic-reasoning:v1.0
     base_container_image = 'xingyaoww_od-eval-logic-reasoning'
@@ -91,9 +90,9 @@ def get_config(
         enable_prompt_extensions=False,
         enable_think=True, # enable think tool now for instruct models
         enable_history_truncation=False, # turn off history truncation
-        ensure_thinking_end_properly=ensure_thinking_end_properly, # set to true only if using text based server for training.
+        ensure_thinking_end_properly=agent_config['ensure_thinking_end_properly'], # set to true only if using text based server for training.
         action_timeout=30.0, # 30 seconds per action
-        strict_loop_detector=strict_loop_detector,
+        strict_loop_detector=agent_config['strict_loop_detector'],
     )
     config.set_agent_config(agent_config)
     return config
@@ -180,9 +179,7 @@ async def initialize_agents(
         git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a",
         dataset:str = "deepcoder",
         data_split:str = "train",
-        max_iterations:int = 1,
-        ensure_thinking_end_properly: bool = False,
-        strict_loop_detector: bool = False,
+        agent_config: dict = dict(_DEFAULT_AGENT_CONFIG),
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
 
     if llm_config is None:
@@ -192,7 +189,7 @@ async def initialize_agents(
         agent_class="CodeActAgent",
         llm_config=llm_config,
         agent_config=None,
-        max_iterations=max_iterations,
+        max_iterations=agent_config['max_iterations'],
         eval_output_dir=eval_output_dir,
         start_time=time.strftime('%Y-%m-%d %H:%M:%S'),
         git_commit=git_commit,
@@ -203,7 +200,7 @@ async def initialize_agents(
     )
 
 
-    config = get_config(instance, metadata, ensure_thinking_end_properly, strict_loop_detector)
+    config = get_config(instance, metadata, agent_config)
     runtime = create_runtime(config, sid=sid)
 
     await runtime.connect()

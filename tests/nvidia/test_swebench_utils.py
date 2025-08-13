@@ -20,6 +20,7 @@ from openhands.core.config.llm_config import LLMConfig  # noqa: E402
 from openhands.core.config.sandbox_config import SandboxConfig  # noqa: E402
 from openhands.events.action import AgentFinishAction  # noqa: E402
 from openhands.events.observation import CmdOutputObservation  # noqa: E402
+from openhands.nvidia.registry import _DEFAULT_AGENT_CONFIG  # noqa: E402
 from openhands.nvidia.swe_agent.utils import (  # noqa: E402
     DOCKER_IMAGE_PREFIX,
     _apply_patch_and_evaluate,
@@ -349,6 +350,7 @@ class TestRunAgent:
         job_details.instance = pd.Series({'instance_id': 'test'})
         job_details.llm_config = Mock()
         job_details.llm_config.token_level_generation = False
+        job_details.agent_config = _DEFAULT_AGENT_CONFIG
 
         with patch('openhands.llm.llm_utils.check_tools') as mock_check_tools:
             mock_check_tools.return_value = []

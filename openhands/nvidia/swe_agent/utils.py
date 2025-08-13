@@ -36,7 +36,7 @@ from openhands.nvidia.controller import run_controller_with_controller
 from openhands.controller.state.state import State
 from openhands.nvidia.logger import nvidia_logger as logger
 
-from openhands.nvidia.registry import JobDetails
+from openhands.nvidia.registry import JobDetails, _DEFAULT_AGENT_CONFIG
 from openhands.nvidia.utils import process_messages_from_agent_state, is_last_action_finish, get_messages_from_partial_result
 
 DOCKER_IMAGE_PREFIX = os.environ.get('EVAL_DOCKER_IMAGE_PREFIX', 'xingyaoww/')
@@ -103,8 +103,7 @@ def get_instance_docker_image(instance, data_kind = "swebench") -> str:
 def get_config(
     instance: dict,
     metadata: EvalMetadata,
-    ensure_thinking_end_properly: bool = False,
-    strict_loop_detector: bool = False,
+    agent_config: dict=_DEFAULT_AGENT_CONFIG,
 ) -> OpenHandsConfig:
     data_kind = infer_instance_type(instance)
     base_container_image = get_instance_docker_image(instance, data_kind)
@@ -163,8 +162,8 @@ def get_config(
         enable_prompt_extensions=False,
         enable_think=False, # not too sure what this does.
         enable_history_truncation=False, # turn off history truncation
-        ensure_thinking_end_properly=ensure_thinking_end_properly, # set to true only if using text based server for training.
-        strict_loop_detector=strict_loop_detector, # set to true only if training
+        ensure_thinking_end_properly=agent_config['ensure_thinking_end_properly'], # set to true only if using text based server for training.
+        strict_loop_detector=agent_config['strict_loop_detector'], # set to true only if training
     )
     config.set_agent_config(agent_config)
     return config
@@ -177,9 +176,7 @@ async def initialize_agents(
         git_commit:str = "9f93e8a1532d6e1da4ea702f3dbd31d0f6b2fb3a",
         dataset:str = "swebench",
         data_split:str = "train",
-        max_iterations:int = 1,
-        ensure_thinking_end_properly: bool = False,
-        strict_loop_detector: bool = False,
+        agent_config: dict = dict(_DEFAULT_AGENT_CONFIG),
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
     # Fall back to a sensible default if the caller does not provide an
     # explicit ``llm_config`` (mirrors the behaviour of the old
@@ -194,7 +191,7 @@ async def initialize_agents(
         agent_class="CodeActAgent",
         llm_config=llm_config,
         agent_config=None,
-        max_iterations=max_iterations,
+        max_iterations=agent_config['max_iterations'],
         eval_output_dir=eval_output_dir,
         start_time=time.strftime('%Y-%m-%d %H:%M:%S'),
         git_commit=git_commit,
@@ -205,7 +202,7 @@ async def initialize_agents(
     )
 
 
-    config = get_config(instance, metadata, ensure_thinking_end_properly, strict_loop_detector)
+    config = get_config(instance, metadata, agent_config)
 
     metadata.details['runtime_failure_count'] = 0  # type: ignore[index]
     metadata.details['remote_runtime_resource_factor'] = (  # type: ignore[index]

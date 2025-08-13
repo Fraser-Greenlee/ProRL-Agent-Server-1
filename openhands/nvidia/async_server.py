@@ -258,16 +258,11 @@ class OpenHandsServer:
         job_details = JobDetails()
         job_details.job_id = job_id
         job_details.instance = instance
-        if 'max_iterations' in sampling_params:
-            job_details.max_iterations = sampling_params.pop('max_iterations')
-        if 'ensure_thinking_end_properly' in sampling_params:
-            job_details.ensure_thinking_end_properly = sampling_params.pop(
-                'ensure_thinking_end_properly'
-            )
-        if 'strict_loop_detector' in sampling_params:
-            job_details.strict_loop_detector = sampling_params.pop(
-                'strict_loop_detector'
-            )
+        for agent_config_key in job_details.agent_config:
+            if agent_config_key in sampling_params:
+                job_details.agent_config[agent_config_key] = sampling_params.pop(
+                    agent_config_key
+                )
         llm_config = self.create_llm_config(sampling_params)
         job_details.llm_config = llm_config
         job_details.event = threading.Event()
@@ -402,7 +397,6 @@ class OpenHandsServer:
                         init_coro = func(
                             job_details=job_details,
                             sid=job_id,
-                            max_iterations=job_details.max_iterations,
                         )
                         runtime, metadata, config = await run_with_timeout_awareness(
                             job_details.timer, init_coro, job_details
