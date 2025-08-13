@@ -132,8 +132,7 @@ async def start_server():
 
     try:
         server.start()
-        if thread_pool is None:
-            _initialize_thread_pool()
+        _initialize_thread_pool(force_reinit=True)
         return {'status': 'Server started successfully'}
     except Exception as e:
         logger.error(f'Failed to start server: {str(e)}')
@@ -159,9 +158,9 @@ async def stop_server():
         
         # Clean up the global thread pool to prevent dead threads
         if thread_pool is not None:
-            logger.info('Shutting down global thread pool')
-            thread_pool.shutdown(wait=True, cancel_futures=True)
+            thread_pool.shutdown(wait=False, cancel_futures=True)
             thread_pool = None
+            logger.info('Shutting down global thread pool')
         return {'status': 'Server stopped successfully'}
     except Exception as e:
         logger.warning(f'Failed to stop server: {str(e)}. Force kill all singularity jobs.')
@@ -170,7 +169,7 @@ async def stop_server():
         # Still try to clean up thread pool even if server stop failed
         if thread_pool is not None:
             try:
-                thread_pool.shutdown(wait=True, cancel_futures=True)
+                thread_pool.shutdown(wait=False, cancel_futures=True)
                 thread_pool = None
             except Exception as thread_e:
                 logger.warning(f'Failed to shutdown thread pool: {thread_e}')  
