@@ -158,7 +158,7 @@ def parse_response_ids(
     text = tokenizer.decode(response_ids, skip_special_tokens=True)
     split_idx = text.find("<tool_call>")
     # No tool calls
-    if split_idx == -1:
+    if split_idx == -1 or format_error_type is not None:
         return {'content': text, 'tool_calls': [], 'format_error_type': format_error_type}
     
     content = text[:split_idx]
@@ -171,7 +171,6 @@ def parse_response_ids(
         tool_call_strings = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", tool_text, re.DOTALL)
         tool_calls = [json.loads(tc) for tc in tool_call_strings]
     except Exception as e:
-        # TODO: probably want to raise an exception here.
         tool_calls = []
         format_error_type = 'tool_call'
     
