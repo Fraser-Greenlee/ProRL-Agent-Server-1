@@ -235,8 +235,10 @@ def request_response_tokens(
 
     if 'max_completion_tokens' in kwargs:
         kwargs['max_tokens'] = kwargs.pop('max_completion_tokens')
+    # We ignore max_completion_tokens and instead use maximum available tokens left.
+    kwargs['max_tokens'] = max_model_len - len(input_ids)
 
-    if len(input_ids) + kwargs['max_tokens'] > max_model_len:
+    if kwargs['max_tokens'] <= 0:
         raise ContextWindowExceededError(
             message=f'input length and `max_tokens` exceed context limit. input length: {len(input_ids)}, max_tokens: {kwargs["max_tokens"]}, max_model_len: {max_model_len}.',
             model=model,

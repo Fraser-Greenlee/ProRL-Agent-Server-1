@@ -149,26 +149,32 @@ class OpenHandsServer:
 
     def _cleanup_job_runtime(self, runtime, job_id: str):
         """Comprehensive cleanup of runtime resources to prevent thread leakage."""
-        try:
-            # 1. Close event stream and its thread pools
-            if hasattr(runtime, 'event_stream') and runtime.event_stream:
-                try:
-                    runtime.event_stream.close()
-                    logger.debug(f'Event stream closed for job {job_id}')
-                except Exception as e:
-                    logger.warning(f'Error closing event stream for job {job_id}: {e}')
 
-            # 2. Close runtime (handles container processes, plugins, etc.)
-            runtime.close()
+        def close():
+            try:
+                # 1. Close runtime (handles container processes, plugins, etc.)
+                runtime.close()
+                # 2. Close event stream and its thread pools
+                if hasattr(runtime, 'event_stream') and runtime.event_stream:
+                    try:
+                        runtime.event_stream.close()
+                        logger.debug(f'Event stream closed for job {job_id}')
+                    except Exception as e:
+                        logger.warning(
+                            f'Error closing event stream for job {job_id}: {e}'
+                        )
+                # 3. Force cleanup any remaining subprocess-related resources
+                time.sleep(0.1)  # Brief pause for cleanup to complete
 
-            # 3. Force cleanup any remaining subprocess-related resources
-            time.sleep(0.1)  # Brief pause for cleanup to complete
+            except Exception as e:
+                logger.error(
+                    f'Error in comprehensive runtime cleanup for job {job_id}: {e}'
+                )
+                # Don't re-raise - we want cleanup to continue even if parts fail
 
-        except Exception as e:
-            logger.error(
-                f'Error in comprehensive runtime cleanup for job {job_id}: {e}'
-            )
-            # Don't re-raise - we want cleanup to continue even if parts fail
+        # Run cleanup in background thread, non-blocking
+        t = threading.Thread(target=close, daemon=True)
+        t.start()
 
     def start(self):
         if self._server_running:
@@ -526,7 +532,6 @@ class OpenHandsServer:
         self._server_running = False
 
         # Step 2: Force complete all active jobs with timeout errors
-        logger.info('Signaling active jobs to complete...')
         with self._state_lock:
             active_jobs = (
                 list(self._active_init_jobs)
@@ -534,6 +539,7 @@ class OpenHandsServer:
                 + list(self._active_eval_jobs)
             )
 
+        logger.info('Signaling active jobs to complete...')
         # Signal all active jobs and mark them with timeout errors
         for job_id in active_jobs:
             try:
@@ -573,20 +579,7 @@ class OpenHandsServer:
                 logger.warning(f'Failed to put stop signal in eval queue: {e}')
         time.sleep(1)
 
-        # Step 4: Force cleanup any remaining runtime resources
-        logger.info('Cleaning up remaining job resources...')
-        with self._job_details_lock:
-            remaining_jobs = list(self._job_details.keys())
-            for job_id in remaining_jobs:
-                try:
-                    job = self._job_details[job_id]
-                    if job.runtime:
-                        self._cleanup_job_runtime(job.runtime, job_id)
-                        job.runtime = None
-                except Exception as e:
-                    logger.warning(f'Error cleaning up job {job_id}: {e}')
-
-        # Step 5: Clear all data structures
+        # Step 4: Clear all data structures
         logger.info('Clearing internal data structures...')
         try:
             with self._state_lock:
@@ -605,7 +598,7 @@ class OpenHandsServer:
         except Exception as e:
             logger.warning(f'Error clearing data structures: {e}')
 
-        # Step 6: Clear all queues
+        # Step 5: Clear all queues
         logger.info('Clearing all queues...')
         try:
             clear_queue(self.init_queue)
@@ -614,7 +607,7 @@ class OpenHandsServer:
         except Exception as e:
             logger.warning(f'Error clearing queues: {e}')
 
-        # Step 7: Clean up any remaining singularity jobs
+        # Step 6: Clean up any remaining singularity jobs
         logger.info('Cleaning up singularity processes...')
         try:
             self.clear_singularity_jobs()
@@ -623,7 +616,7 @@ class OpenHandsServer:
 
         logger.info(f'Server stopped. Final status: {self.status()}')
 
-        # Step 8: Shutdown executor and return immediately
+        # Step 7: Shutdown executor and return immediately
         logger.info('Shutting down thread pool executor...')
         if hasattr(self, '_executor') and self._executor:
             try:
