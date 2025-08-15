@@ -7,7 +7,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-from openhands.nvidia.async_server import OpenHandsServer
+from openhands.nvidia.async_server_process import OpenHandsServer as OpenHandsServer_Process
+from openhands.nvidia.async_server import OpenHandsServer as OpenHandsServer_Thread
 from openhands.nvidia.registry import FunctionNotRegisteredError
 from openhands.nvidia.utils import (
     JobTimeoutError,
@@ -47,6 +48,8 @@ accepting_requests_lock = threading.Lock()
 server_config: Dict[str, Any] = {}
 llm_server_addresses_buffer: List[str] = []
 config_lock = threading.Lock()
+
+thread_based_server = False
 
 
 def _reject_all_pending_futures(error_message: str):
@@ -113,9 +116,13 @@ def server_worker(
             os.setsid()
         except Exception:
             pass
-        
+
+        if thread_based_server:
+            openhands_server_class = OpenHandsServer_Process
+        else:
+            openhands_server_class = OpenHandsServer_Thread
         # Initialize server with provided config
-        server = OpenHandsServer(
+        server = openhands_server_class(
             llm_server_addresses=config.get('llm_server_addresses', []),
             max_init_workers=config.get('max_init_workers'),
             max_run_workers=config.get('max_run_workers'),
@@ -360,12 +367,12 @@ def _start_child_process():
     server_process = Process(
         target=server_worker,
         args=(request_queue, job_result_queue, control_response_queue, effective_config),
-        daemon=True,
+        daemon=False,
     )
     server_process.start()
 
     # Start background thread to collect job results
-    response_thread = threading.Thread(target=_response_listener, name='response-listener', daemon=True)
+    response_thread = threading.Thread(target=_response_listener, name='response-listener', daemon=False)
     response_thread.start()
 
     with accepting_requests_lock:
@@ -510,7 +517,7 @@ async def add_llm_server(request: LLMServerRequest):
         req_id = str(uuid.uuid4())
         if request_queue is not None:
             request_queue.put({'type': 'add_llm_server', 'address': address, 'request_id': req_id})
-        
+
         if control_response_queue is not None:
             try:
                 ack = control_response_queue.get(timeout=5)
@@ -536,7 +543,7 @@ async def clear_llm_server():
         req_id = str(uuid.uuid4())
         if request_queue is not None:
             request_queue.put({'type': 'clear_llm_server', 'request_id': req_id})
-        
+
         if control_response_queue is not None:
             try:
                 ack = control_response_queue.get(timeout=5)
@@ -663,11 +670,25 @@ def parse_args():
         default=[],
         help='List of reward server IP addresses (default: [])',
     )
+    parser.add_argument(
+        '--use-thread-based-server',
+        type=bool,
+        default=False,
+        action='store_true',
+        help='Use process-based server (default: False)',
+    )
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     args = parse_args()
+
+    thread_based_server = args.use_thread_based_server
+    if not thread_based_server:
+        # For process-based server, we need to set the start method to spawn
+        import multiprocessing
+        multiprocessing.set_start_method('spawn')
+
     init_server(
         max_init_workers=args.max_init_workers,
         max_run_workers=args.max_run_workers,
