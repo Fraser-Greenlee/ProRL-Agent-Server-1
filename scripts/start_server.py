@@ -118,9 +118,11 @@ def server_worker(
             pass
 
         if thread_based_server:
-            openhands_server_class = OpenHandsServer_Process
-        else:
             openhands_server_class = OpenHandsServer_Thread
+            logger.info('Using thread-based server')
+        else:
+            openhands_server_class = OpenHandsServer_Process
+            logger.info('Using process-based server')
         # Initialize server with provided config
         server = openhands_server_class(
             llm_server_addresses=config.get('llm_server_addresses', []),
@@ -687,7 +689,7 @@ if __name__ == '__main__':
         # For process-based server, we need to set the start method to spawn
         import multiprocessing
         multiprocessing.set_start_method('spawn')
-
+    logger.info(f'Using thread-based server: {thread_based_server}')
     init_server(
         max_init_workers=args.max_init_workers,
         max_run_workers=args.max_run_workers,
