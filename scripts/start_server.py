@@ -672,10 +672,9 @@ def parse_args():
     )
     parser.add_argument(
         '--use-thread-based-server',
-        type=bool,
-        default=False,
         action='store_true',
-        help='Use process-based server (default: False)',
+        default=False,
+        help='Use thread-based server (default: False)',
     )
     return parser.parse_args()
 
