@@ -136,12 +136,50 @@ def build_sif_for_image(image: str, dest_dir: Path, temp_base: Path) -> None:
             def_path.write_text("\n".join(patched) + "\n")
 
     print("[STEP 2] Building .sif image with Singularity…")
-    _run([
-        "singularity",
-        "build",
-        str(sif_path.resolve()),
-        "singularity.def",
-    ], cwd=build_dir, clean_bind_env=True)
+    try:
+        _run([
+            "singularity",
+            "build",
+            str(sif_path.resolve()),
+            "singularity.def",
+        ], cwd=build_dir, clean_bind_env=True)
+    except RuntimeError as e:
+        msg = str(e).lower()
+        # Only handle the specific error pattern you provided
+        is_specific_255 = ("exit code 255" in msg) and ("singularity build" in msg)
+        img_lower = image.lower()
+        if is_specific_255 and (img_lower.startswith("xingyaoww/") or "/xingyaoww/" in img_lower) and def_path.exists():
+            print("[RETRY] Detected exit code 255 for singularity build; switching base image from xingyaoww/ to godcherry/ and retrying…")
+            try:
+                # Compute fallback base image string
+                if img_lower.startswith("xingyaoww/"):
+                    fallback_image = "godcherry/" + image.split("/", 1)[1]
+                else:
+                    # Replace only the first occurrence of /xingyaoww/ to /godcherry/
+                    fallback_image = image.replace("/xingyaoww/", "/godcherry/", 1)
+
+                # Rewrite the From: line in singularity.def
+                def_lines = def_path.read_text().splitlines()
+                new_lines: list[str] = []
+                for line in def_lines:
+                    if line.strip().lower().startswith("from:"):
+                        new_lines.append(f"From: {fallback_image}")
+                    else:
+                        new_lines.append(line)
+                def_path.write_text("\n".join(new_lines) + "\n")
+
+                # Retry build with patched base image; output path remains the same
+                _run([
+                    "singularity",
+                    "build",
+                    str(sif_path.resolve()),
+                    "singularity.def",
+                ], cwd=build_dir, clean_bind_env=True)
+            except Exception as retry_exc:
+                raise RuntimeError(str(e)) from retry_exc
+        else:
+            # Not matching the specific error; re-raise
+            raise
 
     if image.startswith("swebench/"):
         new_sif_path = sif_path.with_name(f"docker.io_{sif_path.name}")
