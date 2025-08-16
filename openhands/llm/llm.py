@@ -13,6 +13,8 @@ with warnings.catch_warnings():
     warnings.simplefilter('ignore')
     import litellm
 
+import re
+
 from litellm import ChatCompletionMessageToolCall, ModelInfo, PromptTokensDetails
 from litellm import Message as LiteLLMMessage
 from litellm import completion as litellm_completion
@@ -101,6 +103,28 @@ MODELS_WITHOUT_STOP_WORDS = [
     'o1',
     'o1-2024-12-17',
 ]
+
+CUSTOM_VLM_PATTERNS = [
+    r'(?i)eagle',
+    r'(?i)\bqwen2(\.5)?[-_]?vl\b',
+    r'(?i)\bqwen[-_]?vl\b',
+]
+
+
+def looks_like_vlm(model_name: str) -> bool:
+    for pat in CUSTOM_VLM_PATTERNS:
+        if re.search(pat, model_name):
+            return True
+    return False
+
+
+def custom_supports_vision(name: str) -> bool:
+    try:
+        if litellm.supports_vision(name):
+            return True
+    except Exception:
+        pass
+    return looks_like_vlm(name)
 
 
 class LLM(RetryMixin, DebugMixin):
@@ -572,14 +596,14 @@ class LLM(RetryMixin, DebugMixin):
         Returns:
             bool: True if model is vision capable. Return False if model not supported by litellm.
         """
-        # litellm.supports_vision currently returns False for 'openai/gpt-...' or 'anthropic/claude-...' (with prefixes)
-        # but model_info will have the correct value for some reason.
-        # we can go with it, but we will need to keep an eye if model_info is correct for Vertex or other providers
+        # we take the union of the following three sources:
+        # 1) litellm.supports_vision
+        # 2) model_info.get('supports_vision', False)
+        # 3) looks_like_vlm(model) or looks_like_vlm(bare)
         # remove when litellm is updated to fix https://github.com/BerriAI/litellm/issues/5608
-        # Check both the full model name and the name after proxy prefix for vision support
         return (
-            litellm.supports_vision(self.config.model)
-            or litellm.supports_vision(self.config.model.split('/')[-1])
+            custom_supports_vision(self.config.model)
+            or custom_supports_vision(self.config.model.split('/')[-1])
             or (
                 self.model_info is not None
                 and self.model_info.get('supports_vision', False)
