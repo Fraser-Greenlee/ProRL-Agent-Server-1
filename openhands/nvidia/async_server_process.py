@@ -138,7 +138,7 @@ class Worker:
                 # Don't re-raise - we want cleanup to continue even if parts fail
 
         # Run cleanup in background thread, non-blocking
-        t = threading.Thread(target=close)
+        t = threading.Thread(target=close, daemon=True)
         t.start()
 
     async def run_step(self, job_type: JobType):
@@ -371,7 +371,7 @@ class JobState:
     def __init__(
         self,
         job_id: str,
-        finished: mp.Event,
+        finished: threading.Event,
         process: mp.Process,
     ):
         self.job_id = job_id
@@ -380,9 +380,25 @@ class JobState:
         self.result = None
 
     def close(self):
-        self.finished.set()
-        self.process.terminate()
-        self.process.join()
+        """Clean up job state resources"""
+        try:
+            self.finished.set()
+            if self.process.is_alive():
+                self.process.terminate()
+                self.process.join(timeout=5.0)
+                if self.process.is_alive():
+                    self.process.kill()
+                    self.process.join(timeout=1.0)
+        except Exception:
+            # Ignore errors during cleanup
+            pass
+
+    def __del__(self):
+        """Destructor to ensure cleanup"""
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 class OpenHandsServer:
@@ -551,7 +567,7 @@ class OpenHandsServer:
         logger.info(f'Starting process {job_id}.')
         p.start()
 
-        finished = mp.Event()
+        finished = threading.Event()
 
         # Create job state and add to tracking
         job_state = JobState(job_id, finished, p)

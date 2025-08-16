@@ -138,10 +138,9 @@ def server_worker(
         server.start()
 
         # Internal executors for job concurrency and any threaded work inside process_with_timeout
-        job_executor_workers = server.max_run_workers if server.max_run_workers else 4
+        job_executor_workers = server.max_init_workers + server.max_run_workers + server.max_eval_workers + 30
         job_executor = ThreadPoolExecutor(max_workers=job_executor_workers)
-        inner_pool_workers = max(1, server.max_init_workers * 3)
-        inner_thread_pool = ThreadPoolExecutor(max_workers=inner_pool_workers)
+        inner_thread_pool = ThreadPoolExecutor(max_workers=job_executor_workers)
 
         running = True
         submitted_futures: Dict[str, "concurrent.futures.Future"] = {}
@@ -427,7 +426,7 @@ async def stop_server():
                 kill_process_tree(server_process.pid)
             except Exception as e:
                 logger.warning(f'kill_process_tree failed for pid {server_process.pid}: {e}')
-            server_process.join(timeout=5)
+            server_process.join(timeout=10)
 
         # Clean up queues and response listener
         try:
@@ -437,7 +436,7 @@ async def stop_server():
             pass
         if response_thread is not None:
             try:
-                response_thread.join(timeout=2)
+                response_thread.join(timeout=10)
             except Exception:
                 pass
 
@@ -474,11 +473,12 @@ async def get_status():
         if request_queue is not None:
             request_queue.put({'type': 'status', 'request_id': req_id})
         if control_response_queue is not None:
-            ack = control_response_queue.get(timeout=5)
+            ack = control_response_queue.get(timeout=10)
             if isinstance(ack, dict) and ack.get('type') == 'status_ack':
                 child_status = ack.get('status')
     except Exception:
         # If control path fails, still return local info
+        logger.warning('Failed to get child status; proceeding to return local info')
         pass
     if child_status:
         return {'status': 'running', 'pending_jobs': pending, **child_status}
@@ -601,7 +601,7 @@ async def process(request: ProcessRequest):
 
         # Await result with timeout
         try:
-            result = await asyncio.wait_for(fut, timeout=global_timeout + 5)
+            result = await asyncio.wait_for(fut, timeout=global_timeout*2)
         except asyncio.TimeoutError:
             # On timeout, send cancel and raise 504
             try:
