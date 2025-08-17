@@ -51,7 +51,7 @@ def _parse_args():
     parser.add_argument(
         '--dataset-path',
         type=str,
-        default='/lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/80-data/train.parquet',
+        default='/lustre/fsw/portfolios/llmservice/users/shaokunz/project/data/swe-gym/SkyRL-v0-293-data/train.parquet',
         help="Path to a parquet file that contains the SWE-bench dataset with an 'instance' column.",
     )
     # r2e_gym: /lustre/fs1/portfolios/llmservice/users/shaokunz/Openhands2/OpenHands_internal/data/r2egym/data/train-00003-of-00008.parquet
@@ -64,13 +64,13 @@ def _parse_args():
     parser.add_argument(
         '--num-instances',
         type=int,
-        default=1,
+        default=None,
         help='Number of instances to evaluate (default: 1).',
     )
     parser.add_argument(
         '--concurrency',
         type=int,
-        default=1,
+        default=32,
         help='Maximum number of concurrent evaluations to run (default: 64, matching run_swebench.py).',
     )
     parser.add_argument(
@@ -78,7 +78,33 @@ def _parse_args():
         action='store_true',
         help='Skip evaluation when the git_patch is empty or None (mirrors utils._evaluate_agent default).',
     )
+    parser.add_argument(
+        '--sif-name',
+        type=str,
+        default=None,
+        help='Only evaluate instances for the specified SIF filename (e.g., xingyaoww_sweb.eval.x86_64.iterative_s_dvc-1809.sif). The script will convert this back to instance_id for filtering.',
+    )
     return parser.parse_args()
+
+
+def _sif_name_to_instance_id(sif_name: str) -> str:
+    # Remove .sif extension
+    base_name = sif_name.replace('.sif', '')
+
+    # Remove common prefixes
+    if base_name.startswith('docker.io_swebench_'):
+        base_name = base_name[len('docker.io_swebench_') :]
+    elif base_name.startswith('xingyaoww_'):
+        base_name = base_name[len('xingyaoww_') :]
+
+    # Remove sweb.eval.x86_64. prefix if present
+    if base_name.startswith('sweb.eval.x86_64.'):
+        base_name = base_name[len('sweb.eval.x86_64.') :]
+
+    # Convert _s_ back to __
+    instance_id = base_name.replace('_s_', '__')
+
+    return instance_id
 
 
 async def _evaluate_instances(
@@ -90,17 +116,9 @@ async def _evaluate_instances(
         async with semaphore:
             try:
                 patch = inst.get('patch')
-                if patch is None:
-                    return {
-                        'instance_id': inst.get('instance_id', idx),
-                        'trajectory_id': inst.get('trajectory_id', idx),
-                        'resolved': False,
-                        'error': 'No patch provided in instance',
-                    }
                 rep = await _evaluate_agent(
                     patch, pd.Series(inst), sid=f'gold_{idx}', allow_skip=allow_skip
                 )
-
                 resolved_flag = False
                 if isinstance(rep, dict):
                     if 'report' in rep and isinstance(rep['report'], dict):
@@ -170,6 +188,82 @@ def main():
         dataset_df = dataset_df.head(args.num_instances)
 
     is_r2egym = dataset_df.get('docker_image') is not None
+
+    # Optional filter by SIF filename
+    if args.sif_name:
+        # Convert SIF filename to instance_id
+        target_instance_id = _sif_name_to_instance_id(args.sif_name)
+        print(
+            f'[evaluate_gold] Filtering for SIF: {args.sif_name} -> instance_id: {target_instance_id}'
+        )
+
+        if is_r2egym:
+            # For r2egym, we need to check the instance_id in the docker_image field
+            def _matches_target(row):
+                docker_image = row.get('docker_image', '')
+                if not docker_image:
+                    return False
+                # Extract instance_id from docker_image (reverse of pre_process_r2egym_instance)
+                instance_id = docker_image.replace('/', '_').replace(':', '_')
+                matches = (
+                    target_instance_id in instance_id
+                    or instance_id in target_instance_id
+                )
+                if matches:
+                    print(
+                        f'[DEBUG] Match found - docker_image: {docker_image}, extracted_id: {instance_id}'
+                    )
+                return matches
+
+            mask = dataset_df.apply(_matches_target, axis=1)
+        else:
+            # For swe-gym, check the instance_id in the instance column
+            def _extract_instance_id(row):
+                instance = row.get('instance', {})
+                if isinstance(instance, dict):
+                    return instance.get('instance_id', '')
+                elif hasattr(instance, 'get'):
+                    return instance.get('instance_id', '')
+                return ''
+
+            instance_ids = dataset_df.apply(_extract_instance_id, axis=1)
+            print(f'[DEBUG] Looking for target_instance_id: {target_instance_id}')
+            print(
+                f'[DEBUG] First 5 instance_ids in dataset: {list(instance_ids.head())}'
+            )
+
+            # Try both exact match and substring match
+            exact_mask = instance_ids == target_instance_id
+            substring_mask = instance_ids.str.contains(
+                target_instance_id, na=False
+            ) | instance_ids.apply(lambda x: target_instance_id in str(x))
+
+            if exact_mask.any():
+                print('[DEBUG] Found exact match(es)')
+                mask = exact_mask
+            elif substring_mask.any():
+                print('[DEBUG] Found substring match(es)')
+                mask = substring_mask
+            else:
+                print(
+                    '[DEBUG] No matches found. Checking all instance_ids for partial matches...'
+                )
+                # Print first few instance IDs for debugging
+                for i, iid in enumerate(instance_ids.head(10)):
+                    print(f'[DEBUG] instance_ids[{i}]: {iid}')
+                mask = pd.Series([False] * len(instance_ids))
+
+        dataset_df = dataset_df[mask]
+        if len(dataset_df) == 0:
+            print(
+                f'[evaluate_gold] No instances found matching SIF: {args.sif_name} (instance_id: {target_instance_id})'
+            )
+            return
+        else:
+            print(
+                f'[evaluate_gold] Found {len(dataset_df)} instance(s) matching the SIF file'
+            )
+
     instances: list[dict] = []
     if is_r2egym:
         for idx, row in dataset_df.iterrows():
