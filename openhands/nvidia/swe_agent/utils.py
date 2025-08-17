@@ -394,10 +394,10 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
 
     apply_cmd = (
         "cd /testbed && "
-        "(git apply -v /tmp/patch.diff && echo 'APPLY_PATCH_PASS' || "
-        "(echo 'Failed to apply patch with git apply, trying with patch command...' && "
-        "(patch --batch --fuzz=5 -p1 -i /tmp/patch.diff && echo 'APPLY_PATCH_PASS' || "
-        "echo 'APPLY_PATCH_FAIL')))"
+        f"(git apply -v /tmp/patch.diff && echo '{APPLY_PATCH_PASS}' || "
+        f"(echo 'Failed to apply patch with git apply, trying with patch command...' && "
+        f"(patch --batch --fuzz=5 -p1 -i /tmp/patch.diff && echo '{APPLY_PATCH_PASS}' || "
+        f"echo '{APPLY_PATCH_FAIL}')))"
     )
     action = CmdRunAction(command=apply_cmd)
     action.set_hard_timeout(60)
@@ -405,7 +405,7 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
     assert isinstance(obs, CmdOutputObservation)
     patch_result = obs.content
     # Early return if patch failed to apply
-    if "APPLY_PATCH_FAIL" in patch_result or "APPLY_PATCH_PASS" not in patch_result:
+    if APPLY_PATCH_FAIL in patch_result or APPLY_PATCH_PASS not in patch_result:
         return {
             "report": {
                 "empty_generation": len(git_patch.strip()) == 0,
@@ -530,10 +530,10 @@ def _apply_patch_and_evaluate(
 
     apply_cmd = (
         "cd /testbed && "
-        "(git apply -v /tmp/patch.diff && echo 'APPLY_PATCH_PASS' || "
-        "(echo 'Failed to apply patch with git apply, trying with patch command...' && "
-        "(patch --batch --fuzz=5 -p1 -i /tmp/patch.diff && echo 'APPLY_PATCH_PASS' || "
-        "echo 'APPLY_PATCH_FAIL')))"
+        f"(git apply -v /tmp/patch.diff && echo '{APPLY_PATCH_PASS}' || "
+        f"(echo 'Failed to apply patch with git apply, trying with patch command...' && "
+        f"(patch --batch --fuzz=5 -p1 -i /tmp/patch.diff && echo '{APPLY_PATCH_PASS}' || "
+        f"echo '{APPLY_PATCH_FAIL}')))"
     )
     action = CmdRunAction(command=apply_cmd)
     action.set_hard_timeout(30)
@@ -541,17 +541,21 @@ def _apply_patch_and_evaluate(
     assert isinstance(obs, CmdOutputObservation)
     patch_result = obs.content  # type: ignore[attr-defined]
 
-    if "APPLY_PATCH_FAIL" in patch_result:
+    if APPLY_PATCH_FAIL in patch_result:
         raise RuntimeError(f"{instance_id}: {APPLY_PATCH_FAIL}\n{patch_result}")
-    if "APPLY_PATCH_PASS" not in patch_result:
+    if APPLY_PATCH_PASS not in patch_result:
         raise RuntimeError(
             f"{instance_id}: Unexpected output when applying patch:\n{patch_result}"
         )
 
     logger.debug(f"[{instance_id}] {APPLY_PATCH_PASS}:\n{patch_result}")
 
+
+    pass_string = f"[{instance_id}] {APPLY_PATCH_PASS}:\n{patch_result}"
     log_file = "/tmp/eval_output.log"
-    action = CmdRunAction(command=f"/tmp/eval.sh > {log_file} 2>&1 & echo $!")
+
+    # Run evaluation script and append its output to the existing log
+    action = CmdRunAction(command=f"/tmp/eval.sh >> {log_file} 2>&1 & echo $!")
     action.set_hard_timeout(30)
     obs = runtime.run_action(action)
     if not (isinstance(obs, CmdOutputObservation) and obs.exit_code == 0):
@@ -585,6 +589,7 @@ def _apply_patch_and_evaluate(
         raise RuntimeError("Failed to read evaluation output")
 
     test_output: str = cat_obs.content  # type: ignore[attr-defined]
+    test_output = pass_string + "\n" + test_output
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         logs_dir = os.path.join(tmp_dir, "logs", instance_id.lower())
@@ -617,7 +622,7 @@ def _apply_patch_and_evaluate(
         "report": {
             "empty_generation": False,
             "resolved": report.get("resolved", False),
-            "failed_apply_patch": "APPLY_PATCH_FAIL" in patch_result,
+            "failed_apply_patch": APPLY_PATCH_FAIL in patch_result,
             "error_eval": False,
             "test_timeout": False,
         },
