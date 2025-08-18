@@ -601,7 +601,9 @@ async def process(request: ProcessRequest):
 
         # Await result with timeout
         try:
-            result = await asyncio.wait_for(fut, timeout=global_timeout*2)
+            # WARNING: We set the timeout to be 2x the global timeout for final timeout
+            result = await asyncio.wait_for(fut, timeout=global_timeout*2+10)
+            # result = await fut
         except asyncio.TimeoutError:
             # On timeout, send cancel and raise 504
             try:

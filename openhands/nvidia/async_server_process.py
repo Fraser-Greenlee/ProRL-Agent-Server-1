@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Union, cast
+import traceback
 
 from openhands.core.config.llm_config import LLMConfig
 from openhands.nvidia.logger import nvidia_logger as logger
@@ -78,6 +79,7 @@ class Worker:
         concurrency_control: Union[ConcurrencyControl, None] = None,
         job_status: Union[dict, None] = None,
         job_status_lock: Union[mp.Lock, None] = None,
+        result_queue: Union[mp.Queue, None] = None,
     ):
         self.job_id = job_id  # Add job_id attribute for compatibility
         self.instance = instance
@@ -92,6 +94,7 @@ class Worker:
         self.concurrency_control = concurrency_control
         self.job_status = job_status
         self.job_status_lock = job_status_lock
+        self.result_queue = result_queue
 
     def create_llm_config(self):
         llm_config = LLMConfig(
@@ -262,15 +265,19 @@ class Worker:
             if self.job_details.event is not None:
                 self.job_details.event.set()
 
-    def run(self):
+    async def run(self):
         # Run initialization step
         if self.concurrency_control is not None:
             self.concurrency_control.init.acquire()
         if self.job_status is not None:
             with self.job_status_lock:
                 self.job_status[self.job_id] = JobType.INIT
-        self.initialize()
-        asyncio.run(self.run_step(JobType.INIT))
+        try:
+            self.initialize()
+        except Exception as e:
+            logger.error(f'Exception during pre-init: {str(e)}')
+            raise
+        await self.run_step(JobType.INIT)
         if self.concurrency_control is not None:
             self.concurrency_control.init.release()
         if self.job_status is not None:
@@ -286,7 +293,7 @@ class Worker:
         if self.job_status is not None:
             with self.job_status_lock:
                 self.job_status[self.job_id] = JobType.RUN
-        asyncio.run(self.run_step(JobType.RUN))
+        await self.run_step(JobType.RUN)
         if self.concurrency_control is not None:
             self.concurrency_control.run.release()
         if self.job_status is not None:
@@ -301,7 +308,7 @@ class Worker:
         if self.job_status is not None:
             with self.job_status_lock:
                 self.job_status[self.job_id] = JobType.EVAL
-        asyncio.run(self.run_step(JobType.EVAL))
+        await self.run_step(JobType.EVAL)
         if self.concurrency_control is not None:
             self.concurrency_control.eval.release()
         if self.job_status is not None:
@@ -325,6 +332,8 @@ class Worker:
         if self.job_details.timer:
             timing_info = self.job_details.timer.get_timing_info()
             result['timing'] = timing_info
+        if self.result_queue is not None:
+            self.result_queue.put({'job_id': self.job_id, 'result': result})
         return result
 
 
@@ -359,12 +368,15 @@ def process_job(
         concurrency_control,
         job_status,
         job_status_lock,
+        result_queue,
     )
     try:
-        result = worker.run()
+        result = asyncio.run(worker.run())
     except Exception as e:
+        logger.error(f'[Worker {job_id}] Worker.run() failed with error: {type(e).__name__}: {str(e)}')
         result = {'error': str(e)}
-    result_queue.put({'job_id': job_id, 'result': result})
+        traceback.print_exc()
+        result_queue.put({'job_id': job_id, 'result': result})
 
 
 class JobState:
