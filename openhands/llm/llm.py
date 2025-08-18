@@ -122,8 +122,8 @@ def custom_supports_vision(name: str) -> bool:
     try:
         if litellm.supports_vision(name):
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f'litellm.supports_vision failed for {name}: {e}')
     return looks_like_vlm(name)
 
 
