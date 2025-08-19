@@ -41,7 +41,7 @@ request_queue: Optional[multiprocessing.queues.Queue] = None
 job_result_queue: Optional[multiprocessing.queues.Queue] = None
 control_response_queue: Optional[multiprocessing.queues.Queue] = None
 response_thread: Optional[threading.Thread] = None
-result_futures: Dict[str, "concurrent.futures.Future"] = {}
+result_futures: Dict[str, "asyncio.Future"] = {}
 futures_lock = threading.Lock()
 accepting_requests = False
 accepting_requests_lock = threading.Lock()
@@ -63,7 +63,7 @@ def _reject_all_pending_futures(error_message: str):
             try:
                 fut.set_exception(RuntimeError(error_message))
             except Exception:
-                pass
+                logger.debug(f'Could not set exception on future: {error_message}')
 
 
 def _is_server_running() -> bool:
@@ -92,13 +92,32 @@ def _response_listener():
                 fut = result_futures.pop(job_id, None)
             if fut is None:
                 continue
+
+            # Check if future is already done (completed, cancelled, or has exception)
+            if fut.done():
+                logger.debug(f'Future for job {job_id} is already done (cancelled: {fut.cancelled()}), skipping result')
+                continue
+
             if ok:
                 try:
                     fut.set_result(msg.get('result'))
                 except Exception as e:
-                    fut.set_exception(e)
+                    # Only set exception if future is not already done
+                    if not fut.done():
+                        try:
+                            fut.set_exception(e)
+                        except Exception:
+                            logger.debug(f'Could not set exception on future for job {job_id}: {e}')
+                    else:
+                        logger.debug(f'Future for job {job_id} was completed while setting exception: {e}')
             else:
-                fut.set_exception(RuntimeError(msg.get('error', 'Unknown error')))
+                try:
+                    fut.set_exception(RuntimeError(msg.get('error', 'Unknown error')))
+                except Exception:
+                    if not fut.done():
+                        logger.debug(f'Could not set exception on future for job {job_id}')
+                    else:
+                        logger.debug(f'Future for job {job_id} was completed while setting exception')
         except Exception as e:
             logger.warning(f'Response listener encountered error: {e}')
 
@@ -591,6 +610,18 @@ async def process(request: ProcessRequest):
         # Create a future that the response listener will fulfill
         loop = asyncio.get_event_loop()
         fut = loop.create_future()
+
+        # Add callback to clean up the future from result_futures when done
+        def cleanup_future(fut):
+            try:
+                with futures_lock:
+                    result_futures.pop(job_id, None)
+            except Exception as e:
+                logger.debug(f'Error in cleanup callback for job {job_id}: {e}')
+
+        # Use a weak reference to avoid circular references
+        fut.add_done_callback(cleanup_future)
+
         with futures_lock:
             result_futures[job_id] = fut
 
@@ -618,7 +649,25 @@ async def process(request: ProcessRequest):
                     request_queue.put({'type': 'cancel', 'job_id': job_id, 'request_id': str(uuid.uuid4())})
             except Exception:
                 pass
+            # Clean up the future from result_futures and cancel it
+            with futures_lock:
+                fut_to_cancel = result_futures.pop(job_id, None)
+            if fut_to_cancel and not fut_to_cancel.done():
+                try:
+                    fut_to_cancel.cancel()
+                except Exception:
+                    pass
             raise HTTPException(status_code=504, detail='Processing timed out')
+        except Exception as e:
+            # Clean up the future from result_futures on any exception
+            with futures_lock:
+                fut_to_cancel = result_futures.pop(job_id, None)
+            if fut_to_cancel and not fut_to_cancel.done():
+                try:
+                    fut_to_cancel.cancel()
+                except Exception:
+                    pass
+            raise
         return result
     except ServerNotRunningError:
         raise
