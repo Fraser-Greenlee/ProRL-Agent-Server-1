@@ -36,6 +36,9 @@ from openhands.nvidia.utils import (
     kill_all_singularity_jobs,
 )
 
+# Use spawn context for multiprocessing to avoid pickle errors
+_mp_context = mp.get_context('spawn')
+
 
 @dataclass
 class ConcurrencyControl:
@@ -49,9 +52,9 @@ class ConcurrencyControl:
         max_run_workers: int,
         max_eval_workers: int,
     ):
-        self.init = mp.Semaphore(max_init_workers)
-        self.run = mp.Semaphore(max_run_workers)
-        self.eval = mp.Semaphore(max_eval_workers)
+        self.init = _mp_context.Semaphore(max_init_workers)
+        self.run = _mp_context.Semaphore(max_run_workers)
+        self.eval = _mp_context.Semaphore(max_eval_workers)
 
     def release_all(self):
         for _ in range(self.init.get_value()):
@@ -511,7 +514,7 @@ class OpenHandsServer:
         self.jobs: dict[str, JobState] = {}
 
         self.running = False
-        self.result_queue = mp.Queue()
+        self.result_queue = _mp_context.Queue()
 
         self.concurrency_control = None
         self.manager = None
@@ -642,7 +645,7 @@ class OpenHandsServer:
             self.job_status_lock,
         )
         # Start the process
-        p = mp.Process(target=process_job, args=args)
+        p = _mp_context.Process(target=process_job, args=args)
         logger.info(f'Starting process {job_id}.')
         p.start()
 
@@ -724,7 +727,7 @@ class OpenHandsServer:
             )
 
         if self.manager is None:
-            self.manager = mp.Manager()
+            self.manager = _mp_context.Manager()
             self.job_status = self.manager.dict()
             self.job_status_lock = self.manager.Lock()
 
