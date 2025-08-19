@@ -496,7 +496,14 @@ async def cancel(request: CancelRequest):
         req_id = str(uuid.uuid4())
         if request_queue is not None:
             request_queue.put({'type': 'cancel', 'job_id': request.job_id, 'request_id': req_id})
-        # Best-effort: we don't strictly wait; if desired, we can await ack
+        # Await acknowledgment from control response queue
+        if control_response_queue is not None:
+            try:
+                ack = control_response_queue.get(timeout=10)
+                if not ack.get('ok', False):
+                    raise HTTPException(status_code=500, detail=f"Failed to cancel job: {ack.get('error', 'unknown')}")
+            except Exception:
+                pass
         return {'status': f'Cancel requested for job {request.job_id}'}
     except Exception as e:
         logger.error(f'Failed to cancel job {request.job_id}: {str(e)}')

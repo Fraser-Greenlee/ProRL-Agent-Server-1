@@ -6,11 +6,13 @@ import multiprocessing as mp
 import os
 import threading
 import time
+import traceback
 import uuid
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Union, cast
-import traceback
+
+import psutil
 
 from openhands.core.config.llm_config import LLMConfig
 from openhands.nvidia.logger import nvidia_logger as logger
@@ -373,7 +375,9 @@ def process_job(
     try:
         result = asyncio.run(worker.run())
     except Exception as e:
-        logger.error(f'[Worker {job_id}] Worker.run() failed with error: {type(e).__name__}: {str(e)}')
+        logger.error(
+            f'[Worker {job_id}] Worker.run() failed with error: {type(e).__name__}: {str(e)}'
+        )
         result = {'error': str(e)}
         traceback.print_exc()
         result_queue.put({'job_id': job_id, 'result': result})
@@ -390,20 +394,84 @@ class JobState:
         self.finished = finished
         self.process = process
         self.result = None
+        self.pid = None
 
     def close(self):
         """Clean up job state resources"""
         try:
+            self.force_terminate()
+        except Exception:
+            pass
+        try:
             self.finished.set()
-            if self.process.is_alive():
-                self.process.terminate()
-                self.process.join(timeout=5.0)
-                if self.process.is_alive():
-                    self.process.kill()
-                    self.process.join(timeout=1.0)
         except Exception:
             # Ignore errors during cleanup
             pass
+
+    def force_terminate(self):
+        """Force terminate the job process and all its subprocesses and threads"""
+        try:
+            if not self.process.is_alive():
+                return
+
+            pid = self.process.pid
+            logger.info(f'Force terminating job {self.job_id} with PID {pid}')
+
+            # Get the process and all its children
+            try:
+                parent = psutil.Process(pid)
+                children = parent.children(recursive=True)
+
+                # Kill all children first (most aggressive approach)
+                for child in children:
+                    try:
+                        logger.info(
+                            f'Killing child process {child.pid} ({child.name()})'
+                        )
+                        child.kill()
+                    except (
+                        psutil.NoSuchProcess,
+                        psutil.AccessDenied,
+                        psutil.ZombieProcess,
+                    ):
+                        pass
+
+                # Kill the parent process
+                try:
+                    logger.info(f'Killing parent process {pid}')
+                    parent.kill()
+                except (
+                    psutil.NoSuchProcess,
+                    psutil.AccessDenied,
+                    psutil.ZombieProcess,
+                ):
+                    pass
+
+                # Wait a bit for processes to terminate
+                time.sleep(0.5)
+
+                # Force kill any remaining processes with SIGKILL
+                try:
+                    if parent.is_running():
+                        logger.info(f'Force killing parent process {pid} with SIGKILL')
+                        parent.kill()
+                except (
+                    psutil.NoSuchProcess,
+                    psutil.AccessDenied,
+                    psutil.ZombieProcess,
+                ):
+                    pass
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                # Process already dead, try process group kill as fallback
+                pass
+
+            logger.info(f'Force termination completed for job {self.job_id}')
+
+        except Exception as e:
+            logger.error(
+                f'Error during force termination of job {self.job_id}: {str(e)}'
+            )
 
     def __del__(self):
         """Destructor to ensure cleanup"""
@@ -522,8 +590,7 @@ class OpenHandsServer:
         with self._job_details_lock:
             job_state = self.jobs.get(job_id)
             if job_state is not None:
-                job_state.close()
-                del self.jobs[job_id]
+                job_state.finished.set()
         if job_id in self.job_status:
             with self.job_status_lock:
                 status = self.job_status.pop(job_id)
@@ -587,11 +654,15 @@ class OpenHandsServer:
 
         # Get result from queue
         self.jobs[job_id].finished.wait()
-        result = dict(self.jobs[job_id].result)
+        try:
+            result = dict(self.jobs[job_id].result)
+        except Exception as e:
+            result = {'error': str(e)}
 
         with self._job_details_lock:
-            self.jobs[job_id].close()
-            del self.jobs[job_id]
+            if job_id in self.jobs:
+                self.jobs[job_id].close()
+                del self.jobs[job_id]
         logger.info(f'Job {job_id} deleted from jobs')
         logger.info(f'Finished process {job_id}')
         return result
