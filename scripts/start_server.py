@@ -746,7 +746,7 @@ if __name__ == '__main__':
     if not thread_based_server:
         # For process-based server, we need to set the start method to spawn
         import multiprocessing
-        multiprocessing.set_start_method('spawn')
+        multiprocessing.set_start_method('fork')
     logger.info(f'Using thread-based server: {thread_based_server}')
     init_server(
         max_init_workers=args.max_init_workers,

@@ -37,7 +37,7 @@ from openhands.nvidia.utils import (
 )
 
 # Use spawn context for multiprocessing to avoid pickle errors
-_mp_context = mp.get_context('spawn')
+_mp_context = mp.get_context('fork')
 
 
 @dataclass
