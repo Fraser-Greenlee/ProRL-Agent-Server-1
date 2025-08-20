@@ -48,13 +48,14 @@ class ConcurrencyControl:
 
     def __init__(
         self,
+        manager: mp.Manager,
         max_init_workers: int,
         max_run_workers: int,
         max_eval_workers: int,
     ):
-        self.init = _mp_context.Semaphore(max_init_workers)
-        self.run = _mp_context.Semaphore(max_run_workers)
-        self.eval = _mp_context.Semaphore(max_eval_workers)
+        self.init = manager.Semaphore(max_init_workers)
+        self.run = manager.Semaphore(max_run_workers)
+        self.eval = manager.Semaphore(max_eval_workers)
 
     def release_all(self):
         for _ in range(self.init.get_value()):
@@ -274,20 +275,30 @@ class Worker:
         # Run initialization step
         if self.concurrency_control is not None:
             self.concurrency_control.init.acquire()
-        if self.job_status is not None:
-            with self.job_status_lock:
-                self.job_status[self.job_id] = JobType.INIT
+
+        job_status_set = False
         try:
+            if self.job_status is not None:
+                with self.job_status_lock:
+                    self.job_status[self.job_id] = JobType.INIT
+                    job_status_set = True
+
             self.initialize()
+            await self.run_step(JobType.INIT)
+
         except Exception as e:
             logger.error(f'Exception during pre-init: {str(e)}')
             raise
-        await self.run_step(JobType.INIT)
-        if self.concurrency_control is not None:
-            self.concurrency_control.init.release()
-        if self.job_status is not None:
-            with self.job_status_lock:
-                self.job_status.pop(self.job_id)
+        finally:
+            # Always clean up, even on exception
+            if self.concurrency_control is not None:
+                self.concurrency_control.init.release()
+            if self.job_status is not None and job_status_set:
+                try:
+                    with self.job_status_lock:
+                        self.job_status.pop(self.job_id, None)
+                except Exception as cleanup_error:
+                    logger.error(f'Error cleaning up job status: {cleanup_error}')
 
         if self.job_details.event is not None and self.job_details.event.is_set():
             return self.get_results()
@@ -295,30 +306,60 @@ class Worker:
         # Run execution step
         if self.concurrency_control is not None:
             self.concurrency_control.run.acquire()
-        if self.job_status is not None:
-            with self.job_status_lock:
-                self.job_status[self.job_id] = JobType.RUN
-        await self.run_step(JobType.RUN)
-        if self.concurrency_control is not None:
-            self.concurrency_control.run.release()
-        if self.job_status is not None:
-            with self.job_status_lock:
-                self.job_status.pop(self.job_id)
+
+        job_status_set = False
+        try:
+            if self.job_status is not None:
+                with self.job_status_lock:
+                    self.job_status[self.job_id] = JobType.RUN
+                    job_status_set = True
+
+            await self.run_step(JobType.RUN)
+
+        except Exception as e:
+            logger.error(f'Exception during run step: {str(e)}')
+            raise
+        finally:
+            # Always clean up, even on exception
+            if self.concurrency_control is not None:
+                self.concurrency_control.run.release()
+            if self.job_status is not None and job_status_set:
+                try:
+                    with self.job_status_lock:
+                        self.job_status.pop(self.job_id, None)
+                except Exception as cleanup_error:
+                    logger.error(f'Error cleaning up job status: {cleanup_error}')
+
         if self.job_details.event is not None and self.job_details.event.is_set():
             return self.get_results()
 
         # Run evaluation step
         if self.concurrency_control is not None:
             self.concurrency_control.eval.acquire()
-        if self.job_status is not None:
-            with self.job_status_lock:
-                self.job_status[self.job_id] = JobType.EVAL
-        await self.run_step(JobType.EVAL)
-        if self.concurrency_control is not None:
-            self.concurrency_control.eval.release()
-        if self.job_status is not None:
-            with self.job_status_lock:
-                self.job_status.pop(self.job_id)
+
+        job_status_set = False
+        try:
+            if self.job_status is not None:
+                with self.job_status_lock:
+                    self.job_status[self.job_id] = JobType.EVAL
+                    job_status_set = True
+
+            await self.run_step(JobType.EVAL)
+
+        except Exception as e:
+            logger.error(f'Exception during eval step: {str(e)}')
+            raise
+        finally:
+            # Always clean up, even on exception
+            if self.concurrency_control is not None:
+                self.concurrency_control.eval.release()
+            if self.job_status is not None and job_status_set:
+                try:
+                    with self.job_status_lock:
+                        self.job_status.pop(self.job_id, None)
+                except Exception as cleanup_error:
+                    logger.error(f'Error cleaning up job status: {cleanup_error}')
+
         return self.get_results()
 
     def get_results(self):
@@ -362,6 +403,7 @@ def process_job(
 
     pgid = os.getpgid(0)
     print(f'[Worker {job_id}] PID={os.getpid()} PGID={pgid}')
+
     worker = Worker(
         job_id,
         instance,
@@ -375,15 +417,53 @@ def process_job(
         job_status_lock,
         result_queue,
     )
+
     try:
         result = asyncio.run(worker.run())
+        return result
     except Exception as e:
         logger.error(
             f'[Worker {job_id}] Worker.run() failed with error: {type(e).__name__}: {str(e)}'
         )
         result = {'error': str(e)}
         traceback.print_exc()
-        result_queue.put({'job_id': job_id, 'result': result})
+
+        # Ensure result is put in queue even on failure
+        if result_queue is not None:
+            result_queue.put({'job_id': job_id, 'result': result})
+
+        return result
+    finally:
+        # This ensures cleanup happens even if the process is about to exit
+        try:
+            if concurrency_control is not None and job_status is not None:
+                with job_status_lock:
+                    if job_id in job_status:
+                        status = job_status.pop(job_id)
+                        if status == JobType.INIT:
+                            concurrency_control.init.release()
+                        elif status == JobType.RUN:
+                            concurrency_control.run.release()
+                        elif status == JobType.EVAL:
+                            concurrency_control.eval.release()
+                        logger.info(
+                            f'[Worker {job_id}] Cleaned up semaphore for {status} phase'
+                        )
+        except Exception as cleanup_error:
+            logger.error(f'[Worker {job_id}] Cleanup error: {cleanup_error}')
+            # Try to release all semaphores as a last resort
+            try:
+                if concurrency_control is not None:
+                    concurrency_control.init.release()
+                    concurrency_control.run.release()
+                    concurrency_control.eval.release()
+                    logger.info(
+                        f'[Worker {job_id}] Released all semaphores as fallback'
+                    )
+            except Exception as fallback_error:
+                logger.error(
+                    f'[Worker {job_id}] Fallback cleanup also failed: {fallback_error}'
+                )
 
 
 class JobState:
@@ -546,6 +626,45 @@ class OpenHandsServer:
         self._result_check_thread.join()
         self._result_check_thread = None
 
+    def _monitor_dead_processes(self):
+        """Monitor and clean up dead processes to prevent semaphore and lock leaks"""
+        dead_jobs = []
+
+        for job_id, job_state in list(self.jobs.items()):
+            if not job_state.process.is_alive():
+                dead_jobs.append(job_id)
+                logger.warning(f'Detected dead process for job {job_id}')
+
+        for job_id in dead_jobs:
+            self._cleanup_dead_job(job_id)
+
+    def _cleanup_dead_job(self, job_id: str):
+        """Clean up a dead job and release its semaphores and locks"""
+        try:
+            # Release semaphore if job was in progress
+            if job_id in self.job_status:
+                with self.job_status_lock:
+                    status = self.job_status.pop(job_id, None)
+                    if status == JobType.INIT:
+                        self.concurrency_control.init.release()
+                        logger.info(f'Released INIT semaphore for dead job {job_id}')
+                    elif status == JobType.RUN:
+                        self.concurrency_control.run.release()
+                        logger.info(f'Released RUN semaphore for dead job {job_id}')
+                    elif status == JobType.EVAL:
+                        self.concurrency_control.eval.release()
+                        logger.info(f'Released EVAL semaphore for dead job {job_id}')
+
+            # Remove from jobs dict
+            with self._job_details_lock:
+                if job_id in self.jobs:
+                    self.jobs[job_id].close()
+                    del self.jobs[job_id]
+
+            logger.info(f'Cleaned up dead job {job_id}')
+        except Exception as e:
+            logger.error(f'Error cleaning up dead job {job_id}: {e}')
+
     def get_unique_id(self, instance, max_retries=10):
         base = f'{get_instance_id(instance)}_{instance["trajectory_id"]}'
         base_hash = hashlib.sha256(base.encode('utf-8')).hexdigest()[:16]
@@ -594,8 +713,8 @@ class OpenHandsServer:
             job_state = self.jobs.get(job_id)
             if job_state is not None:
                 job_state.finished.set()
-        if job_id in self.job_status:
-            with self.job_status_lock:
+        with self.job_status_lock:
+            if job_id in self.job_status:
                 status = self.job_status.pop(job_id)
                 match status:
                     case JobType.INIT:
@@ -615,6 +734,9 @@ class OpenHandsServer:
         """Process a single request by launching a process_job"""
         if not self.running:
             raise RuntimeError('Server is not running')
+
+        # Monitor and clean up any dead processes before starting new ones
+        self._monitor_dead_processes()
 
         with self._address_lock:
             if len(self.weighted_addresses) == 0:
@@ -661,6 +783,17 @@ class OpenHandsServer:
             result = dict(self.jobs[job_id].result)
         except Exception as e:
             result = {'error': str(e)}
+
+        with self.job_status_lock:
+            if job_id in self.job_status:
+                status = self.job_status.pop(job_id)
+                match status:
+                    case JobType.INIT:
+                        self.concurrency_control.init.release()
+                    case JobType.RUN:
+                        self.concurrency_control.run.release()
+                    case JobType.EVAL:
+                        self.concurrency_control.eval.release()
 
         with self._job_details_lock:
             if job_id in self.jobs:
@@ -719,17 +852,16 @@ class OpenHandsServer:
 
         self.clear_singularity_jobs()
 
-        if self.concurrency_control is None:
-            self.concurrency_control = ConcurrencyControl(
-                max_init_workers=self.max_init_workers,
-                max_run_workers=self.max_run_workers,
-                max_eval_workers=self.max_eval_workers,
-            )
-
         if self.manager is None:
             self.manager = _mp_context.Manager()
             self.job_status = self.manager.dict()
             self.job_status_lock = self.manager.Lock()
+            self.concurrency_control = ConcurrencyControl(
+                manager=self.manager,
+                max_init_workers=self.max_init_workers,
+                max_run_workers=self.max_run_workers,
+                max_eval_workers=self.max_eval_workers,
+            )
 
     def stop(self):
         """Stop the server and wait for all jobs to complete"""
@@ -753,14 +885,13 @@ class OpenHandsServer:
 
         self.clear_singularity_jobs()
 
-        if self.concurrency_control is not None:
-            self.concurrency_control.release_all()
-
         if self.manager is not None:
+            self.concurrency_control.release_all()
             self.manager.shutdown()
             self.manager = None
             self.job_status = None
             self.job_status_lock = None
+            self.concurrency_control = None
 
         clear_queue(self.result_queue)
         self._stop_result_check_thread()
