@@ -18,7 +18,8 @@ class MCPClient(BaseModel):
     """
 
     session: Optional[ClientSession] = None
-    exit_stack: AsyncExitStack = AsyncExitStack()
+    # Use a per-instance AsyncExitStack to avoid cross-task cancellation issues
+    exit_stack: AsyncExitStack = Field(default_factory=AsyncExitStack)
     description: str = 'MCP client tools for server interaction'
     tools: list[MCPClientTool] = Field(default_factory=list)
     tool_map: dict[str, MCPClientTool] = Field(default_factory=dict)
@@ -211,4 +212,6 @@ class MCPClient(BaseModel):
             finally:
                 self.session = None
                 self.tools = []
+                # Reinitialize a fresh exit stack for future connections
+                self.exit_stack = AsyncExitStack()
                 logger.info('Disconnected from MCP server')
