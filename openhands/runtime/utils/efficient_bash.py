@@ -526,15 +526,15 @@ class EfficientBashSession:
         total_lines = len(lines)
 
         # Define proportional limits based on HISTORY_LIMIT
-        large_output_line_threshold = 10000
+        LARGE_OUTPUT_LINE_THRESHOLD = 10_000
 
-        if total_lines > large_output_line_threshold:
+        if total_lines > LARGE_OUTPUT_LINE_THRESHOLD:
             # For very large line-based outputs, keep only the last 10,000 lines
-            truncated_content = '\n'.join(lines[-large_output_line_threshold:])
+            truncated_content = '\n'.join(lines[-LARGE_OUTPUT_LINE_THRESHOLD:])
         else:
             # For smaller outputs, use character-based truncation
-            first_chars = self.HISTORY_LIMIT // 3  # ~16666 chars for 50k limit
-            last_chars = self.HISTORY_LIMIT - first_chars  # ~33333 chars for 50k limit
+            first_chars = self.HISTORY_LIMIT // 3  # ~3333 chars for 10k limit
+            last_chars = self.HISTORY_LIMIT - first_chars  # ~6667 chars for 10k limit
 
             first_part = content[:first_chars]
             last_part = content[-last_chars:]
