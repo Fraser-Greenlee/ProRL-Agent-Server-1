@@ -526,30 +526,11 @@ class EfficientBashSession:
         total_lines = len(lines)
 
         # Define proportional limits based on HISTORY_LIMIT
-        large_output_line_threshold = max(1000, self.HISTORY_LIMIT // 10)  # ~1000 lines for 10k limit
+        LARGE_OUTPUT_LINE_THRESHOLD = 10_000
 
-        if total_lines > large_output_line_threshold:
-            # For very large line-based outputs, preserve beginning, middle, and end
-            first_lines_count = min(500, self.HISTORY_LIMIT // 20)  # ~500 lines for 10k limit
-            middle_lines_count = min(1000, self.HISTORY_LIMIT // 10)  # ~1000 lines for 10k limit
-            last_lines_count = min(500, self.HISTORY_LIMIT // 20)  # ~500 lines for 10k limit
-
-            first_lines = lines[:first_lines_count]
-
-            # Calculate middle section to preserve important content (e.g., around line 40000 in tests)
-            # Position middle section around 80% through the content to catch test markers
-            middle_position_ratio = 0.8
-            middle_center = int(total_lines * middle_position_ratio)
-            middle_start = max(0, min(middle_center - middle_lines_count // 2,
-                                    total_lines - middle_lines_count - last_lines_count))
-            middle_end = min(total_lines, middle_start + middle_lines_count)
-            middle_lines = lines[middle_start:middle_end]
-
-            last_lines = lines[-last_lines_count:]
-
-            # Combine with truncation indicators
-            truncated_lines = first_lines + ['...'] + middle_lines + ['...'] + last_lines
-            truncated_content = '\n'.join(truncated_lines)
+        if total_lines > LARGE_OUTPUT_LINE_THRESHOLD:
+            # For very large line-based outputs, keep only the last 10,000 lines
+            truncated_content = '\n'.join(lines[-LARGE_OUTPUT_LINE_THRESHOLD:])
         else:
             # For smaller outputs, use character-based truncation
             first_chars = self.HISTORY_LIMIT // 3  # ~3333 chars for 10k limit
