@@ -70,20 +70,14 @@ def _parse_args():
     parser.add_argument(
         '--concurrency',
         type=int,
-        default=64,
+        default=32,
         help='Maximum number of concurrent evaluations to run (default: 64, matching run_swebench.py).',
     )
     parser.add_argument(
         '--allow-skip-eval',
         action='store_true',
         help='Skip evaluation when the git_patch is empty or None (mirrors utils._evaluate_agent default).',
-    )  # 6159
-    # parser.add_argument(
-    #     '--sif-name',
-    #     type=str,
-    #     default="xingyaoww_sweb.eval.x86_64.getmoto_s_moto-7524.sif",
-    #     help='Only evaluate instances for the specified SIF filename (e.g., xingyaoww_sweb.eval.x86_64.iterative_s_dvc-1809.sif). The script will convert this back to instance_id for filtering.',
-    # )
+    )
     parser.add_argument(
         '--sif-name',
         type=str,
@@ -109,10 +103,6 @@ def _sif_name_to_instance_id(sif_name: str) -> str:
 
     # Convert _s_ back to __
     instance_id = base_name.replace('_s_', '__')
-
-    if 'monai' in instance_id:
-        instance_id = instance_id.replace('monai', 'MONAI')
-        instance_id = instance_id.replace('project', 'Project')
 
     return instance_id
 
