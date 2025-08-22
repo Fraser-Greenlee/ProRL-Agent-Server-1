@@ -52,7 +52,7 @@ def _start_sse_mcp_singularity_server() -> tuple[subprocess.Popen[str], str]:
         'run',
         image_ref,
         '--stdio',
-        'npx -y @modelcontextprotocol/server-filesystem /',
+        'npx -y @modelcontextprotocol/server-filesystem /tmp',
         '--port',
         str(container_port),
         '--baseUrl',
