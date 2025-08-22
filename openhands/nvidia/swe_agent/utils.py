@@ -163,6 +163,7 @@ def get_config(
         enable_think=False, # not too sure what this does.
         enable_history_truncation=False, # turn off history truncation
         ensure_thinking_end_properly=agent_config['ensure_thinking_end_properly'], # set to true only if using text based server for training.
+        action_timeout=30.0, # 30 seconds per action
         strict_loop_detector=agent_config['strict_loop_detector'], # set to true only if training
     )
     config.set_agent_config(agent_config)

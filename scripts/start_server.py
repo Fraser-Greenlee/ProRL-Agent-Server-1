@@ -7,7 +7,8 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
-from openhands.nvidia.async_server import OpenHandsServer
+from openhands.nvidia.async_server_process import OpenHandsServer as OpenHandsServer_Process
+from openhands.nvidia.async_server import OpenHandsServer as OpenHandsServer_Thread
 from openhands.nvidia.registry import FunctionNotRegisteredError
 from openhands.nvidia.utils import (
     JobTimeoutError,
@@ -40,13 +41,15 @@ request_queue: Optional[multiprocessing.queues.Queue] = None
 job_result_queue: Optional[multiprocessing.queues.Queue] = None
 control_response_queue: Optional[multiprocessing.queues.Queue] = None
 response_thread: Optional[threading.Thread] = None
-result_futures: Dict[str, "concurrent.futures.Future"] = {}
+result_futures: Dict[str, "asyncio.Future"] = {}
 futures_lock = threading.Lock()
 accepting_requests = False
 accepting_requests_lock = threading.Lock()
 server_config: Dict[str, Any] = {}
 llm_server_addresses_buffer: List[str] = []
 config_lock = threading.Lock()
+
+thread_based_server = False
 
 
 def _reject_all_pending_futures(error_message: str):
@@ -60,7 +63,7 @@ def _reject_all_pending_futures(error_message: str):
             try:
                 fut.set_exception(RuntimeError(error_message))
             except Exception:
-                pass
+                logger.debug(f'Could not set exception on future: {error_message}')
 
 
 def _is_server_running() -> bool:
@@ -89,13 +92,32 @@ def _response_listener():
                 fut = result_futures.pop(job_id, None)
             if fut is None:
                 continue
+
+            # Check if future is already done (completed, cancelled, or has exception)
+            if fut.done():
+                logger.debug(f'Future for job {job_id} is already done (cancelled: {fut.cancelled()}), skipping result')
+                continue
+
             if ok:
                 try:
                     fut.set_result(msg.get('result'))
                 except Exception as e:
-                    fut.set_exception(e)
+                    # Only set exception if future is not already done
+                    if not fut.done():
+                        try:
+                            fut.set_exception(e)
+                        except Exception:
+                            logger.debug(f'Could not set exception on future for job {job_id}: {e}')
+                    else:
+                        logger.debug(f'Future for job {job_id} was completed while setting exception: {e}')
             else:
-                fut.set_exception(RuntimeError(msg.get('error', 'Unknown error')))
+                try:
+                    fut.set_exception(RuntimeError(msg.get('error', 'Unknown error')))
+                except Exception:
+                    if not fut.done():
+                        logger.debug(f'Could not set exception on future for job {job_id}')
+                    else:
+                        logger.debug(f'Future for job {job_id} was completed while setting exception')
         except Exception as e:
             logger.warning(f'Response listener encountered error: {e}')
 
@@ -113,9 +135,15 @@ def server_worker(
             os.setsid()
         except Exception:
             pass
-        
+
+        if thread_based_server:
+            openhands_server_class = OpenHandsServer_Thread
+            logger.info('Using thread-based server')
+        else:
+            openhands_server_class = OpenHandsServer_Process
+            logger.info('Using process-based server')
         # Initialize server with provided config
-        server = OpenHandsServer(
+        server = openhands_server_class(
             llm_server_addresses=config.get('llm_server_addresses', []),
             max_init_workers=config.get('max_init_workers'),
             max_run_workers=config.get('max_run_workers'),
@@ -129,10 +157,9 @@ def server_worker(
         server.start()
 
         # Internal executors for job concurrency and any threaded work inside process_with_timeout
-        job_executor_workers = server.max_run_workers if server.max_run_workers else 4
+        job_executor_workers = server.max_init_workers + server.max_run_workers + server.max_eval_workers + 30
         job_executor = ThreadPoolExecutor(max_workers=job_executor_workers)
-        inner_pool_workers = max(1, server.max_init_workers * 3)
-        inner_thread_pool = ThreadPoolExecutor(max_workers=inner_pool_workers)
+        inner_thread_pool = ThreadPoolExecutor(max_workers=job_executor_workers)
 
         running = True
         submitted_futures: Dict[str, "concurrent.futures.Future"] = {}
@@ -360,12 +387,12 @@ def _start_child_process():
     server_process = Process(
         target=server_worker,
         args=(request_queue, job_result_queue, control_response_queue, effective_config),
-        daemon=True,
+        daemon=False,
     )
     server_process.start()
 
     # Start background thread to collect job results
-    response_thread = threading.Thread(target=_response_listener, name='response-listener', daemon=True)
+    response_thread = threading.Thread(target=_response_listener, name='response-listener', daemon=False)
     response_thread.start()
 
     with accepting_requests_lock:
@@ -418,7 +445,7 @@ async def stop_server():
                 kill_process_tree(server_process.pid)
             except Exception as e:
                 logger.warning(f'kill_process_tree failed for pid {server_process.pid}: {e}')
-            server_process.join(timeout=5)
+            server_process.join(timeout=10)
 
         # Clean up queues and response listener
         try:
@@ -428,7 +455,7 @@ async def stop_server():
             pass
         if response_thread is not None:
             try:
-                response_thread.join(timeout=2)
+                response_thread.join(timeout=10)
             except Exception:
                 pass
 
@@ -465,11 +492,12 @@ async def get_status():
         if request_queue is not None:
             request_queue.put({'type': 'status', 'request_id': req_id})
         if control_response_queue is not None:
-            ack = control_response_queue.get(timeout=5)
+            ack = control_response_queue.get(timeout=10)
             if isinstance(ack, dict) and ack.get('type') == 'status_ack':
                 child_status = ack.get('status')
     except Exception:
         # If control path fails, still return local info
+        logger.warning('Failed to get child status; proceeding to return local info')
         pass
     if child_status:
         return {'status': 'running', 'pending_jobs': pending, **child_status}
@@ -487,7 +515,14 @@ async def cancel(request: CancelRequest):
         req_id = str(uuid.uuid4())
         if request_queue is not None:
             request_queue.put({'type': 'cancel', 'job_id': request.job_id, 'request_id': req_id})
-        # Best-effort: we don't strictly wait; if desired, we can await ack
+        # Await acknowledgment from control response queue
+        if control_response_queue is not None:
+            try:
+                ack = control_response_queue.get(timeout=10)
+                if not ack.get('ok', False):
+                    raise HTTPException(status_code=500, detail=f"Failed to cancel job: {ack.get('error', 'unknown')}")
+            except Exception:
+                pass
         return {'status': f'Cancel requested for job {request.job_id}'}
     except Exception as e:
         logger.error(f'Failed to cancel job {request.job_id}: {str(e)}')
@@ -510,7 +545,7 @@ async def add_llm_server(request: LLMServerRequest):
         req_id = str(uuid.uuid4())
         if request_queue is not None:
             request_queue.put({'type': 'add_llm_server', 'address': address, 'request_id': req_id})
-        
+
         if control_response_queue is not None:
             try:
                 ack = control_response_queue.get(timeout=5)
@@ -536,7 +571,7 @@ async def clear_llm_server():
         req_id = str(uuid.uuid4())
         if request_queue is not None:
             request_queue.put({'type': 'clear_llm_server', 'request_id': req_id})
-        
+
         if control_response_queue is not None:
             try:
                 ack = control_response_queue.get(timeout=5)
@@ -575,6 +610,18 @@ async def process(request: ProcessRequest):
         # Create a future that the response listener will fulfill
         loop = asyncio.get_event_loop()
         fut = loop.create_future()
+
+        # Add callback to clean up the future from result_futures when done
+        def cleanup_future(fut):
+            try:
+                with futures_lock:
+                    result_futures.pop(job_id, None)
+            except Exception as e:
+                logger.debug(f'Error in cleanup callback for job {job_id}: {e}')
+
+        # Use a weak reference to avoid circular references
+        fut.add_done_callback(cleanup_future)
+
         with futures_lock:
             result_futures[job_id] = fut
 
@@ -592,7 +639,9 @@ async def process(request: ProcessRequest):
 
         # Await result with timeout
         try:
-            result = await asyncio.wait_for(fut, timeout=global_timeout + 5)
+            # WARNING: We set the timeout to be 2x the global timeout for final timeout
+            result = await asyncio.wait_for(fut, timeout=global_timeout*2+10)
+            # result = await fut
         except asyncio.TimeoutError:
             # On timeout, send cancel and raise 504
             try:
@@ -600,7 +649,25 @@ async def process(request: ProcessRequest):
                     request_queue.put({'type': 'cancel', 'job_id': job_id, 'request_id': str(uuid.uuid4())})
             except Exception:
                 pass
+            # Clean up the future from result_futures and cancel it
+            with futures_lock:
+                fut_to_cancel = result_futures.pop(job_id, None)
+            if fut_to_cancel and not fut_to_cancel.done():
+                try:
+                    fut_to_cancel.cancel()
+                except Exception:
+                    pass
             raise HTTPException(status_code=504, detail='Processing timed out')
+        except Exception as e:
+            # Clean up the future from result_futures on any exception
+            with futures_lock:
+                fut_to_cancel = result_futures.pop(job_id, None)
+            if fut_to_cancel and not fut_to_cancel.done():
+                try:
+                    fut_to_cancel.cancel()
+                except Exception:
+                    pass
+            raise
         return result
     except ServerNotRunningError:
         raise
@@ -663,11 +730,24 @@ def parse_args():
         default=[],
         help='List of reward server IP addresses (default: [])',
     )
+    parser.add_argument(
+        '--use-thread-based-server',
+        action='store_true',
+        default=False,
+        help='Use thread-based server (default: False)',
+    )
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     args = parse_args()
+
+    thread_based_server = args.use_thread_based_server
+    if not thread_based_server:
+        # For process-based server, we need to set the start method to spawn
+        import multiprocessing
+        multiprocessing.set_start_method('fork')
+    logger.info(f'Using thread-based server: {thread_based_server}')
     init_server(
         max_init_workers=args.max_init_workers,
         max_run_workers=args.max_run_workers,

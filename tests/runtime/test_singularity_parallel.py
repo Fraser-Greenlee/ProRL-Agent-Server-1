@@ -363,6 +363,15 @@ def create_test_file_and_copy_to_runtime(test_params):
             f'[COPY_TO {runtime_id}] Size check result: exit_code={obs.exit_code}, output="{obs.content.strip()}"'
         )
 
+        # run python3 -c "import os; print(os.path.getsize('{container_dest_file}'))"
+        python_action = CmdRunAction(
+            command=f'python3 -c "import os; print(os.path.getsize(\'{container_dest_file}\'))"'
+        )
+        python_obs = runtime.run_action(python_action)
+        print(
+            f'[COPY_TO {runtime_id}] Python size check result: exit_code={python_obs.exit_code}, output="{python_obs.content.strip()}"'
+        )
+
         # Parse the output to get the actual file size
         actual_size = None
         if obs.exit_code == 0:
@@ -432,7 +441,7 @@ def test_singularity_runtime_parallel_copy_to(temp_dir):
     print('\n=== TESTING SINGULARITY RUNTIME PARALLEL COPY_TO ===')
     print(f'Workspace: {temp_dir}')
 
-    n_runtimes = 36
+    n_runtimes = 64
     skip_sequential = True
 
     if not skip_sequential:
