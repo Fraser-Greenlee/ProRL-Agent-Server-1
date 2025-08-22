@@ -58,7 +58,7 @@ class EfficientBashSession:
     """
 
     # Configuration constants
-    HISTORY_LIMIT = 10_000  # Maximum characters in output buffer
+    HISTORY_LIMIT = 50_000  # Maximum characters in output buffer
     PS1 = CmdOutputMetadata.to_ps1_prompt()
     OUTPUT_BUFFER_SIZE = 8192
 
@@ -533,8 +533,8 @@ class EfficientBashSession:
             truncated_content = '\n'.join(lines[-LARGE_OUTPUT_LINE_THRESHOLD:])
         else:
             # For smaller outputs, use character-based truncation
-            first_chars = self.HISTORY_LIMIT // 3  # ~3333 chars for 10k limit
-            last_chars = self.HISTORY_LIMIT - first_chars  # ~6667 chars for 10k limit
+            first_chars = self.HISTORY_LIMIT // 3
+            last_chars = self.HISTORY_LIMIT - first_chars
 
             first_part = content[:first_chars]
             last_part = content[-last_chars:]
