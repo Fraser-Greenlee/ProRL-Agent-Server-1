@@ -9,6 +9,7 @@ from evaluation.utils.shared import (  # type: ignore
     update_llm_config_for_completions_logging,
     EvalException,
 )
+from pathlib import Path
 
 from openhands.core.config.llm_config import LLMConfig
 from openhands.runtime.base import Runtime
@@ -95,6 +96,21 @@ def get_config(
         strict_loop_detector=agent_config['strict_loop_detector'],
     )
     config.set_agent_config(agent_config)
+    # Mount OpenHands source directory if provided via OVERWRITE_OPENHANDS_DIR
+    mount_dir_env = os.environ.get("OVERWRITE_OPENHANDS_DIR", "").strip()
+    if mount_dir_env:
+        try:
+            mount_path = Path(mount_dir_env).expanduser().resolve()
+            if mount_path.exists() and mount_path.is_dir():
+                config.sandbox.volumes = f"{mount_path}:/openhands/code:ro"
+            else:
+                logger.warning(
+                    f"OVERWRITE_OPENHANDS_DIR is not a valid directory: {mount_dir_env}. Skipping mount."
+                )
+        except Exception as e:
+            logger.error(
+                f"Failed to set mount from OVERWRITE_OPENHANDS_DIR='{mount_dir_env}': {e}. Skipping mount."
+            )
     return config
 
 def get_instruction(instance: pd.Series | dict, metadata: EvalMetadata) -> MessageAction:
