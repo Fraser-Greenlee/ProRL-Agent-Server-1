@@ -5,6 +5,11 @@ if TYPE_CHECKING:
     from openhands.controller.agent import Agent
 
 
+from datetime import timedelta
+
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+
 from openhands.core.config.mcp_config import (
     MCPConfig,
     MCPSHTTPServerConfig,
@@ -208,6 +213,65 @@ async def call_tool_mcp(mcp_clients: list[MCPClient], action: MCPAction) -> Obse
         name=action.name,
         arguments=action.arguments,
     )
+
+
+async def execute_mcp_action_from_config(
+    mcp_config: MCPConfig, action: MCPAction, conversation_id: str | None = None
+) -> Observation:
+    """Connect to MCP servers one-by-one and execute the action on the first
+    server that provides the requested tool, using ephemeral per-call sessions.
+    All context managers are entered/exited in the same task to avoid anyio
+    cancel-scope mismatches.
+    """
+    import asyncio
+
+    servers = list(mcp_config.sse_servers)
+    last_error: BaseException | None = None
+
+    for server in servers:
+        try:
+            headers = {}
+            if server.api_key:
+                headers = {
+                    'Authorization': f'Bearer {server.api_key}',
+                    's': server.api_key,
+                    'X-Session-API-Key': server.api_key,
+                }
+            if conversation_id:
+                headers['X-OpenHands-Conversation-ID'] = conversation_id
+
+            # Ephemeral connection and session in a single task
+            async with sse_client(
+                url=server.url, headers=headers or None, timeout=30.0
+            ) as (read_stream, write_stream):
+                async with ClientSession(
+                    read_stream,
+                    write_stream,
+                    read_timeout_seconds=timedelta(seconds=30),
+                ) as session:
+                    await session.initialize()
+                    tools_resp = await session.list_tools()
+                    tool_names = [t.name for t in tools_resp.tools]
+                    if action.name not in tool_names:
+                        continue
+                    response = await session.call_tool(
+                        name=action.name, arguments=action.arguments
+                    )
+                    return MCPObservation(
+                        content=json.dumps(response.model_dump(mode='json')),
+                        name=action.name,
+                        arguments=action.arguments,
+                    )
+        except asyncio.CancelledError as e:
+            last_error = e
+            continue
+        except Exception as e:
+            last_error = e
+            continue
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f'No MCP servers available to execute tool: {action.name}')
 
 
 async def add_mcp_tools_to_agent(
