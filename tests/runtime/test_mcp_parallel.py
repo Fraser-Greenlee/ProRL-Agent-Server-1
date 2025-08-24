@@ -9,6 +9,7 @@ and asserts that a known file exists in the returned listing.
 
 import asyncio
 import os
+import random
 import socket
 import subprocess
 import time
@@ -109,6 +110,11 @@ def _run_single_runtime(test_params: dict, sse_url: str) -> dict:
         # Configure MCP SSE server
         config.mcp.sse_servers = [MCPSSEServerConfig(url=sse_url)]
 
+        # Increase plugin initialization timeout under parallel load
+        if not getattr(config.sandbox, 'runtime_startup_env_vars', None):
+            config.sandbox.runtime_startup_env_vars = {}
+        config.sandbox.runtime_startup_env_vars['INIT_PLUGIN_TIMEOUT'] = '240'
+
         # Set up file store and event stream
         file_store = get_file_store(
             config.file_store,
@@ -131,6 +137,8 @@ def _run_single_runtime(test_params: dict, sse_url: str) -> dict:
         )
 
         # Connect
+        # Add small jitter to avoid thundering herd on plugin/server initialization
+        time.sleep(random.uniform(0.0, 0.2))
         asyncio.run(runtime.connect())
 
         # Create a unique marker directory on host and a file inside
