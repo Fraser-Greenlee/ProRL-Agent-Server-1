@@ -679,8 +679,13 @@ if __name__ == '__main__':
     client: ActionExecutor | None = None
     mcp_router: MCPRouter | None = None
     mcp_http_server: Server | None = None
-    MCP_ROUTER_PROFILE_PATH = os.path.join(
+    # Use a session-scoped MCP router profile file to avoid cross-runtime conflicts
+    DEFAULT_MCP_ROUTER_PROFILE_PATH = os.path.join(
         os.path.dirname(__file__), 'mcp', 'config.json'
+    )
+    SESSION_ID_FOR_MCP = os.environ.get('OPENHANDS_SESSION_ID', 'default')
+    MCP_ROUTER_PROFILE_PATH = os.path.join(
+        '/tmp', f'openhands_mcp_config_{SESSION_ID_FOR_MCP}.json'
     )
 
     @asynccontextmanager
@@ -707,6 +712,20 @@ if __name__ == '__main__':
             mcp_http_server = None
         else:
             logger.info('Initializing MCP Router...')
+            # Ensure per-session MCP router profile exists; initialize from default if needed
+            if not os.path.exists(MCP_ROUTER_PROFILE_PATH):
+                try:
+                    shutil.copy(
+                        DEFAULT_MCP_ROUTER_PROFILE_PATH, MCP_ROUTER_PROFILE_PATH
+                    )
+                    logger.info(
+                        f'Initialized MCP router profile for session at {MCP_ROUTER_PROFILE_PATH}'
+                    )
+                except Exception as e:
+                    logger.error(
+                        f'Failed to initialize MCP router profile: {e}', exc_info=True
+                    )
+                    raise
             mcp_router = MCPRouter(
                 profile_path=MCP_ROUTER_PROFILE_PATH,
                 router_config=RouterConfig(
