@@ -1,4 +1,5 @@
 import os
+import stat
 import signal
 import subprocess
 import json
@@ -110,6 +111,7 @@ def _is_retryablewait_until_alive_error(exception):
             httpx.RemoteProtocolError,
             httpx.HTTPStatusError,
             httpx.ReadTimeout,
+            httpx.ConnectError,  # UDS not created yet
         ),
     )
 
@@ -573,9 +575,6 @@ class SingularityRuntime(ActionExecutionClient):
             self.container_pid = self.container_process.pid
             SingularityRuntime._active_container_pids.add(self.container_pid)
 
-            # Give the container a moment to start
-            time.sleep(2)
-
             # Check if the process started successfully
             if self.container_process.poll() is not None:
                 # Process failed to start, remove from registry
@@ -583,7 +582,7 @@ class SingularityRuntime(ActionExecutionClient):
                     SingularityRuntime._active_container_pids.remove(self.container_pid)
                 stdout, stderr = self.container_process.communicate()
                 raise RuntimeError(
-                    f'Container failed to start. Return code: {self.container_process.returncode}\n'
+                    f'Process Poll: Container failed to start. Return code: {self.container_process.returncode}\n'
                     f'Stdout: {stdout}\nStderr: {stderr}'
                 )
 
@@ -647,10 +646,10 @@ class SingularityRuntime(ActionExecutionClient):
         )
 
     @tenacity.retry(
-        stop=tenacity.stop_after_delay(120) | stop_if_should_exit(),
+        stop=tenacity.stop_after_delay(240) | stop_if_should_exit(),
         retry=tenacity.retry_if_exception(_is_retryablewait_until_alive_error),
         reraise=True,
-        wait=tenacity.wait_fixed(2),
+        wait=tenacity.wait_fixed(1),
     )
     def wait_until_alive(self):
         if not self._is_container_running():
