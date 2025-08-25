@@ -293,25 +293,79 @@ async def add_mcp_tools_to_agent(
     )
 
     extra_stdio_servers = []
+    extra_shttp_servers: list[MCPSHTTPServerConfig] = []
 
     # Add microagent MCP tools if available
-    mcp_config: MCPConfig = app_config.mcp
     microagent_mcp_configs = memory.get_microagent_mcp_tools()
-    for mcp_config in microagent_mcp_configs:
-        if mcp_config.sse_servers:
+    for micro_mcp_config in microagent_mcp_configs:
+        if micro_mcp_config.sse_servers:
             logger.warning(
                 'Microagent MCP config contains SSE servers, it is not yet supported.'
             )
 
-        if mcp_config.stdio_servers:
-            for stdio_server in mcp_config.stdio_servers:
+        if micro_mcp_config.stdio_servers:
+            for stdio_server in micro_mcp_config.stdio_servers:
                 # Check if this stdio server is already in the config
                 if stdio_server not in extra_stdio_servers:
                     extra_stdio_servers.append(stdio_server)
                     logger.info(f'Added microagent stdio server: {stdio_server.name}')
 
-    # Add the runtime as another MCP server
+        # Also collect SHTTP servers from microagents for parity
+        if (
+            hasattr(micro_mcp_config, 'shttp_servers')
+            and micro_mcp_config.shttp_servers
+        ):
+            for shttp_server in micro_mcp_config.shttp_servers:
+                # Deduplicate by (url, api_key)
+                if not any(
+                    (s.url == shttp_server.url and s.api_key == shttp_server.api_key)
+                    for s in extra_shttp_servers
+                ):
+                    extra_shttp_servers.append(shttp_server)
+                    logger.info(
+                        f'Added microagent SHTTP server: {getattr(shttp_server, "url", "<unknown>")}'
+                    )
+
+    # Also include stdio servers from app_config.mcp for parity
+    if hasattr(app_config, 'mcp') and getattr(app_config, 'mcp') is not None:
+        base_mcp: MCPConfig = app_config.mcp
+        if base_mcp.stdio_servers:
+            for stdio_server in base_mcp.stdio_servers:
+                if stdio_server not in extra_stdio_servers:
+                    extra_stdio_servers.append(stdio_server)
+        if hasattr(base_mcp, 'shttp_servers') and base_mcp.shttp_servers:
+            for shttp_server in base_mcp.shttp_servers:  # type: ignore[attr-defined]
+                if not any(
+                    (s.url == shttp_server.url and s.api_key == shttp_server.api_key)
+                    for s in extra_shttp_servers
+                ):
+                    extra_shttp_servers.append(shttp_server)
+
+    # Add the runtime as another MCP server (merges stdio servers and adds runtime SSE)
     updated_mcp_config = runtime.get_mcp_config(extra_stdio_servers)
+
+    # Merge in extra SHTTP servers (if any) so downstream fetch includes them
+    if extra_shttp_servers:
+        # Ensure attribute exists
+        current_shttp = list(getattr(updated_mcp_config, 'shttp_servers', []) or [])
+        for server in extra_shttp_servers:
+            if not any(
+                (s.url == server.url and s.api_key == server.api_key)
+                for s in current_shttp
+            ):
+                current_shttp.append(server)
+        try:
+            updated_mcp_config.shttp_servers = current_shttp  # type: ignore[attr-defined]
+        except Exception:
+            # If model is frozen or attribute missing, fall back to constructing a new config
+            try:
+                updated_mcp_config = MCPConfig(
+                    sse_servers=updated_mcp_config.sse_servers,
+                    stdio_servers=updated_mcp_config.stdio_servers,
+                )
+                updated_mcp_config.shttp_servers = current_shttp  # type: ignore[attr-defined]
+            except Exception as e:
+                logger.warning(f'Failed to merge SHTTP servers into MCP config: {e}')
 
     # Fetch the MCP tools
     mcp_tools = await fetch_mcp_tools_from_config(updated_mcp_config)
