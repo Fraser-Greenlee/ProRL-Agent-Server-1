@@ -9,6 +9,7 @@ from datetime import timedelta
 
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 
 from openhands.core.config.mcp_config import (
     MCPConfig,
@@ -225,10 +226,13 @@ async def execute_mcp_action_from_config(
     """
     import asyncio
 
-    servers = list(mcp_config.sse_servers)
+    # Build prioritized lists: try SSE first (local router/external SSE), then SHTTP
+    sse_servers = list(mcp_config.sse_servers)
+    shttp_servers = list(getattr(mcp_config, 'shttp_servers', []) or [])
     last_error: BaseException | None = None
 
-    for server in servers:
+    # Try SSE servers
+    for server in sse_servers:
         try:
             headers = {}
             if server.api_key:
@@ -248,6 +252,53 @@ async def execute_mcp_action_from_config(
                     read_stream,
                     write_stream,
                     read_timeout_seconds=timedelta(seconds=30),
+                ) as session:
+                    await session.initialize()
+                    tools_resp = await session.list_tools()
+                    tool_names = [t.name for t in tools_resp.tools]
+                    if action.name not in tool_names:
+                        continue
+                    response = await session.call_tool(
+                        name=action.name, arguments=action.arguments
+                    )
+                    return MCPObservation(
+                        content=json.dumps(response.model_dump(mode='json')),
+                        name=action.name,
+                        arguments=action.arguments,
+                    )
+        except asyncio.CancelledError as e:
+            last_error = e
+            continue
+        except Exception as e:
+            last_error = e
+            continue
+
+    # Try SHTTP servers
+    for server in shttp_servers:
+        try:
+            headers = {}
+            if server.api_key:
+                headers = {
+                    'Authorization': f'Bearer {server.api_key}',
+                    's': server.api_key,
+                    'X-Session-API-Key': server.api_key,
+                }
+            if conversation_id:
+                headers['X-OpenHands-Conversation-ID'] = conversation_id
+
+            timeout_delta = timedelta(seconds=30)
+            sse_read_timeout_delta = timedelta(seconds=300)
+
+            async with streamablehttp_client(
+                url=server.url,
+                headers=headers if headers else None,
+                timeout=timeout_delta,
+                sse_read_timeout=sse_read_timeout_delta,
+            ) as (read_stream, write_stream, _):
+                async with ClientSession(
+                    read_stream,
+                    write_stream,
+                    read_timeout_seconds=timeout_delta,
                 ) as session:
                     await session.initialize()
                     tools_resp = await session.list_tools()
