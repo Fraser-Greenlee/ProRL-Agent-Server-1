@@ -1,4 +1,5 @@
 import os
+import stat
 import signal
 import subprocess
 import json
@@ -110,6 +111,7 @@ def _is_retryablewait_until_alive_error(exception):
             httpx.RemoteProtocolError,
             httpx.HTTPStatusError,
             httpx.ReadTimeout,
+            httpx.ConnectError,  # UDS not created yet
         ),
     )
 
