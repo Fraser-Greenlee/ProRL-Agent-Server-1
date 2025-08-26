@@ -74,6 +74,65 @@ def _start_sse_mcp_singularity_server() -> tuple[subprocess.Popen[str], str]:
     return proc, f'http://localhost:{host_port}/sse'
 
 
+def _start_multiple_sse_mcp_singularity_servers(
+    count: int,
+) -> tuple[list[subprocess.Popen[str]], list[str]]:
+    """Start multiple SSE MCP servers and return (processes, sse_urls).
+
+    Starts servers sequentially but waits once after all are spawned to allow
+    initialization, avoiding N× sleep.
+    """
+    if count <= 0:
+        raise ValueError('count must be >= 1')
+
+    procs: list[subprocess.Popen[str]] = []
+    urls: list[str] = []
+
+    # Ensure Singularity is available once up-front
+    try:
+        subprocess.run(
+            ['singularity', '--version'], check=True, capture_output=True, text=True
+        )
+    except Exception as e:
+        pytest.skip(f'Singularity is not available on this system: {e}')
+
+    image_ref = 'docker://supercorp/supergateway'
+
+    for _ in range(count):
+        # Find a free host port and bind container to same
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('', 0))
+            host_port = s.getsockname()[1]
+        container_port = host_port
+
+        run_cmd = [
+            'singularity',
+            'run',
+            image_ref,
+            '--stdio',
+            'npx -y @modelcontextprotocol/server-filesystem /tmp',
+            '--port',
+            str(container_port),
+            '--baseUrl',
+            f'http://localhost:{host_port}',
+        ]
+
+        proc = subprocess.Popen(
+            run_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        procs.append(proc)
+        urls.append(f'http://localhost:{host_port}/sse')
+
+    # Give all servers time to initialize
+    time.sleep(10)
+
+    return procs, urls
+
+
 def _stop_process(proc: subprocess.Popen[str]) -> None:
     try:
         proc.terminate()
@@ -196,8 +255,9 @@ def _run_single_runtime(test_params: dict, sse_url: str) -> dict:
 def test_mcp_actions_parallel_singularity(temp_dir):
     """Run MCP actions in 64 parallel Singularity runtimes."""
 
-    # Start a shared SSE MCP server for all runtimes
-    proc, sse_url = _start_sse_mcp_singularity_server()
+    # Start multiple SSE MCP servers and distribute runtimes round-robin
+    sse_server_count = int(os.getenv('SSE_SERVER_COUNT', '8'))
+    procs, sse_urls = _start_multiple_sse_mcp_singularity_servers(sse_server_count)
 
     try:
         n_runtimes = 64
@@ -214,9 +274,11 @@ def test_mcp_actions_parallel_singularity(temp_dir):
 
         with ThreadPoolExecutor(max_workers=n_runtimes) as executor:
             futures = {
-                executor.submit(_run_single_runtime, params, sse_url): params[
-                    'runtime_id'
-                ]
+                executor.submit(
+                    _run_single_runtime,
+                    params,
+                    sse_urls[(params['runtime_id'] - 1) % len(sse_urls)],
+                ): params['runtime_id']
                 for params in test_params_list
             }
 
@@ -255,4 +317,5 @@ def test_mcp_actions_parallel_singularity(temp_dir):
         )
 
     finally:
-        _stop_process(proc)
+        for _p in procs:
+            _stop_process(_p)
