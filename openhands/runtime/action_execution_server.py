@@ -26,14 +26,19 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
 from mcpm import MCPRouter, RouterConfig
+from mcpm.router.router import RouterSseTransport
 from mcpm.router.router import logger as mcp_router_logger
 from openhands_aci.editor.editor import OHEditor
 from openhands_aci.editor.exceptions import ToolError
 from openhands_aci.editor.results import ToolResult
 from openhands_aci.utils.diff import get_diff
 from pydantic import BaseModel
+from starlette.applications import Starlette
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.routing import Mount
 from uvicorn.config import Config
 from uvicorn.server import Server
 
@@ -734,13 +739,45 @@ if __name__ == '__main__':
                 ),
             )
             allowed_origins = ['*']
-            sse_app = await mcp_router.get_sse_server_app(
-                allow_origins=allowed_origins, include_lifespan=False
+            # Build SSE Starlette app manually to ensure proper ASGI callables
+            api_key = (
+                None
+                if not mcp_router.router_config.auth_enabled
+                else mcp_router.router_config.api_key
             )
+            sse_transport = RouterSseTransport('/messages/', api_key=api_key)
 
-            # Create separate HTTP server for MCP SSE
-            mcp_http_app = FastAPI()
-            mcp_http_app.mount('/', sse_app)
+            async def sse_asgi(scope, receive, send):
+                async with sse_transport.connect_sse(
+                    scope,
+                    receive,
+                    send,
+                ) as (read_stream, write_stream):
+                    await mcp_router.aggregated_server.run(
+                        read_stream,
+                        write_stream,
+                        mcp_router.aggregated_server.initialization_options,
+                    )
+
+            middleware = []
+            if allowed_origins is not None:
+                middleware.append(
+                    Middleware(
+                        CORSMiddleware,
+                        allow_origins=allowed_origins,
+                        allow_methods=['*'],
+                        allow_headers=['*'],
+                    )
+                )
+
+            mcp_http_app = Starlette(
+                debug=False,
+                middleware=middleware,
+                routes=[
+                    Mount('/sse', app=sse_asgi),
+                    Mount('/messages/', app=sse_transport.handle_post_message),
+                ],
+            )
 
             # MCP HTTP server configuration
             LOOPBACK_IP = os.environ.get('LOOPBACK_IP', '127.0.0.1')
