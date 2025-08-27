@@ -738,6 +738,11 @@ if __name__ == '__main__':
                     auth_enabled=bool(SESSION_API_KEY),
                 ),
             )
+            # Ensure the router is fully initialized so aggregated_server has
+            # the necessary initialization options in older mcpm versions.
+            # Newer mcpm versions may not require or expose initialization_options,
+            # but initialize_router() remains safe and idempotent.
+            await mcp_router.initialize_router()
             allowed_origins = ['*']
             # Build SSE Starlette app manually to ensure proper ASGI callables
             api_key = (
@@ -753,11 +758,22 @@ if __name__ == '__main__':
                     receive,
                     send,
                 ) as (read_stream, write_stream):
-                    await mcp_router.aggregated_server.run(
-                        read_stream,
-                        write_stream,
-                        mcp_router.aggregated_server.initialization_options,
-                    )
+                    server = mcp_router.aggregated_server
+                    # Backward/forward compatibility across mcpm versions:
+                    # - Older versions require passing initialization_options
+                    # - Newer versions may not expose it and accept (read, write)
+                    try:
+                        init_opts = server.initialization_options  # type: ignore[attr-defined]
+                        await server.run(
+                            read_stream,
+                            write_stream,
+                            init_opts,
+                        )
+                    except AttributeError:
+                        await server.run(
+                            read_stream,
+                            write_stream,
+                        )
 
             middleware = []
             if allowed_origins is not None:
