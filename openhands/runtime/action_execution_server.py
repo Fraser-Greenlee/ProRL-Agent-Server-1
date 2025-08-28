@@ -20,13 +20,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from zipfile import ZipFile
 
+from anyio import ClosedResourceError, EndOfStream
 from binaryornot.check import is_binary
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
-import anyio
-from anyio import ClosedResourceError, EndOfStream
 from mcpm import MCPRouter, RouterConfig
 from mcpm.router.router import RouterSseTransport
 from mcpm.router.router import logger as mcp_router_logger
@@ -783,13 +782,19 @@ if __name__ == '__main__':
                                     )
                             except* (ClosedResourceError, EndOfStream):
                                 # Client disconnected while server was running; benign
-                                logger.debug('SSE server run ended due to disconnect (ClosedResourceError/EndOfStream).')
+                                logger.debug(
+                                    'SSE server run ended due to disconnect (ClosedResourceError/EndOfStream).'
+                                )
                         except Exception as e:
                             # Log unexpected exceptions to aid debugging but prevent crashing the app
-                            logger.error(f'SSE server encountered an error: {e}', exc_info=True)
+                            logger.error(
+                                f'SSE server encountered an error: {e}', exc_info=True
+                            )
                 except* (ClosedResourceError, EndOfStream):
                     # Client disconnected; safe to ignore
-                    logger.debug('SSE connection closed by client or ended (ClosedResourceError/EndOfStream).')
+                    logger.debug(
+                        'SSE connection closed by client or ended (ClosedResourceError/EndOfStream).'
+                    )
 
             middleware = []
             if allowed_origins is not None:

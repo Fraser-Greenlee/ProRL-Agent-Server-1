@@ -12,6 +12,7 @@ import json
 import os
 import random
 import socket
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,6 +26,8 @@ from openhands.events.action.mcp import MCPAction
 from openhands.runtime.impl.singularity.singularity_runtime import SingularityRuntime
 from openhands.runtime.plugins import AgentSkillsRequirement, JupyterRequirement
 from openhands.storage import get_file_store
+
+_port_lock = threading.Lock()
 
 
 def _find_free_port() -> int:

@@ -248,8 +248,10 @@ async def execute_mcp_action_from_config(
                 for sub in exc.exceptions:  # type: ignore[attr-defined]
                     if _is_retryable(sub):
                         return True
-            except Exception:
-                pass
+            except Exception as iter_err:
+                logger.debug(
+                    f'Unexpected error while checking retryable sub-exception: {iter_err}'
+                )
 
         if isinstance(exc, (asyncio.CancelledError, asyncio.TimeoutError)):
             return True
@@ -399,7 +401,6 @@ async def add_mcp_tools_to_agent(
 
     # Add microagent MCP tools if available
     microagent_mcp_configs = memory.get_microagent_mcp_tools()
-    print(f"SHIZHE DEBUG: microagent_mcp_configs: {microagent_mcp_configs}")
 
     for micro_mcp_config in microagent_mcp_configs:
         if micro_mcp_config.sse_servers:
