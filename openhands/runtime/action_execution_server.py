@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from zipfile import ZipFile
 
+from anyio import ClosedResourceError, EndOfStream
 from binaryornot.check import is_binary
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -753,27 +754,39 @@ if __name__ == '__main__':
             sse_transport = RouterSseTransport('/messages/', api_key=api_key)
 
             async def sse_asgi(scope, receive, send):
-                async with sse_transport.connect_sse(
-                    scope,
-                    receive,
-                    send,
-                ) as (read_stream, write_stream):
-                    server = mcp_router.aggregated_server
-                    # Backward/forward compatibility across mcpm versions:
-                    # - Older versions require passing initialization_options
-                    # - Newer versions may not expose it and accept (read, write)
-                    try:
-                        init_opts = server.initialization_options  # type: ignore[attr-defined]
-                        await server.run(
-                            read_stream,
-                            write_stream,
-                            init_opts,
-                        )
-                    except AttributeError:
-                        await server.run(
-                            read_stream,
-                            write_stream,
-                        )
+                try:
+                    async with sse_transport.connect_sse(
+                        scope,
+                        receive,
+                        send,
+                    ) as (read_stream, write_stream):
+                        try:
+                            server = mcp_router.aggregated_server
+                            # Backward/forward compatibility across mcpm versions:
+                            # - Older versions require passing initialization_options
+                            # - Newer versions may not expose it and accept (read, write)
+                            try:
+                                init_opts = server.initialization_options  # type: ignore[attr-defined]
+                                await server.run(
+                                    read_stream,
+                                    write_stream,
+                                    init_opts,
+                                )
+                            except AttributeError:
+                                await server.run(
+                                    read_stream,
+                                    write_stream,
+                                )
+                        except Exception as e:
+                            # Log unexpected exceptions to aid debugging but prevent crashing the app
+                            logger.error(
+                                f'SSE server encountered an error: {e}', exc_info=True
+                            )
+                except* (ClosedResourceError, EndOfStream):
+                    # Client disconnected; safe to ignore
+                    logger.debug(
+                        'SSE connection closed by client or ended (ClosedResourceError/EndOfStream).'
+                    )
 
             middleware = []
             if allowed_origins is not None:
