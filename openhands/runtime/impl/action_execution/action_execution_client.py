@@ -447,7 +447,9 @@ class ActionExecutionClient(Runtime):
             # Add the runtime as an SSE server using the dedicated MCP HTTP endpoint
             mcp_sse_url = f"{self.action_execution_server_url}/sse"
 
-            updated_mcp_config.sse_servers.append(
+            # Prioritize the runtime SSE server first to reduce connection issues with external servers
+            updated_mcp_config.sse_servers.insert(
+                0,
                 MCPSSEServerConfig(
                     url=mcp_sse_url,
                     api_key=self.session_api_key,
@@ -468,8 +470,7 @@ class ActionExecutionClient(Runtime):
             return ErrorObservation('MCP functionality is not available on Windows')
 
         # Import here to avoid circular imports
-        from openhands.mcp.utils import call_tool_mcp as call_tool_mcp_handler
-        from openhands.mcp.utils import create_mcp_clients
+        from openhands.mcp.utils import execute_mcp_action_from_config
 
         # Get the updated MCP config
         updated_mcp_config = self.get_mcp_config()
@@ -478,18 +479,8 @@ class ActionExecutionClient(Runtime):
             f'Creating MCP clients with servers: {updated_mcp_config.sse_servers}',
         )
 
-        # Create clients for this specific operation
-        mcp_clients = await create_mcp_clients(updated_mcp_config.sse_servers, updated_mcp_config.shttp_servers, self.sid)
-
-        # Call the tool and return the result
-        # No need for try/finally since disconnect() is now just resetting state
-        result = await call_tool_mcp_handler(mcp_clients, action)
-
-        # Reset client state (no active connections to worry about)
-        for client in mcp_clients:
-            await client.disconnect()
-
-        return result
+        # Execute action by connecting to servers sequentially and short-circuiting.
+        return await execute_mcp_action_from_config(updated_mcp_config, action, self.sid)
 
     def close(self) -> None:
         # Make sure we don't close the session multiple times

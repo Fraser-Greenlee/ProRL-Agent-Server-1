@@ -5,7 +5,7 @@ import subprocess
 import json
 import time
 from functools import lru_cache
-from typing import Callable
+from typing import Callable, IO
 from uuid import UUID
 from pathlib import Path
 import threading
@@ -159,6 +159,8 @@ class SingularityRuntime(ActionExecutionClient):
     _active_container_pids: set[int] = set()  # Keep for backward compatibility with shutdown
     _port_allocation_lock = threading.Lock()  # Lock for synchronizing port allocation
     _runtime_builder_lock = threading.Lock()  # Lock for synchronizing runtime builder
+    _container_stdout: IO[str] | None = None
+    _container_stderr: IO[str] | None = None
 
     def __init__(
         self,
@@ -216,6 +218,8 @@ class SingularityRuntime(ActionExecutionClient):
         self.main_module = main_module
         self.runtime_builder = SingularityRuntimeBuilder()
         self.headless_mode = headless_mode
+        self._container_stdout = None
+        self._container_stderr = None
 
         super().__init__(
             config,
@@ -562,21 +566,28 @@ class SingularityRuntime(ActionExecutionClient):
             self.log('debug', f'Starting Singularity container with command: {" ".join(cmd)}')
 
             # Start the container process in a new process group for easier cleanup
+            # Redirect stdout/stderr to per-runtime files to avoid PIPE backpressure
+            log_dir = '/tmp/openhands_singularity_logs'
+            os.makedirs(log_dir, exist_ok=True)
+            stdout_path = os.path.join(log_dir, f'{self.sid}.out')
+            stderr_path = os.path.join(log_dir, f'{self.sid}.err')
+            self._container_stdout = open(stdout_path, 'w')
+            self._container_stderr = open(stderr_path, 'w')
+
             self.container_process = subprocess.Popen(
                 cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=self._container_stdout,
+                stderr=self._container_stderr,
                 text=True,
                 env=dict(os.environ, **env_vars),
                 start_new_session=True  # Creates a new session and process group
             )
 
+            assert self.container_process is not None
+
             # Save the container PID and add to active registry
             self.container_pid = self.container_process.pid
             SingularityRuntime._active_container_pids.add(self.container_pid)
-
-            # Give the container a moment to start
-            time.sleep(2)
 
             # Check if the process started successfully
             if self.container_process.poll() is not None:
@@ -585,7 +596,7 @@ class SingularityRuntime(ActionExecutionClient):
                     SingularityRuntime._active_container_pids.remove(self.container_pid)
                 stdout, stderr = self.container_process.communicate()
                 raise RuntimeError(
-                    f'Container failed to start. Return code: {self.container_process.returncode}\n'
+                    f'Process Poll: Container failed to start. Return code: {self.container_process.returncode}\n'
                     f'Stdout: {stdout}\nStderr: {stderr}'
                 )
 
@@ -649,10 +660,10 @@ class SingularityRuntime(ActionExecutionClient):
         )
 
     @tenacity.retry(
-        stop=tenacity.stop_after_delay(120) | stop_if_should_exit(),
+        stop=tenacity.stop_after_delay(240) | stop_if_should_exit(),
         retry=tenacity.retry_if_exception(_is_retryablewait_until_alive_error),
         reraise=True,
-        wait=tenacity.wait_fixed(2),
+        wait=tenacity.wait_fixed(1),
     )
     def wait_until_alive(self):
         if not self._is_container_running():
@@ -677,6 +688,20 @@ class SingularityRuntime(ActionExecutionClient):
 
 
         super().close()
+
+        # Close container log file handles if open
+        try:
+            if self._container_stdout is not None:
+                self._container_stdout.close()
+                self._container_stdout = None
+        except Exception as e:
+            logger.warning(f'Failed to close container stdout for {self.container_name}: {e}')
+        try:
+            if self._container_stderr is not None:
+                self._container_stderr.close()
+                self._container_stderr = None
+        except Exception as e:
+            logger.warning(f'Failed to close container stderr for {self.container_name}: {e}')
 
         if rm_all_containers is None:
             rm_all_containers = self.config.sandbox.rm_all_containers

@@ -25,15 +25,22 @@ from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
+import anyio
+from anyio import ClosedResourceError, EndOfStream
 from mcpm import MCPRouter, RouterConfig
+from mcpm.router.router import RouterSseTransport
 from mcpm.router.router import logger as mcp_router_logger
 from openhands_aci.editor.editor import OHEditor
 from openhands_aci.editor.exceptions import ToolError
 from openhands_aci.editor.results import ToolResult
 from openhands_aci.utils.diff import get_diff
 from pydantic import BaseModel
+from starlette.applications import Starlette
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.routing import Mount
 from uvicorn.config import Config
 from uvicorn.server import Server
 
@@ -679,8 +686,13 @@ if __name__ == '__main__':
     client: ActionExecutor | None = None
     mcp_router: MCPRouter | None = None
     mcp_http_server: Server | None = None
-    MCP_ROUTER_PROFILE_PATH = os.path.join(
+    # Use a session-scoped MCP router profile file to avoid cross-runtime conflicts
+    DEFAULT_MCP_ROUTER_PROFILE_PATH = os.path.join(
         os.path.dirname(__file__), 'mcp', 'config.json'
+    )
+    SESSION_ID_FOR_MCP = os.environ.get('OPENHANDS_SESSION_ID', 'default')
+    MCP_ROUTER_PROFILE_PATH = os.path.join(
+        '/tmp', f'openhands_mcp_config_{SESSION_ID_FOR_MCP}.json'
     )
 
     @asynccontextmanager
@@ -707,6 +719,20 @@ if __name__ == '__main__':
             mcp_http_server = None
         else:
             logger.info('Initializing MCP Router...')
+            # Ensure per-session MCP router profile exists; initialize from default if needed
+            if not os.path.exists(MCP_ROUTER_PROFILE_PATH):
+                try:
+                    shutil.copy(
+                        DEFAULT_MCP_ROUTER_PROFILE_PATH, MCP_ROUTER_PROFILE_PATH
+                    )
+                    logger.info(
+                        f'Initialized MCP router profile for session at {MCP_ROUTER_PROFILE_PATH}'
+                    )
+                except Exception as e:
+                    logger.error(
+                        f'Failed to initialize MCP router profile: {e}', exc_info=True
+                    )
+                    raise
             mcp_router = MCPRouter(
                 profile_path=MCP_ROUTER_PROFILE_PATH,
                 router_config=RouterConfig(
@@ -714,14 +740,76 @@ if __name__ == '__main__':
                     auth_enabled=bool(SESSION_API_KEY),
                 ),
             )
+            # Ensure the router is fully initialized so aggregated_server has
+            # the necessary initialization options in older mcpm versions.
+            # Newer mcpm versions may not require or expose initialization_options,
+            # but initialize_router() remains safe and idempotent.
+            await mcp_router.initialize_router()
             allowed_origins = ['*']
-            sse_app = await mcp_router.get_sse_server_app(
-                allow_origins=allowed_origins, include_lifespan=False
+            # Build SSE Starlette app manually to ensure proper ASGI callables
+            api_key = (
+                None
+                if not mcp_router.router_config.auth_enabled
+                else mcp_router.router_config.api_key
             )
+            sse_transport = RouterSseTransport('/messages/', api_key=api_key)
 
-            # Create separate HTTP server for MCP SSE
-            mcp_http_app = FastAPI()
-            mcp_http_app.mount('/', sse_app)
+            async def sse_asgi(scope, receive, send):
+                try:
+                    async with sse_transport.connect_sse(
+                        scope,
+                        receive,
+                        send,
+                    ) as (read_stream, write_stream):
+                        # Wrapper try for generic exceptions only (no except* here)
+                        try:
+                            # Dedicated inner try that only uses except* for disconnection cases
+                            try:
+                                server = mcp_router.aggregated_server
+                                # Backward/forward compatibility across mcpm versions:
+                                # - Older versions require passing initialization_options
+                                # - Newer versions may not expose it and accept (read, write)
+                                try:
+                                    init_opts = server.initialization_options  # type: ignore[attr-defined]
+                                    await server.run(
+                                        read_stream,
+                                        write_stream,
+                                        init_opts,
+                                    )
+                                except AttributeError:
+                                    await server.run(
+                                        read_stream,
+                                        write_stream,
+                                    )
+                            except* (ClosedResourceError, EndOfStream):
+                                # Client disconnected while server was running; benign
+                                logger.debug('SSE server run ended due to disconnect (ClosedResourceError/EndOfStream).')
+                        except Exception as e:
+                            # Log unexpected exceptions to aid debugging but prevent crashing the app
+                            logger.error(f'SSE server encountered an error: {e}', exc_info=True)
+                except* (ClosedResourceError, EndOfStream):
+                    # Client disconnected; safe to ignore
+                    logger.debug('SSE connection closed by client or ended (ClosedResourceError/EndOfStream).')
+
+            middleware = []
+            if allowed_origins is not None:
+                middleware.append(
+                    Middleware(
+                        CORSMiddleware,
+                        allow_origins=allowed_origins,
+                        allow_methods=['*'],
+                        allow_headers=['*'],
+                    )
+                )
+
+            mcp_http_app = Starlette(
+                debug=False,
+                middleware=middleware,
+                routes=[
+                    Mount('/sse', app=sse_asgi),
+                    Mount('/messages/', app=sse_transport.handle_post_message),
+                ],
+            )
 
             # MCP HTTP server configuration
             LOOPBACK_IP = os.environ.get('LOOPBACK_IP', '127.0.0.1')
