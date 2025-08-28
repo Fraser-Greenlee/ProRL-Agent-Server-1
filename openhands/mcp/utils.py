@@ -72,26 +72,12 @@ async def create_mcp_clients(
     servers: list[MCPSSEServerConfig | MCPSHTTPServerConfig] = sse_servers.copy()
     servers.extend(shttp_servers.copy())
 
-    # # 假设 servers 是一个 list[MCPSSEServerConfig]
-    # unique_servers = []
-    # seen_urls = set()
-
-    # for s in servers:
-    #     if s.url not in seen_urls:
-    #         print(f"SHIZHE DEBUG: current server: {s}, seen_urls: {seen_urls}")
-    #         unique_servers.append(s)
-    #         seen_urls.add(s.url)
-
-    # servers = unique_servers
-
     if not servers:
         return []
 
     mcp_clients = []
 
-    print(f"SHIZHE DEBUG: servers: {servers}")
     for server in servers:
-        print(f"SHIZHE DEBUG: server: {server}")
         is_sse = isinstance(server, MCPSSEServerConfig)
         connection_type = 'SSE' if is_sse else 'SHTTP'
         logger.info(
@@ -151,7 +137,6 @@ async def fetch_mcp_tools_from_config(
     mcp_tools = []
     try:
         logger.debug(f'Creating MCP clients with config: {mcp_config}')
-        print(f"SHIZHE DEBUG: mcp_config: {mcp_config}")
         # Create clients - this will fetch tools but not maintain active connections
         mcp_clients = await create_mcp_clients(
             mcp_config.sse_servers, mcp_config.shttp_servers, conversation_id
