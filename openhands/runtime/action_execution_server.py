@@ -20,12 +20,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from zipfile import ZipFile
 
-from anyio import ClosedResourceError, EndOfStream
 from binaryornot.check import is_binary
 from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
+import anyio
+from anyio import ClosedResourceError, EndOfStream
 from mcpm import MCPRouter, RouterConfig
 from mcpm.router.router import RouterSseTransport
 from mcpm.router.router import logger as mcp_router_logger
@@ -760,33 +761,35 @@ if __name__ == '__main__':
                         receive,
                         send,
                     ) as (read_stream, write_stream):
+                        # Wrapper try for generic exceptions only (no except* here)
                         try:
-                            server = mcp_router.aggregated_server
-                            # Backward/forward compatibility across mcpm versions:
-                            # - Older versions require passing initialization_options
-                            # - Newer versions may not expose it and accept (read, write)
+                            # Dedicated inner try that only uses except* for disconnection cases
                             try:
-                                init_opts = server.initialization_options  # type: ignore[attr-defined]
-                                await server.run(
-                                    read_stream,
-                                    write_stream,
-                                    init_opts,
-                                )
-                            except AttributeError:
-                                await server.run(
-                                    read_stream,
-                                    write_stream,
-                                )
+                                server = mcp_router.aggregated_server
+                                # Backward/forward compatibility across mcpm versions:
+                                # - Older versions require passing initialization_options
+                                # - Newer versions may not expose it and accept (read, write)
+                                try:
+                                    init_opts = server.initialization_options  # type: ignore[attr-defined]
+                                    await server.run(
+                                        read_stream,
+                                        write_stream,
+                                        init_opts,
+                                    )
+                                except AttributeError:
+                                    await server.run(
+                                        read_stream,
+                                        write_stream,
+                                    )
+                            except* (ClosedResourceError, EndOfStream):
+                                # Client disconnected while server was running; benign
+                                logger.debug('SSE server run ended due to disconnect (ClosedResourceError/EndOfStream).')
                         except Exception as e:
                             # Log unexpected exceptions to aid debugging but prevent crashing the app
-                            logger.error(
-                                f'SSE server encountered an error: {e}', exc_info=True
-                            )
+                            logger.error(f'SSE server encountered an error: {e}', exc_info=True)
                 except* (ClosedResourceError, EndOfStream):
                     # Client disconnected; safe to ignore
-                    logger.debug(
-                        'SSE connection closed by client or ended (ClosedResourceError/EndOfStream).'
-                    )
+                    logger.debug('SSE connection closed by client or ended (ClosedResourceError/EndOfStream).')
 
             middleware = []
             if allowed_origins is not None:

@@ -72,12 +72,26 @@ async def create_mcp_clients(
     servers: list[MCPSSEServerConfig | MCPSHTTPServerConfig] = sse_servers.copy()
     servers.extend(shttp_servers.copy())
 
+    # # 假设 servers 是一个 list[MCPSSEServerConfig]
+    # unique_servers = []
+    # seen_urls = set()
+
+    # for s in servers:
+    #     if s.url not in seen_urls:
+    #         print(f"SHIZHE DEBUG: current server: {s}, seen_urls: {seen_urls}")
+    #         unique_servers.append(s)
+    #         seen_urls.add(s.url)
+
+    # servers = unique_servers
+
     if not servers:
         return []
 
     mcp_clients = []
 
+    print(f"SHIZHE DEBUG: servers: {servers}")
     for server in servers:
+        print(f"SHIZHE DEBUG: server: {server}")
         is_sse = isinstance(server, MCPSSEServerConfig)
         connection_type = 'SSE' if is_sse else 'SHTTP'
         logger.info(
@@ -137,6 +151,7 @@ async def fetch_mcp_tools_from_config(
     mcp_tools = []
     try:
         logger.debug(f'Creating MCP clients with config: {mcp_config}')
+        print(f"SHIZHE DEBUG: mcp_config: {mcp_config}")
         # Create clients - this will fetch tools but not maintain active connections
         mcp_clients = await create_mcp_clients(
             mcp_config.sse_servers, mcp_config.shttp_servers, conversation_id
@@ -226,10 +241,46 @@ async def execute_mcp_action_from_config(
     """
     import asyncio
 
+    # Lazy imports to avoid circular deps and optional runtime costs
+    try:
+        from anyio import ClosedResourceError, EndOfStream  # type: ignore
+    except Exception:  # pragma: no cover - anyio always present in runtime
+        ClosedResourceError = type('ClosedResourceError', (), {})  # type: ignore
+        EndOfStream = type('EndOfStream', (), {})  # type: ignore
+    from openhands.events.observation import ErrorObservation
+
+    def _is_retryable(exc: BaseException) -> bool:
+        """Classify transient/disconnect errors as retryable.
+
+        - anyio ClosedResourceError / EndOfStream during SSE writes
+        - asyncio.CancelledError (from cancel scopes/timeouts during I/O)
+        - asyncio.TimeoutError
+        - ExceptionGroup containing any of the above
+        """
+        # Handle exception groups (Python 3.11+)
+        if hasattr(exc, 'exceptions') and isinstance(exc, BaseException):  # type: ignore[unreachable]
+            try:
+                for sub in exc.exceptions:  # type: ignore[attr-defined]
+                    if _is_retryable(sub):
+                        return True
+            except Exception:
+                pass
+
+        if isinstance(exc, (asyncio.CancelledError, asyncio.TimeoutError)):
+            return True
+        # anyio types
+        if isinstance(exc, (ClosedResourceError, EndOfStream)):
+            return True
+
+        # Fallback: string match for wrapped ClosedResourceError
+        msg = str(exc)
+        return 'ClosedResourceError' in msg or 'EndOfStream' in msg
+
     # Build prioritized lists: try SSE first (local router/external SSE), then SHTTP
     sse_servers = list(mcp_config.sse_servers)
     shttp_servers = list(getattr(mcp_config, 'shttp_servers', []) or [])
     last_error: BaseException | None = None
+    last_error_retryable = False
 
     # Try SSE servers
     for server in sse_servers:
@@ -268,9 +319,11 @@ async def execute_mcp_action_from_config(
                     )
         except asyncio.CancelledError as e:
             last_error = e
+            last_error_retryable = True
             continue
         except Exception as e:
             last_error = e
+            last_error_retryable = _is_retryable(e)
             continue
 
     # Try SHTTP servers
@@ -315,14 +368,27 @@ async def execute_mcp_action_from_config(
                     )
         except asyncio.CancelledError as e:
             last_error = e
+            last_error_retryable = True
             continue
         except Exception as e:
             last_error = e
+            last_error_retryable = _is_retryable(e)
             continue
 
     if last_error is not None:
-        raise last_error
-    raise RuntimeError(f'No MCP servers available to execute tool: {action.name}')
+        # Return a structured observation so the agent can decide to retry.
+        error_id = 'MCP_RETRYABLE_ERROR' if last_error_retryable else 'MCP_ERROR'
+        message = (
+            f'MCP endpoint error while executing tool {action.name}: '
+            f'{type(last_error).__name__}: {last_error}. '
+            f'{"This looks transient; you can retry." if last_error_retryable else ""}'
+        ).strip()
+        return ErrorObservation(content=message, error_id=error_id)
+
+    return ErrorObservation(
+        content=f'No MCP servers available to execute tool: {action.name}',
+        error_id='MCP_NO_SERVER',
+    )
 
 
 async def add_mcp_tools_to_agent(
@@ -348,6 +414,8 @@ async def add_mcp_tools_to_agent(
 
     # Add microagent MCP tools if available
     microagent_mcp_configs = memory.get_microagent_mcp_tools()
+    print(f"SHIZHE DEBUG: microagent_mcp_configs: {microagent_mcp_configs}")
+
     for micro_mcp_config in microagent_mcp_configs:
         if micro_mcp_config.sse_servers:
             logger.warning(
