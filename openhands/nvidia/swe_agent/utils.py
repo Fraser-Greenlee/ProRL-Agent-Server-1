@@ -8,6 +8,7 @@ import json
 import copy
 import traceback
 import tempfile
+from pathlib import Path
 from evaluation.benchmarks.swe_bench.run_infer import (  # type: ignore
     initialize_runtime,
     get_instruction,
@@ -148,7 +149,21 @@ def get_config(
             metadata.llm_config, metadata.eval_output_dir, instance['instance_id']
         )
     )
-
+    # Mount OpenHands source directory if provided via OVERWRITE_OPENHANDS_DIR
+    mount_dir_env = os.environ.get("OVERWRITE_OPENHANDS_DIR", "").strip()
+    if mount_dir_env:
+        try:
+            mount_path = Path(mount_dir_env).expanduser().resolve()
+            if mount_path.exists() and mount_path.is_dir():
+                config.sandbox.volumes = f"{mount_path}:/openhands/code:ro"
+            else:
+                logger.warning(
+                    f"OVERWRITE_OPENHANDS_DIR is not a valid directory: {mount_dir_env}. Skipping mount."
+                )
+        except Exception as e:
+            logger.error(
+                f"Failed to set mount from OVERWRITE_OPENHANDS_DIR='{mount_dir_env}': {e}. Skipping mount."
+            )
     # https://github.com/All-Hands-AI/OpenHands/blob/main/openhands/core/config/agent_config.py
 
     # Think Tool
