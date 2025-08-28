@@ -603,6 +603,9 @@ class OpenHandsServer:
 
         self._result_check_thread = None
 
+        self._dead_process_lock = threading.RLock()
+        self._dead_process_timestamps = {}
+
     def _start_result_check_thread(self):
         self._result_check_thread = threading.Thread(
             target=self._result_check_thread_func
@@ -630,10 +633,23 @@ class OpenHandsServer:
         """Monitor and clean up dead processes to prevent semaphore and lock leaks"""
         dead_jobs = []
 
+        with self._dead_process_lock:
+            for job_id in list(self._dead_process_timestamps):
+                if job_id not in self.jobs:
+                    self._dead_process_timestamps.pop(job_id)
+
+        # Clean up dead processes with grace period of 10 seconds
         for job_id, job_state in list(self.jobs.items()):
             if not job_state.process.is_alive():
-                dead_jobs.append(job_id)
-                logger.warning(f'Detected dead process for job {job_id}')
+                with self._dead_process_lock:
+                    if job_id not in self._dead_process_timestamps:
+                        self._dead_process_timestamps[job_id] = time.time()
+                    elif time.time() - self._dead_process_timestamps[job_id] > 10.0:
+                        dead_time = self._dead_process_timestamps.pop(job_id)
+                        dead_jobs.append(job_id)
+                        logger.warning(
+                            f'Detected dead process for job {job_id}, process dead for {time.time() - dead_time} seconds'
+                        )
 
         for job_id in dead_jobs:
             self._cleanup_dead_job(job_id)
@@ -863,6 +879,8 @@ class OpenHandsServer:
                 max_eval_workers=self.max_eval_workers,
             )
 
+        self._dead_process_timestamps.clear()
+
     def stop(self):
         """Stop the server and wait for all jobs to complete"""
         if not self.running:
@@ -895,4 +913,6 @@ class OpenHandsServer:
 
         clear_queue(self.result_queue)
         self._stop_result_check_thread()
+
+        self._dead_process_timestamps.clear()
         logger.info('Server stopped')

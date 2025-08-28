@@ -145,6 +145,9 @@ async def cleanup_timed_out_job(server, job_id: str | None = None):
     if job_id is None:
         return
 
+    if not hasattr(server, '_job_details'):
+        return
+
     if job_id in server._job_details:
         job_details = server._job_details[job_id]
 
@@ -249,7 +252,7 @@ def process_messages_from_agent_state(
             model_name = job_details.llm_config.custom_tokenizer
             # Default to Qwen3-8B if custom_tokenizer is not set.
             if model_name is None:
-                model_name = 'Qwen/Qwen3-8B'
+                model_name = 'Qwen/Qwen3-4B-Instruct-2507'
             else:
                 assert 'qwen3' in model_name.lower(), (
                     'token_level_generation is only supported for Qwen3 models.'
