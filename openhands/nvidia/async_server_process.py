@@ -37,7 +37,7 @@ from openhands.nvidia.utils import (
 )
 
 # Use spawn context for multiprocessing to avoid pickle errors
-_mp_context = mp.get_context('fork')
+_mp_context = mp.get_context('spawn')
 
 
 @dataclass
@@ -53,17 +53,30 @@ class ConcurrencyControl:
         max_run_workers: int,
         max_eval_workers: int,
     ):
+        self.max_init_workers = max_init_workers
+        self.max_run_workers = max_run_workers
+        self.max_eval_workers = max_eval_workers
+
         self.init = manager.Semaphore(max_init_workers)
         self.run = manager.Semaphore(max_run_workers)
         self.eval = manager.Semaphore(max_eval_workers)
 
     def release_all(self):
-        for _ in range(self.init.get_value()):
-            self.init.release()
-        for _ in range(self.run.get_value()):
-            self.run.release()
-        for _ in range(self.eval.get_value()):
-            self.eval.release()
+        for _ in range(self.max_init_workers):
+            try:
+                self.init.release()
+            except Exception:
+                break
+        for _ in range(self.max_run_workers):
+            try:
+                self.run.release()
+            except Exception:
+                break
+        for _ in range(self.max_eval_workers):
+            try:
+                self.eval.release()
+            except Exception:
+                break
 
 
 class JobType(Enum):
@@ -594,7 +607,7 @@ class OpenHandsServer:
         self.jobs: dict[str, JobState] = {}
 
         self.running = False
-        self.result_queue = _mp_context.Queue()
+        self.result_queue = None
 
         self.concurrency_control = None
         self.manager = None
@@ -864,8 +877,6 @@ class OpenHandsServer:
             self._exclude_pids = get_singularity_job_pids()
             logger.info(f'Excluded Singularity job PIDs: {self._exclude_pids}')
 
-        self._start_result_check_thread()
-
         self.clear_singularity_jobs()
 
         if self.manager is None:
@@ -878,6 +889,9 @@ class OpenHandsServer:
                 max_run_workers=self.max_run_workers,
                 max_eval_workers=self.max_eval_workers,
             )
+            self.result_queue = self.manager.Queue()
+
+        self._start_result_check_thread()
 
         self._dead_process_timestamps.clear()
 
@@ -903,6 +917,9 @@ class OpenHandsServer:
 
         self.clear_singularity_jobs()
 
+        clear_queue(self.result_queue)
+        self._stop_result_check_thread()
+
         if self.manager is not None:
             self.concurrency_control.release_all()
             self.manager.shutdown()
@@ -910,9 +927,7 @@ class OpenHandsServer:
             self.job_status = None
             self.job_status_lock = None
             self.concurrency_control = None
-
-        clear_queue(self.result_queue)
-        self._stop_result_check_thread()
+            self.result_queue = None
 
         self._dead_process_timestamps.clear()
         logger.info('Server stopped')
