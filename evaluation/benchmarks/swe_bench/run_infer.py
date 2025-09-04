@@ -450,19 +450,6 @@ def initialize_runtime(
         obs = runtime.run_action(action)
         assert isinstance(obs, CmdOutputObservation)
         patch_result = obs.content
-        if APPLY_PATCH_FAIL in patch_result:
-            resolved = False
-            return {
-                "report": {
-                    "empty_generation": len(bug_patch.strip()) == 0,
-                    "resolved": False,
-                    "failed_apply_patch": True,
-                    "error_eval": False,
-                    "test_timeout": False,
-                },
-                "apply_patch_output": patch_result,
-                "test_output": "",
-            }
 
     logger.info('-' * 30)
     logger.info('END Runtime Initialization Fn')
