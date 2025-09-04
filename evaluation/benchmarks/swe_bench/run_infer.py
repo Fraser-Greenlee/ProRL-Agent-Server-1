@@ -109,7 +109,7 @@ Follow these steps to reproduce the issue:
         # Decide FINAL REVIEW sentence based on the dataset kind
         final_review_line = (
             "6. FINAL REVIEW: Carefully re-read the problem description and compare your changes with the base commit."
-            if instance.get("data_kind") == "r2egym"
+            if instance.get("data_kind") == "r2egym" or instance.get("data_kind") == "swesmith"
             else f"6. FINAL REVIEW: Carefully re-read the problem description and compare your changes with the base commit {instance['base_commit']}."
         )
         instruction = f"""
@@ -430,6 +430,40 @@ def initialize_runtime(
             f'Expected to find python interpreter from testbed, but got: {str(obs)}',
         )
 
+    if "swesmith" in metadata.dataset.lower() and metadata.details.get("is_inference", False):
+        bug_patch = metadata.details['bug_patch']
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            patch_path = os.path.join(tmp_dir, "patch.diff")
+            with open(patch_path, "w") as f:
+                f.write(bug_patch)
+            runtime.copy_to(patch_path, "/tmp")
+        apply_cmd = (
+            "cd /testbed && "
+            f"(git apply -v /tmp/patch.diff && echo '{APPLY_PATCH_PASS}' || "
+            f"(echo 'Failed to apply patch with git apply, trying with patch command...' && "
+            f"(patch --batch --fuzz=5 -p1 -i /tmp/patch.diff && echo '{APPLY_PATCH_PASS}' || "
+            f"echo '{APPLY_PATCH_FAIL}')))"
+        )
+        action = CmdRunAction(command=apply_cmd)
+        action.set_hard_timeout(60)
+        obs = runtime.run_action(action)
+        assert isinstance(obs, CmdOutputObservation)
+        patch_result = obs.content
+        if APPLY_PATCH_FAIL in patch_result:
+            resolved = False
+            return {
+                "report": {
+                    "empty_generation": len(bug_patch.strip()) == 0,
+                    "resolved": False,
+                    "failed_apply_patch": True,
+                    "error_eval": False,
+                    "test_timeout": False,
+                },
+                "apply_patch_output": patch_result,
+                "test_output": "",
+            }
+
     logger.info('-' * 30)
     logger.info('END Runtime Initialization Fn')
     logger.info('-' * 30)
@@ -555,6 +589,10 @@ def complete_runtime(
         if instance.get("data_kind") == "r2egym":
             action = CmdRunAction(
                 command=f'git diff --no-color --cached {instance["old_commit"]} > patch.diff'
+            )
+        elif instance.get("data_kind") == "swesmith":
+            action = CmdRunAction(
+                command=f'git diff --no-color --cached {instance["commit"]} > patch.diff'
             )
         else:
             action = CmdRunAction(

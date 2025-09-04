@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 import argparse
@@ -89,7 +88,7 @@ def _align_instance(v, all_instance_keys):
 def main() -> None:
 
     parser = argparse.ArgumentParser(description="Prepare data: merge and pre-process parquet files from a directory (SWE-Bench, R2E-Gym, etc.).")
-    parser.add_argument("--data-dir", type=Path, default="/lustre/fsw/portfolios/llmservice/users/shaokunz/project/data/recipe/swe_r2e", help="Directory containing parquet files to process.")
+    parser.add_argument("--data-dir", type=Path, default="/lustre/fsw/portfolios/llmservice/users/shaokunz/project/data/filtered_r2egym", help="Directory containing parquet files to process.")
 
     args = parser.parse_args()
     data_dir: Path = args.data_dir.resolve()

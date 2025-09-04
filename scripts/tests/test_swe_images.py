@@ -11,6 +11,39 @@ from openhands.nvidia.swe_agent.r2egym_parser import ParsedCommit
 from openhands.nvidia.swe_agent.utils import evaluate_agent as _evaluate_agent
 
 
+def _sif_name_to_instance_id(sif_name: str) -> str:
+    # Remove .sif extension
+    base_name = sif_name.replace('.sif', '')
+
+    # Remove common prefixes
+    if base_name.startswith('docker.io_swebench_'):
+        base_name = base_name[len('docker.io_swebench_') :]
+    elif base_name.startswith('xingyaoww_'):
+        base_name = base_name[len('xingyaoww_') :]
+
+    # Remove sweb.eval.x86_64. prefix if present
+    if base_name.startswith('sweb.eval.x86_64.'):
+        base_name = base_name[len('sweb.eval.x86_64.') :]
+
+    # Convert _s_ back to __
+    instance_id = base_name.replace('_s_', '__')
+
+    if 'monai' in instance_id:
+        instance_id = instance_id.replace('monai', 'MONAI')
+        instance_id = instance_id.replace('project', 'Project')
+
+    return instance_id
+
+
+def _sif_to_swesmith_docker(sif_name: str) -> str:
+    if sif_name.endswith('.sif'):
+        sif_name = sif_name[:-4]
+    if '_' in sif_name:
+        owner, rest = sif_name.split('_', 1)
+        return f'{owner}/{rest}'
+    return sif_name
+
+
 def pre_process_r2egym_instance(r2egym_instance):
     r2egym_instance = pd.Series(r2egym_instance)
     r2egym_instance = r2egym_instance.apply(
@@ -70,7 +103,7 @@ def _parse_args():
     parser.add_argument(
         '--concurrency',
         type=int,
-        default=32,
+        default=64,
         help='Maximum number of concurrent evaluations to run (default: 64, matching run_swebench.py).',
     )
     parser.add_argument(
@@ -85,26 +118,6 @@ def _parse_args():
         help='Only evaluate instances for the specified SIF filename (e.g., xingyaoww_sweb.eval.x86_64.iterative_s_dvc-1809.sif). The script will convert this back to instance_id for filtering.',
     )
     return parser.parse_args()
-
-
-def _sif_name_to_instance_id(sif_name: str) -> str:
-    # Remove .sif extension
-    base_name = sif_name.replace('.sif', '')
-
-    # Remove common prefixes
-    if base_name.startswith('docker.io_swebench_'):
-        base_name = base_name[len('docker.io_swebench_') :]
-    elif base_name.startswith('xingyaoww_'):
-        base_name = base_name[len('xingyaoww_') :]
-
-    # Remove sweb.eval.x86_64. prefix if present
-    if base_name.startswith('sweb.eval.x86_64.'):
-        base_name = base_name[len('sweb.eval.x86_64.') :]
-
-    # Convert _s_ back to __
-    instance_id = base_name.replace('_s_', '__')
-
-    return instance_id
 
 
 async def _evaluate_instances(
@@ -183,15 +196,31 @@ async def _evaluate_r2egym(instances: list[dict], concurrency: int, allow_skip: 
 
 def main():
     args = _parse_args()
+
     dataset_df = pd.read_parquet(args.dataset_path)
+
     if args.num_instances is not None:
         dataset_df = dataset_df.head(args.num_instances)
 
     is_r2egym = dataset_df.get('docker_image') is not None
+    is_swesmith = (not is_r2egym) and (
+        'image_name' in dataset_df.columns or 'repo' in dataset_df.columns
+    )
 
-    # Optional filter by SIF filename
-    if args.sif_name:
-        # Convert SIF filename to instance_id
+    if is_swesmith and args.sif_name:
+        target_docker_image = _sif_to_swesmith_docker(args.sif_name)
+        print(f'[swe-smith] Target docker/image_name: {target_docker_image}')
+        if 'image_name' in dataset_df.columns:
+            mask = dataset_df['image_name'] == target_docker_image
+        else:
+            mask = dataset_df['repo'] == target_docker_image  # fallback
+        dataset_df = dataset_df[mask]
+        if len(dataset_df) == 0:
+            print(f'[swe-smith] No instance matches docker_image {target_docker_image}')
+            return
+        dataset_df = dataset_df.head(1)  # only first instance
+
+    if args.sif_name and not is_swesmith:
         target_instance_id = _sif_name_to_instance_id(args.sif_name)
         print(
             f'[evaluate_gold] Filtering for SIF: {args.sif_name} -> instance_id: {target_instance_id}'
@@ -217,14 +246,16 @@ def main():
 
             mask = dataset_df.apply(_matches_target, axis=1)
         else:
-            # For swe-gym, check the instance_id in the instance column
+
             def _extract_instance_id(row):
-                instance = row.get('instance', {})
-                if isinstance(instance, dict):
-                    return instance.get('instance_id', '')
-                elif hasattr(instance, 'get'):
-                    return instance.get('instance_id', '')
-                return ''
+                if 'instance' in row and isinstance(row['instance'], (dict, pd.Series)):
+                    inst = row['instance']
+                    if isinstance(inst, dict):
+                        return inst.get('instance_id', '')
+                    elif hasattr(inst, 'get'):
+                        return inst.get('instance_id', '')
+                # swe-smith flat structure
+                return row.get('instance_id', '')
 
             instance_ids = dataset_df.apply(_extract_instance_id, axis=1)
             print(f'[DEBUG] Looking for target_instance_id: {target_instance_id}')
@@ -251,7 +282,7 @@ def main():
                 # Print first few instance IDs for debugging
                 for i, iid in enumerate(instance_ids.head(10)):
                     print(f'[DEBUG] instance_ids[{i}]: {iid}')
-                mask = pd.Series([False] * len(instance_ids))
+                mask = pd.Series([False] * len(instance_ids), index=dataset_df.index)
 
         dataset_df = dataset_df[mask]
         if len(dataset_df) == 0:
@@ -268,6 +299,17 @@ def main():
     if is_r2egym:
         for idx, row in dataset_df.iterrows():
             inst_series = pre_process_r2egym_instance(row)
+            if 'trajectory_id' not in inst_series or pd.isna(
+                inst_series.get('trajectory_id')
+            ):
+                inst_series['trajectory_id'] = idx
+            instances.append(inst_series.to_dict())
+    elif is_swesmith:
+        for idx, row in dataset_df.iterrows():
+            inst_series = row.apply(
+                lambda x: x.tolist() if isinstance(x, np.ndarray) else x
+            )
+            inst_series['data_kind'] = 'swesmith'
             if 'trajectory_id' not in inst_series or pd.isna(
                 inst_series.get('trajectory_id')
             ):
