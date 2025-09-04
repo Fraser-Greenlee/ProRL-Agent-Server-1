@@ -50,6 +50,7 @@ def infer_instance_type(instance: dict) -> str:
     _RULES: list[tuple[str, Callable[[dict], bool]]] = [
         ("r2egym", lambda inst: "docker_image" in inst and not pd.isna(inst['docker_image'])),
         ("swebench_multimodal", lambda inst: "image_assets" in inst and not pd.isna(inst['image_assets'])),
+        ("swesmith", lambda inst: inst.get('data_kind') == 'swesmith' or 'image_name' in inst),
         ("swebench", lambda inst: True),
     ]
     if 'data_kind' in instance:
@@ -71,6 +72,14 @@ from swegym.harness.run_evaluation import (
     APPLY_PATCH_PASS,
 )
 from swegym.harness.test_spec import make_test_spec
+
+# Import swesmith constants for TEST_OUTPUT markers
+try:
+    from swesmith.constants import TEST_OUTPUT_START, TEST_OUTPUT_END
+except ImportError:
+    # Fallback values if swesmith is not available
+    TEST_OUTPUT_START = ">>>>> Start Test Output"
+    TEST_OUTPUT_END = ">>>>> End Test Output"
 
 
 def get_instance_docker_image(instance, data_kind = "swebench") -> str:
@@ -96,6 +105,10 @@ def get_instance_docker_image(instance, data_kind = "swebench") -> str:
             instance_id = instance["instance_id"]
         image_name = f"sweb.eval.x86_64.{instance_id}".replace("__", "_s_")
         docker_prefix = DOCKER_IMAGE_PREFIX.rstrip("/")
+    elif data_kind == "swesmith":
+        logger.debug("data_kind is swesmith")
+        # For SWE-smith, the instance should directly provide the docker image name
+        return instance.get("image_name")
     else:
         raise ValueError(f"Invalid data kind: {data_kind}")
     result = f"{docker_prefix}/{image_name}".lower()
@@ -119,7 +132,7 @@ def get_config(
     sandbox_config.use_host_network = False
     # Add platform to the sandbox config to solve issue 4401
     sandbox_config.platform = 'linux/amd64'
-    if data_kind != "r2egym":
+    if data_kind not in ["r2egym", "swesmith"]:
         sandbox_config.remote_runtime_resource_factor = get_instance_resource_factor(
             dataset_name=metadata.dataset or "swebench",
             instance_id=instance['instance_id'],
@@ -194,11 +207,24 @@ async def initialize_agents(
         data_split:str = "train",
         agent_config: dict = dict(_DEFAULT_AGENT_CONFIG),
     ) -> tuple[Runtime, EvalMetadata, OpenHandsConfig]:
+    # Ensure instance is a plain dict
+    if isinstance(instance, pd.Series):
+        instance = instance.to_dict()
     # Fall back to a sensible default if the caller does not provide an
     # explicit ``llm_config`` (mirrors the behaviour of the old
     # ``initialize_agents`` implementation that lived in
     # ``scripts/test_local_agent.py``).
     dataset = infer_instance_type(instance)
+    # Ensure instance carries the data_kind information forward
+    instance.setdefault('data_kind', dataset)
+
+    # For swe-smith ensure commit/version fields
+    if dataset == 'swesmith':
+        if 'commit' not in instance:
+            inferred = _infer_commit_from_instance_id(instance.get('instance_id', ''))
+            if inferred:
+                instance['commit'] = inferred
+        instance.setdefault('version', instance.get('commit', None))
 
     if llm_config is None:
         raise ValueError('LLM config is None, cannot initialize.')
@@ -224,6 +250,9 @@ async def initialize_agents(
     metadata.details['remote_runtime_resource_factor'] = (  # type: ignore[index]
         config.sandbox.remote_runtime_resource_factor
     )
+    if dataset == "swesmith":
+        metadata.details['bug_patch'] = instance['patch']
+        metadata.details['is_inference'] = agent_config.get('is_inference', False)
 
     runtime = create_runtime(config, sid=sid)
 
@@ -479,6 +508,123 @@ def _apply_patch_and_evaluate_r2egym(runtime, git_patch: str, instance: dict):
         "test_output": test_output,
     }
 
+def _apply_patch_and_evaluate_swesmith(runtime, git_patch: str, instance: dict):
+    
+    from openhands.events.action import CmdRunAction
+    from openhands.events.observation import CmdOutputObservation
+    import tempfile, os, time, uuid, re, json
+
+    from swebench.harness.constants import (
+        APPLY_PATCH_FAIL,
+        APPLY_PATCH_PASS,
+    )
+
+    from swesmith.harness.grading import get_eval_report as swe_smith_get_eval_report
+    from swebench.harness.constants import (
+        KEY_INSTANCE_ID,
+        KEY_PREDICTION,
+        KEY_MODEL,
+        LOG_TEST_OUTPUT,
+    )
+    from swesmith.profiles import registry
+
+    # Normalise instance id
+    instance_id = instance.get("instance_id") or instance.get(KEY_INSTANCE_ID)
+    instance[KEY_INSTANCE_ID] = instance_id
+    instance["data_kind"] = "swesmith"
+
+    rp = registry.get_from_inst(instance)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        patch_path = os.path.join(tmp_dir, "patch.diff")
+        with open(patch_path, "w") as f:
+            f.write(git_patch)
+        runtime.copy_to(patch_path, "/tmp")
+
+    apply_cmd = (
+        "cd /testbed && "
+        f"(git apply -v /tmp/patch.diff && echo '{APPLY_PATCH_PASS}' || "
+        f"(echo 'Failed to apply patch with git apply, trying with patch command...' && "
+        f"(patch --batch --fuzz=5 -p1 -i /tmp/patch.diff && echo '{APPLY_PATCH_PASS}' || "
+        f"echo '{APPLY_PATCH_FAIL}')))"
+    )
+    action = CmdRunAction(command=apply_cmd)
+    action.set_hard_timeout(60)
+    obs = runtime.run_action(action)
+    assert isinstance(obs, CmdOutputObservation)
+    patch_result = obs.content
+    if APPLY_PATCH_FAIL in patch_result:
+        resolved = False
+        return {
+            "report": {
+                "empty_generation": len(git_patch.strip()) == 0,
+                "resolved": False,
+                "failed_apply_patch": True,
+                "error_eval": False,
+                "test_timeout": False,
+            },
+            "apply_patch_output": patch_result,
+            "test_output": "",
+        }
+    
+    # Build eval script
+    test_command, _ = rp.get_test_cmd(instance, f2p_only=True)
+
+    if not test_command:
+        test_command = "echo 'No tests specified'; exit 1"
+    script_content = "\n".join([
+        "#!/bin/bash",
+        "set -uxo pipefail",
+        f": '{TEST_OUTPUT_START}'",
+        test_command,
+        f": '{TEST_OUTPUT_END}'",
+    ])
+
+    remote_path = "/tmp/"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        local_script = os.path.join(tmpdir, "eval.sh")
+        with open(local_script, "w") as fp:
+            fp.write(script_content + "\n")
+        runtime.run_action(CmdRunAction(command=f"rm -rf {remote_path}"))
+        runtime.copy_to(local_script, remote_path)
+    
+    remote_path = "/tmp/eval.sh"
+    # Make executable
+    runtime.run_action(CmdRunAction(command=f"chmod +x {remote_path}"))
+
+    # Run evaluation with timeout 20min
+    action = CmdRunAction(command=f"/bin/bash {remote_path}")
+    # action.set_hard_timeout(rp.timeout if hasattr(rp, "timeout") else 1200)
+    obs = runtime.run_action(action)
+    assert isinstance(obs, CmdOutputObservation)
+    test_output = obs.content
+
+    # Use temporary directory with unique filename for multi-threading safety
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_log_local = os.path.join(tmpdir, f"test_output_{instance_id}.txt")
+        with open(test_log_local, "w") as f:
+            f.write(test_output)
+        # time.sleep(10)
+        prediction_dict = {
+            KEY_INSTANCE_ID: instance_id,
+            KEY_PREDICTION: git_patch,
+            KEY_MODEL: "openhands",
+        }
+        report = swe_smith_get_eval_report(prediction_dict, instance, test_log_local, f2p_only=True)
+        resolved = report.get("resolved", False)
+
+        return {
+            "report": {
+                "empty_generation": len(git_patch.strip()) == 0,
+                "resolved": resolved,
+                "failed_apply_patch": False,
+                "error_eval": False,
+                "test_timeout": False,
+            },
+            "apply_patch_output": patch_result,
+            "test_output": test_output,
+        }
+
 def _apply_patch_and_evaluate(
     runtime,
     git_patch: str,
@@ -669,10 +815,17 @@ async def evaluate_agent(git_patch: str | None, instance: dict, sid: str | None 
     )
 
     try:
-        runtime, _, _ = await initialize_agents(instance, llm_config=llm_config, sid=sid)
+        agent_config = _DEFAULT_AGENT_CONFIG.copy()
+        if instance.get("data_kind") == "swesmith":
+            agent_config['is_inference'] = False
+        runtime, _, _ = await initialize_agents(instance, llm_config=llm_config, sid=sid, agent_config = agent_config)
         if instance.get("data_kind") == "r2egym":
             test_result = await call_sync_from_async(
                 _apply_patch_and_evaluate_r2egym, runtime, git_patch, instance
+            )
+        elif instance.get("data_kind") == "swesmith":
+            test_result = await call_sync_from_async(
+                _apply_patch_and_evaluate_swesmith, runtime, git_patch, instance
             )
         else:
             test_result = await call_sync_from_async(
@@ -690,3 +843,14 @@ async def evaluate_agent(git_patch: str | None, instance: dict, sid: str | None 
             await call_sync_from_async(runtime.close)
 
     return test_result
+
+def _infer_commit_from_instance_id(instance_id: str) -> str | None:
+    try:
+        rest = instance_id.split('.', 1)[1]
+        hash_part = rest.split('.', 1)[0]
+        hex_chars = set('0123456789abcdef')
+        if len(hash_part) in (7,8,40) and all(c in hex_chars for c in hash_part.lower()):
+            return hash_part
+    except Exception:
+        pass
+    return None
