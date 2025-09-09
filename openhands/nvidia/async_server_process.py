@@ -839,7 +839,7 @@ class OpenHandsServer:
         p = _mp_context.Process(target=process_job, args=args)
         logger.info(
             f'Starting process {job_id}.'
-            + (f' Assigned CPUs: {assigned_cpus}' if assigned_cpus else '')
+            + (f' Assigned CPUs: {len(assigned_cpus)}' if assigned_cpus else '')
         )
         p.start()
 
