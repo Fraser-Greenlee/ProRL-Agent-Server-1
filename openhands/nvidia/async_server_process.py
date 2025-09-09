@@ -586,6 +586,7 @@ class OpenHandsServer:
         max_eval_workers: int | None = None,
         allow_skip_eval: bool = True,
         reward_server_ip: list[str] | None = None,
+        isolate_cpu: bool = False,
     ):
         self.max_init_workers = max_init_workers
         self.max_run_workers = max_run_workers
@@ -610,13 +611,23 @@ class OpenHandsServer:
             self._available_cpus = list(range(cpu_count))
 
         # Pre-compute CPU groups to distribute across run workers as evenly as possible
-        num_groups = max(1, min(self.max_run_workers, len(self._available_cpus))) + 1
-        cpu_groups: list[list[int]] = [[] for _ in range(num_groups)]
-        for idx, cpu in enumerate(self._available_cpus):
-            cpu_groups[idx % num_groups].append(cpu)
-        if len(cpu_groups) > 1:
-            logger.info(f'Reserved 1 CPU group for idle CPU: {cpu_groups[-1]}')
-            cpu_groups = cpu_groups[:-1]
+        if isolate_cpu:
+            num_groups = (
+                max(1, min(self.max_run_workers, len(self._available_cpus))) + 1
+            )
+            cpu_groups: list[list[int]] = [[] for _ in range(num_groups)]
+            for idx, cpu in enumerate(self._available_cpus):
+                cpu_groups[idx % num_groups].append(cpu)
+            if len(cpu_groups) > 1:
+                logger.info(f'Reserved 1 CPU group for idle CPU: {cpu_groups[-1]}')
+                cpu_groups = cpu_groups[:-1]
+        else:
+            # reserve 4 idle cpu
+            if len(self._available_cpus) > max(4, self.max_run_workers):
+                logger.info(f'Reserved 4 idle CPU: {self._available_cpus[:4]}')
+                self._available_cpus = self._available_cpus[4:]
+            cpu_groups = [self._available_cpus]
+
         self._cpu_groups: list[list[int]] = cpu_groups
         self._cpu_group_rr_index = 0
         self._cpu_group_lock = threading.RLock()
