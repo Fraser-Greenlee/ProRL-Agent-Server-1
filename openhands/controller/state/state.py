@@ -235,6 +235,8 @@ class State:
                 f'web_host:{os.environ.get("WEB_HOST", "unspecified")}',
                 f'openhands_version:{openhands.__version__}',
             ],
+            'iteration': self.iteration,
+            'local_iteration': self.local_iteration,
         }
 
     @property

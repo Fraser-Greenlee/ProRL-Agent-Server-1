@@ -1,15 +1,24 @@
 import asyncio
+import base64
 import copy
 import json
+import os
 import queue
 import subprocess
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel
 from transformers import AutoTokenizer
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 
 from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
 from openhands.controller.state.state import State
@@ -17,6 +26,7 @@ from openhands.events.action import (
     Action,
     AgentFinishAction,
 )
+from openhands.events.observation import BrowserOutputObservation
 from openhands.llm.nvidia.qwen3 import (
     convert_messages_to_tokens,
     qwen3_chat_template,
@@ -219,6 +229,24 @@ def is_last_action_finish(state: State) -> bool:
     return False
 
 
+def _cleanup_previous_screenshot_images(screenshot_dir: str) -> None:
+    try:
+        os.makedirs(screenshot_dir, exist_ok=True)
+    except Exception:
+        return
+    try:
+        for fname in os.listdir(screenshot_dir):
+            if fname.startswith('screenshot_') or fname.startswith('som_'):
+                fpath = os.path.join(screenshot_dir, fname)
+                if os.path.isfile(fpath):
+                    try:
+                        os.remove(fpath)
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+
+
 def process_messages_from_agent_state(
     agent: CodeActAgent,
     state: State,
@@ -265,26 +293,127 @@ def process_messages_from_agent_state(
         )
         token_level_generation = False
 
-    initial_user_message = agent._get_initial_user_message(state.history)
-    raw_messages = agent._get_messages(state.history, initial_user_message)
+    # Fallback for VisualBrowsingAgent (does not implement _get_* helpers)
+    use_visual_browsing_fallback = not (
+        hasattr(agent, '_get_initial_user_message') and hasattr(agent, '_get_messages')
+    )
 
-    if raw_messages[-1].role != 'assistant':
+    gif_paths: dict[str, str | None] = {'screenshots_gif': None, 'som_gif': None}
+    if job_details is not None and job_details.config is not None:
+        # Determine workspace for GIF output; prefer file_store_path or workspace_base
+        workspace_dir = (
+            getattr(job_details.config, 'workspace_base', None)
+            or getattr(job_details.config, 'workspace_mount_path', None)
+            or os.getcwd()
+        )
+        logs_dir = os.path.join(
+            '/lustre/fsw/portfolios/llmservice/users/shaokunz/project/OpenHands_internal',
+            'logs',
+        )
+        try:
+            os.makedirs(logs_dir, exist_ok=True)
+        except Exception:
+            pass
+        # Clean up any previous screenshot images before saving new ones and generating GIFs
+        screenshot_dir = os.path.join(workspace_dir, '.browser_screenshots')
+        _cleanup_previous_screenshot_images(screenshot_dir)
+        # Persist SoM images from history to the screenshots dir to enable GIF creation
+        _write_som_images_from_state(
+            state, os.path.join(workspace_dir, '.browser_screenshots')
+        )
+        # Create GIFs similar to test_browser_tool.py
+        gif_paths['screenshots_gif'] = _save_screenshots_gif(
+            workspace_dir,
+            logs_dir,
+            gif_name='browser_run.gif',
+            duration_ms=700,
+            image_prefix='screenshot_',
+        )
+        gif_paths['som_gif'] = _save_screenshots_gif(
+            workspace_dir,
+            logs_dir,
+            gif_name='browser_run_som.gif',
+            duration_ms=700,
+            image_prefix='som_',
+        )
+
+    if use_visual_browsing_fallback:
+        # Minimal reconstruction: build a user message from the latest observation context
+        from openhands.core.message import Message, TextContent
+
+        last_obs: BrowserOutputObservation | None = None
+        for ev in state.history:
+            if isinstance(ev, BrowserOutputObservation):
+                last_obs = ev
+        # Basic goal text if available via state inputs
+        goal = None
+        try:
+            goal, _ = state.get_current_user_intent()
+        except Exception:
+            pass
+        if goal is None:
+            goal = state.inputs.get('task', '') if hasattr(state, 'inputs') else ''
+
+        system_msg = (
+            'You are an agent trying to solve a web task based on the content of the page and user instructions. '
+            'You can interact with the page and explore, and send messages to the user when you finish the task.'
+        )
+        user_parts = []
+        if goal:
+            user_parts.append(f'# Goal\n{goal}\n')
+        if last_obs is not None:
+            # Minimal, readable context without ACTree or long content
+            user_parts.append(f'[Current URL: {last_obs.url}]')
+            if last_obs.last_browser_action:
+                user_parts.append(f'[Last action: {last_obs.last_browser_action}]')
+            if last_obs.error and last_obs.last_browser_action_error:
+                user_parts.append(
+                    f'[Last action error: {last_obs.last_browser_action_error}]'
+                )
+        content = '\n'.join([p for p in user_parts if p])
+        raw_messages = [
+            Message(role='system', content=[TextContent(type='text', text=system_msg)]),
+            Message(role='user', content=[TextContent(type='text', text=content)]),
+        ]
+    else:
+        initial_user_message = agent._get_initial_user_message(state.history)
+        raw_messages = agent._get_messages(state.history, initial_user_message)
+
+    # In visual browsing fallback, keep non-assistant trailing messages to preserve context
+    if (
+        not use_visual_browsing_fallback
+        and raw_messages
+        and raw_messages[-1].role != 'assistant'
+    ):
         raw_messages = raw_messages[:-1]
 
-    # patch the last message if it is an AgentFinishAction
-    if is_last_action_finish(state):
-        tool_metadata = state.history[-1].tool_call_metadata
-        if tool_metadata is not None:
-            assistant_msg = getattr(tool_metadata.model_response.choices[0], 'message')
-            raw_messages[-1].tool_calls = assistant_msg.tool_calls
     messages = agent.llm.format_messages_for_llm(raw_messages)
 
-    while len(messages) > 0 and messages[-1]['role'] != 'assistant':
-        messages = messages[:-1]
+    # In visual browsing fallback, do not drop trailing non-assistant messages
+    if not use_visual_browsing_fallback:
+        while len(messages) > 0 and messages[-1]['role'] != 'assistant':
+            messages = messages[:-1]
 
     from openhands.llm.llm_utils import check_tools
 
     tools = check_tools(agent.tools, agent.llm.config)
+
+    # Build concise per-turn summary from BrowserOutputObservation events
+    turns: list[dict[str, Any]] = []
+    step_index = 0
+    for ev in state.history:
+        if isinstance(ev, BrowserOutputObservation):
+            turns.append(
+                {
+                    'step': step_index,
+                    'url': ev.url,
+                    'action': ev.last_browser_action,
+                    'ok': not ev.error,
+                    'error': ev.last_browser_action_error or None,
+                    'focused_bid': ev.focused_element_bid,
+                }
+            )
+            step_index += 1
 
     new_messages = []
     for message in messages:
@@ -353,18 +482,58 @@ def process_messages_from_agent_state(
                 )
                 new_message.pop('tool_calls')
             new_messages.append(new_message)
+            # Build assistant thoughts list before returning early
+            assistant_thoughts_early: list[str] = []
+            for m in new_messages:
+                if m.get('role') == 'assistant':
+                    content_str = m.get('content', '')
+                    start = content_str.find('<think>')
+                    end = content_str.find('</think>')
+                    if start != -1 and end != -1 and end > start:
+                        assistant_thoughts_early.append(
+                            content_str[start + len('<think>') : end].strip()
+                        )
+                    else:
+                        assistant_thoughts_early.append(content_str)
+            # Attach thoughts to turns
+            for i in range(min(len(turns), len(assistant_thoughts_early))):
+                turns[i]['thought'] = assistant_thoughts_early[i]
             return {
                 'messages': new_messages,
                 'tools': tools,
                 'end_properly': False,
+                'turns': turns,
             }
 
         new_messages.append(new_message)
-    return {
+
+    # Extract assistant thoughts and attach to turns
+    assistant_thoughts: list[str] = []
+    for m in new_messages:
+        if m.get('role') == 'assistant':
+            content_str = m.get('content', '')
+            start = content_str.find('<think>')
+            end = content_str.find('</think>')
+            if start != -1 and end != -1 and end > start:
+                assistant_thoughts.append(
+                    content_str[start + len('<think>') : end].strip()
+                )
+            else:
+                assistant_thoughts.append(content_str)
+    for i in range(min(len(turns), len(assistant_thoughts))):
+        turns[i]['thought'] = assistant_thoughts[i]
+
+    result = {
         'messages': new_messages,
         'tools': tools,
         'end_properly': not state.get_last_agent_format_error(),
+        'turns': turns,
     }
+    # Attach GIF paths when available
+    if gif_paths['screenshots_gif'] or gif_paths['som_gif']:
+        result['screenshots_gif'] = gif_paths['screenshots_gif']
+        result['som_gif'] = gif_paths['som_gif']
+    return result
 
 
 def get_messages_from_partial_result(job_details: JobDetails) -> dict[str, Any]:
@@ -611,3 +780,107 @@ def final_result(job_details: JobDetails):
 
     result['filter'] = determine_filter(result)
     return result
+
+
+def _save_screenshots_gif(
+    workspace_dir: str,
+    output_dir: str,
+    gif_name: str = 'browser_run.gif',
+    duration_ms: int = 700,
+    image_prefix: str = 'screenshot_',
+) -> str | None:
+    try:
+        screenshots_dir = os.path.join(workspace_dir, '.browser_screenshots')
+        if not os.path.isdir(screenshots_dir):
+            return None
+
+        all_files = [
+            f
+            for f in os.listdir(screenshots_dir)
+            if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+        ]
+        files = [f for f in all_files if f.startswith(image_prefix)]
+        if not files:
+            return None
+        files.sort()
+
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, gif_name)
+
+        if Image is None:
+            return None
+
+        frames = []
+        for fname in files:
+            p = os.path.join(screenshots_dir, fname)
+            try:
+                img = Image.open(p).convert('RGB')
+                frames.append(img)
+            except Exception:
+                continue
+        if not frames:
+            return None
+
+        frames[0].save(
+            output_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=True,
+            quality=85,
+            format='GIF',
+        )
+        return output_path
+    except Exception:
+        return None
+
+
+def _write_som_images_from_state(state: State, screenshot_dir: str) -> None:
+    try:
+        os.makedirs(screenshot_dir, exist_ok=True)
+    except Exception:
+        return
+    idx = 0
+    for event in state.history:
+        if isinstance(event, BrowserOutputObservation):
+            som = getattr(event, 'set_of_marks', None)
+            if som:
+                try:
+                    screenshot_path = getattr(event, 'screenshot_path', None)
+                    if screenshot_path is not None:
+                        stem = Path(screenshot_path).stem
+                        # Prefer timestamp from screenshot filename if present
+                        ts = stem.replace('screenshot_', '')
+                    else:
+                        ts = time.strftime('%Y%m%d_%H%M%S_%f')
+                    fname = f'som_{ts}_{idx}.png'
+                    idx += 1
+                    som_path = os.path.join(screenshot_dir, fname)
+                    data = som.replace('data:image/png;base64,', '')
+                    img_bytes = base64.b64decode(data)
+                    with open(som_path, 'wb') as f:
+                        f.write(img_bytes)
+                except Exception:
+                    continue
+            # Also write regular screenshots if available, using 'screenshot_' prefix
+            screenshot_b64 = getattr(event, 'screenshot', '')
+            if screenshot_b64:
+                try:
+                    screenshot_path2 = getattr(event, 'screenshot_path', None)
+                    if screenshot_path2 is not None:
+                        stem2 = Path(screenshot_path2).stem
+                        ts2 = stem2.replace('screenshot_', '')
+                    else:
+                        ts2 = time.strftime('%Y%m%d_%H%M%S_%f')
+                    fname2 = f'screenshot_{ts2}_{idx}.png'
+                    idx += 1
+                    screenshot_path = os.path.join(screenshot_dir, fname2)
+                    # Support both data URI and raw base64
+                    if screenshot_b64.startswith('data:image'):
+                        screenshot_b64 = screenshot_b64.split(',', 1)[1]
+                    img_bytes2 = base64.b64decode(screenshot_b64)
+                    with open(screenshot_path, 'wb') as f:
+                        f.write(img_bytes2)
+                except Exception:
+                    continue

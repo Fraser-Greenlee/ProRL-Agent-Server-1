@@ -345,6 +345,26 @@ class LLM(RetryMixin, DebugMixin):
                 # NOTE: this setting is global; unlike drop_params, it cannot be overridden in the litellm completion partial
                 litellm.modify_params = self.config.modify_params
 
+                # Capture trace metadata BEFORE possibly removing extra_body
+                trace_sid = None
+                trace_iter = None
+                try:
+                    extra_body_for_trace = kwargs.get('extra_body', {}) or {}
+                    metadata = (
+                        extra_body_for_trace.get('metadata', {})
+                        if isinstance(extra_body_for_trace, dict)
+                        else {}
+                    )
+                    trace_sid = metadata.get('session_id') or os.environ.get(
+                        'OPENHANDS_SESSION_ID'
+                    )
+                    trace_iter = metadata.get('iteration')
+                    logger.debug(
+                        f'LLM trace metadata: sid={trace_sid}, iter={trace_iter}'
+                    )
+                except Exception as e:
+                    logger.debug(f'Failed to extract trace metadata: {e}')
+
                 # if we're not using litellm proxy, remove the extra_body
                 if 'litellm_proxy' not in self.config.model:
                     kwargs.pop('extra_body', None)
@@ -358,6 +378,45 @@ class LLM(RetryMixin, DebugMixin):
                 latency = time.time() - start_time
                 response_id = resp.get('id', 'unknown')
                 self.metrics.add_response_latency(latency, response_id)
+
+                # Save trace to JSONL if we have a sid
+                if trace_sid:
+                    try:
+                        # Compose trace directory and file
+                        base_dir = '/lustre/fsw/portfolios/llmservice/users/shaokunz/project/OpenHands_internal/scripts/sft_data'
+                        os.makedirs(base_dir, exist_ok=True)
+                        trace_path = os.path.join(base_dir, f'{trace_sid}.jsonl')
+                        logger.debug(f'Writing LLM trace to: {trace_path}')
+                        # Build a compact record
+                        record = {
+                            'session_id': trace_sid,
+                            'iteration': trace_iter,
+                            'timestamp': time.time(),
+                            'model': self.config.model,
+                            'messages': messages,
+                            'tools': kwargs.get('tools', []),
+                            'response': {
+                                'id': response_id,
+                                'content': getattr(
+                                    resp.choices[0].message, 'content', None
+                                )
+                                if getattr(resp, 'choices', None)
+                                else None,
+                                'tool_calls': getattr(
+                                    resp.choices[0].message, 'tool_calls', None
+                                )
+                                if getattr(resp, 'choices', None)
+                                else None,
+                            },
+                            'latency_sec': latency,
+                        }
+                        with open(trace_path, 'a', encoding='utf-8') as tf:
+                            import json as _json
+
+                            tf.write(_json.dumps(record, ensure_ascii=False) + '\n')
+                        logger.debug('LLM trace written successfully')
+                    except Exception as _e:
+                        logger.warning(f'Failed to write LLM trace: {_e}')
 
                 non_fncall_response = copy.deepcopy(resp)
 
