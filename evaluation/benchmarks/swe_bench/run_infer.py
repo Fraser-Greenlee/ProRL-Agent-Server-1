@@ -350,7 +350,7 @@ def initialize_runtime(
     assert_and_raise(obs.exit_code == 0, f'Failed to cat ~/.bashrc: {str(obs)}')
 
     action = CmdRunAction(command='source ~/.bashrc')
-    action.set_hard_timeout(5)
+    action.set_hard_timeout(30)
     logger.info(action, extra={'msg_type': 'ACTION'})
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
