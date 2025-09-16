@@ -255,6 +255,14 @@ def initialize_runtime(runtime: Runtime, instance: dict, metadata: EvalMetadata)
 
     openhands_logger.info(f'{"-" * 50} END Runtime Initialization Fn {"-" * 50}')
 
+def complete_runtime(runtime: Runtime):
+    action = CmdRunAction(command='cat /workspace/solution.py')
+    action.set_hard_timeout(10)
+    obs = runtime.run_action(action)
+    if obs.exit_code == 0 and len(obs.content) > 0:
+        return f"```python\n{obs.content}\n```\n"
+    return ''
+
 async def run_agent(
         job_details: JobDetails,
         sid: str | None = None,
@@ -294,6 +302,12 @@ async def run_agent(
     except Exception as e:
         logger.error(f"Error running agent: {e}")
 
+    try:
+        code_output = complete_runtime(runtime)
+    except Exception as e:
+        logger.error(f"Error completing runtime with code output: {e}")
+        code_output = ''
+
     # get messages from agent history
     try:
         run_results = process_messages_from_agent_state(agent, state, job_details) # type: ignore
@@ -306,19 +320,25 @@ async def run_agent(
         'error': state.last_error if state and state.last_error else None,
         'finish': is_last_action_finish(state),
         **run_results,
+        'code_output': code_output,
     }
 
 async def evaluate_agent(reward: Reward, run_results: dict, instance: dict):
     try:
-        response = json.loads(run_results['messages'][-1]['tool_calls'][0]['arguments'])
-        response = response['message']
+        try:
+            response = json.loads(run_results['messages'][-1]['tool_calls'][0]['arguments'])
+            response = response['message']
+            if '```python' not in response:
+                response = run_results.get('code_output', '')
+        except:
+            response = run_results.get('code_output', '')
         if '```python' not in response:
             return {'resolved': False, 'reward': 0}
 
         # Remote server requires <think> tag
         if '<think>' not in response:
             response = '<think>\nfake thought\n</think>\n' + response
-        
+
         # Send to server for evaluation
         eval_results =  await reward.get_reward(instance, response)
         return eval_results

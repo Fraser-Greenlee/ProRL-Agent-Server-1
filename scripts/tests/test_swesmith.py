@@ -3,7 +3,6 @@ Test script for SWE-Smith dataset, mirroring functionality from test_r2egym.py
 """
 
 import hashlib
-import json
 import time
 
 import numpy as np
@@ -17,19 +16,25 @@ def pre_process_swesmith_instance(swesmith_instance):
     swesmith_instance = swesmith_instance.apply(
         lambda x: x.tolist() if isinstance(x, np.ndarray) else x
     )
-    
+
     swesmith_instance['data_source'] = 'swebench'
     swesmith_instance['data_kind'] = 'swesmith'
-    
-    if 'instance_id' not in swesmith_instance or pd.isna(swesmith_instance['instance_id']):
+
+    if 'instance_id' not in swesmith_instance or pd.isna(
+        swesmith_instance['instance_id']
+    ):
         # Fallback: create instance_id from repo if available
         if 'repo' in swesmith_instance:
-            swesmith_instance['instance_id'] = swesmith_instance['repo'].replace('/', '_').replace(':', '_')
+            swesmith_instance['instance_id'] = (
+                swesmith_instance['repo'].replace('/', '_').replace(':', '_')
+            )
         elif 'image_name' in swesmith_instance:
-            swesmith_instance['instance_id'] = swesmith_instance['image_name'].replace('/', '_').replace(':', '_')
+            swesmith_instance['instance_id'] = (
+                swesmith_instance['image_name'].replace('/', '_').replace(':', '_')
+            )
         else:
             swesmith_instance['instance_id'] = f'swesmith_instance_{int(time.time())}'
-    
+
     if 'repo' not in swesmith_instance or pd.isna(swesmith_instance['repo']):
         if 'image_name' in swesmith_instance:
             image_name = swesmith_instance['image_name']
@@ -39,20 +44,24 @@ def pre_process_swesmith_instance(swesmith_instance):
                 swesmith_instance['repo'] = image_name
         else:
             swesmith_instance['repo'] = 'unknown/repo'
-    
+
     if 'version' not in swesmith_instance or pd.isna(swesmith_instance['version']):
         if 'image_name' in swesmith_instance and ':' in swesmith_instance['image_name']:
             _, version_part = swesmith_instance['image_name'].split(':', 1)
             swesmith_instance['version'] = version_part
         else:
             swesmith_instance['version'] = 'latest'
-    
-    if 'base_commit' not in swesmith_instance or pd.isna(swesmith_instance['base_commit']):
-        if 'commit_hash' in swesmith_instance and not pd.isna(swesmith_instance['commit_hash']):
+
+    if 'base_commit' not in swesmith_instance or pd.isna(
+        swesmith_instance['base_commit']
+    ):
+        if 'commit_hash' in swesmith_instance and not pd.isna(
+            swesmith_instance['commit_hash']
+        ):
             swesmith_instance['base_commit'] = swesmith_instance['commit_hash']
         else:
             swesmith_instance['base_commit'] = swesmith_instance['version']
-    
+
     return swesmith_instance
 
 
@@ -71,11 +80,11 @@ def test_server(
     swesmith_dataset = pd.read_parquet(
         '/lustre/fsw/portfolios/llmservice/users/shaokunz/project/data/swesmith/SWE-smith/data/train-00000-of-00011.parquet'
     )
-    
+
     # Select an instance for testing (similar to r2egym test)
     swesmith_instance = swesmith_dataset.iloc[-2]
     swesmith_instance = pre_process_swesmith_instance(swesmith_instance)
-    
+
     # Create multiple requests for parallel testing
     requests = []
     for i in range(total_jobs):
@@ -119,7 +128,7 @@ def test_server(
                 executor.submit(server.process, inst, dict(sampling_params), short_id)
             )
         results = [future.result() for future in futures]
-    
+
     print('Job submission finished')
     server.stop()
     return results
@@ -128,7 +137,7 @@ def test_server(
 if __name__ == '__main__':
     start = time.time()
     results = test_server(total_jobs=5, max_parallel_jobs=5, allow_skip_eval=False)
-    
+
     # Validate results (same validation as r2egym test)
     for result in results:
         assert type(result['messages']) is list, (
@@ -139,7 +148,7 @@ if __name__ == '__main__':
         )
         result['messages'] = len(result['messages'])
         result['tools'] = len(result['tools'])
-    
+
     print(results)
     print(f'Time taken: {time.time() - start}')
     print('All tests passed!')

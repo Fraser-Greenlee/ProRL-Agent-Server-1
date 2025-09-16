@@ -586,6 +586,7 @@ class OpenHandsServer:
         max_eval_workers: int | None = None,
         allow_skip_eval: bool = True,
         reward_server_ip: list[str] | None = None,
+        isolate_cpu: bool = False,
     ):
         self.max_init_workers = max_init_workers
         self.max_run_workers = max_run_workers
@@ -602,6 +603,34 @@ class OpenHandsServer:
 
         self.allow_skip_eval = allow_skip_eval
         self.reward_server_ip = reward_server_ip
+        # Discover available CPUs (respecting any parent affinity/cgroup limits)
+        try:
+            self._available_cpus = sorted(list(os.sched_getaffinity(0)))
+        except Exception:
+            cpu_count = os.cpu_count() or 1
+            self._available_cpus = list(range(cpu_count))
+
+        # Pre-compute CPU groups to distribute across run workers as evenly as possible
+        if isolate_cpu:
+            num_groups = (
+                max(1, min(self.max_run_workers, len(self._available_cpus))) + 1
+            )
+            cpu_groups: list[list[int]] = [[] for _ in range(num_groups)]
+            for idx, cpu in enumerate(self._available_cpus):
+                cpu_groups[idx % num_groups].append(cpu)
+            if len(cpu_groups) > 1:
+                logger.info(f'Reserved 1 CPU group for idle CPU: {cpu_groups[-1]}')
+                cpu_groups = cpu_groups[:-1]
+        else:
+            # reserve 4 idle cpu
+            if len(self._available_cpus) > max(4, self.max_run_workers):
+                logger.info(f'Reserved 4 idle CPU: {self._available_cpus[:4]}')
+                self._available_cpus = self._available_cpus[4:]
+            cpu_groups = [self._available_cpus]
+
+        self._cpu_groups: list[list[int]] = cpu_groups
+        self._cpu_group_rr_index = 0
+        self._cpu_group_lock = threading.RLock()
 
         self._job_details_lock = threading.RLock()
         self.jobs: dict[str, JobState] = {}
@@ -795,10 +824,41 @@ class OpenHandsServer:
             self.job_status,
             self.job_status_lock,
         )
+        # Choose CPU group for this job (round-robin)
+        assigned_cpus = None
+        try:
+            with self._cpu_group_lock:
+                if hasattr(self, '_cpu_groups') and len(self._cpu_groups) > 0:
+                    group_index = self._cpu_group_rr_index % len(self._cpu_groups)
+                    assigned_cpus = list(self._cpu_groups[group_index])
+                    self._cpu_group_rr_index = group_index + 1
+        except Exception:
+            assigned_cpus = None
+
         # Start the process
         p = _mp_context.Process(target=process_job, args=args)
-        logger.info(f'Starting process {job_id}.')
+        logger.info(
+            f'Starting process {job_id}.'
+            + (f' Assigned CPUs: {len(assigned_cpus)}' if assigned_cpus else '')
+        )
         p.start()
+
+        # Optionally limit CPU resources for the spawned process
+        try:
+            if assigned_cpus is not None and len(assigned_cpus) > 0:
+                try:
+                    ps_proc = psutil.Process(p.pid)
+                    ps_proc.cpu_affinity(assigned_cpus)
+                except Exception as e:
+                    logger.warning(
+                        f'Failed to set CPU affinity for job {job_id} (pid={p.pid}): {e}'
+                    )
+        except Exception as e:
+            # Never block job start on tuning failures
+            logger.warning(
+                f'Failed to set CPU affinity for job {job_id} (pid={p.pid}): {e}'
+            )
+            pass
 
         finished = threading.Event()
 

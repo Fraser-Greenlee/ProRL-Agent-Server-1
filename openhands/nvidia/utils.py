@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 from transformers import AutoTokenizer
@@ -247,6 +248,54 @@ def _cleanup_previous_screenshot_images(screenshot_dir: str) -> None:
         pass
 
 
+def ngram_repetition_reward(
+    sequence: np.ndarray, ngram_size: int = 64, penalty: float = -0.001
+) -> np.ndarray:
+    """
+    Compute repetition penalty for n-grams in a sequence using NumPy.
+
+    Args:
+        sequence: 1D NumPy array of token IDs, shape (L,)
+        ngram_size: int >= 1
+        penalty: float (penalty for repeated n-gram occurrences except the first)
+
+    Returns:
+        reward: 1D NumPy array shape (L,) with penalty applied at the start positions of repeated n-grams.
+    """
+    sequence = np.asarray(sequence)
+    L = sequence.shape[0]
+
+    if ngram_size <= 0:
+        raise ValueError('ngram_size must be >= 1')
+    if L < ngram_size:
+        return np.zeros(L, dtype=np.float32)
+
+    # Build n-grams (rolling view)
+    L - ngram_size + 1
+    ngram_array = np.lib.stride_tricks.sliding_window_view(
+        sequence, ngram_size
+    )  # shape: (num_ngrams, ngram_size)
+
+    # Convert each n-gram to a tuple for hashing (or use structured dtype)
+    ngram_tuples = [tuple(row) for row in ngram_array]
+
+    # Find unique ngrams and group occurrences
+    from collections import defaultdict
+
+    positions_by_ngram = defaultdict(list)
+    for i, ng in enumerate(ngram_tuples):
+        positions_by_ngram[ng].append(i)
+
+    reward = np.zeros(L, dtype=np.float32)
+    for positions in positions_by_ngram.values():
+        if len(positions) > 1:
+            # Apply penalty to all but the first occurrence
+            for pos in positions[1:]:
+                reward[pos] = penalty
+
+    return reward
+
+
 def process_messages_from_agent_state(
     agent: CodeActAgent,
     state: State,
@@ -441,6 +490,9 @@ def process_messages_from_agent_state(
             logprobs = message.get('logprobs', None)
             if output_ids is not None:
                 new_message['token_ids'] = output_ids
+                new_message['repetition_penalty'] = ngram_repetition_reward(
+                    output_ids
+                ).tolist()
             else:
                 new_message['token_ids'] = convert_messages_to_tokens(
                     [new_message],
@@ -450,6 +502,7 @@ def process_messages_from_agent_state(
                     enable_thinking=enable_thinking,
                     tools=tools,
                 )[0]
+                new_message['repetition_penalty'] = None
             new_message['input_ids'] = input_ids
             new_message['logprobs'] = logprobs
 
