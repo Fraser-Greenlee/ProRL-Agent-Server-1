@@ -101,3 +101,7 @@ if __name__ == '__main__':
     os.environ['SANDBOX_RUNTIME_CONTAINER_IMAGE'] = SINGULARITY_IMAGE_PATH
 
     evaluate(args)
+
+# export OH_SAVE_TRAJECTORY_PATH=/lustre/fsw/portfolios/llmservice/users/shaokunz/project/OpenHands_internal/scripts/sft_data/log
+# export OH_SAVE_SCREENSHOTS_IN_TRAJECTORY=true   # 或 false
+# python scripts/sft_data/run_gui_stable.py --num-instances 1

@@ -13,7 +13,7 @@ from openhands.events.action import (
     BrowseInteractiveAction,
     MessageAction,
 )
-from openhands.events.event import EventSource
+from openhands.events.event import EventSource, Event
 from openhands.events.observation import BrowserOutputObservation
 from openhands.events.observation.observation import Observation
 from openhands.llm.llm import LLM
@@ -252,6 +252,134 @@ Note:
         super().reset()
         self.cost_accumulator = 0
         self.error_accumulator = 0
+
+    def _get_initial_user_message(self, history: list[Event]) -> MessageAction:
+        """Get the initial user message from the conversation history.
+
+        Args:
+            history: List of events from the conversation
+
+        Returns:
+            MessageAction: The initial user message
+
+        Raises:
+            ValueError: If no initial user message is found
+        """
+        initial_user_message = None
+
+        for event in history:
+            if isinstance(event, MessageAction) and event.source == 'user':
+                initial_user_message = event
+                break
+
+        if initial_user_message is None:
+            # This should not happen in a valid conversation
+            logger.error(
+                f'CRITICAL: Could not find the initial user MessageAction in the full {len(history)} events history.'
+            )
+            raise ValueError(
+                'Could not find the initial user MessageAction in the conversation history.'
+            )
+        return initial_user_message
+
+    def _get_messages(
+        self, events: list[Event], initial_user_message: MessageAction
+    ) -> list[Message]:
+        """Constructs the message history for the LLM conversation.
+
+        This method builds a structured conversation history by processing events from the state
+        and formatting them into messages that the LLM can understand, similar to how the step
+        method constructs messages but for the full conversation history.
+
+        Args:
+            events: The list of events to convert to messages
+            initial_user_message: The initial user message action
+
+        Returns:
+            list[Message]: A list of formatted messages ready for LLM consumption
+        """
+        messages: list[Message] = []
+
+        # Find the last observation to pass to build_history_prompts
+        last_obs: BrowserOutputObservation | None = None
+        for event in reversed(events):
+            if isinstance(event, BrowserOutputObservation):
+                last_obs = event
+                break
+
+        # Get goal from initial user message
+        goal = initial_user_message.content
+        goal_txt, goal_images = create_goal_prompt(goal, None)
+
+        # System message
+        system_msg = """\
+You are an agent trying to solve a web task based on the content of the page and user instructions. You can interact with the page and explore, and send messages to the user when you finish the task. Each time you submit an action it will be sent to the browser and you will receive a new page.
+""".strip()
+
+        messages.append(Message(role='system', content=[TextContent(text=system_msg)]))
+
+        # Initial user message (with goal and action prompt)
+        human_prompt: list[TextContent | ImageContent] = [
+            TextContent(type='text', text=goal_txt)
+        ]
+        if goal_images and len(goal_images) > 0:
+            human_prompt.append(ImageContent(image_urls=goal_images))
+
+        remaining_content = f"""
+{self.action_prompt}\
+{self.hints}\
+{self.abstract_example}\
+{self.concrete_example}\
+"""
+        human_prompt.append(TextContent(type='text', text=remaining_content))
+        messages.append(Message(role='user', content=human_prompt))
+
+        # Build history prompts (alternating assistant/user messages)
+        history_prompts = build_history_prompts(events, last_obs)
+        for history in history_prompts:
+            if history["role"] == "user":
+                messages.append(Message(role='user', content=history["content"]))
+            elif history["role"] == "assistant":
+                messages.append(Message(role='assistant', content=history["content"]))
+
+        # Add current turn prompt if there's a last observation
+        if last_obs is not None:
+            try:
+                error_prefix = get_error_prefix(last_obs) if last_obs.error else ''
+                focused_element = '## Focused element:\nNone\n'
+                if last_obs.focused_element_bid is not None:
+                    focused_element = f"## Focused element:\nbid='{last_obs.focused_element_bid}'\n"
+                tabs = get_tabs(last_obs)
+
+                cur_axtree_txt = flatten_axtree_to_str(
+                    last_obs.axtree_object,
+                    extra_properties=last_obs.extra_element_properties,
+                    with_visible=True,
+                    with_clickable=True,
+                    with_center_coords=False,
+                    with_bounding_box_coords=False,
+                    filter_visible_only=False,
+                    filter_with_bid_only=False,
+                    filter_som_only=False,
+                )
+                cur_axtree_txt = get_axtree(axtree_txt=cur_axtree_txt)
+                set_of_marks = last_obs.set_of_marks
+
+                observation_txt, som_screenshot = create_observation_prompt(
+                    cur_axtree_txt, tabs, focused_element, error_prefix, set_of_marks
+                )
+
+                current_turn_prompt: list[TextContent | ImageContent] = [
+                    TextContent(type='text', text=observation_txt)
+                ]
+                if som_screenshot is not None:
+                    current_turn_prompt.append(ImageContent(image_urls=[som_screenshot]))
+
+                messages.append(Message(role='user', content=current_turn_prompt))
+            except Exception as e:
+                logger.error('Error building current turn observation: %s', e)
+
+        return messages
 
     def step(self, state: State) -> Action:
         """Performs one step using the GuiAgent.

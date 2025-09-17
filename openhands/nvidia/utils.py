@@ -7,6 +7,7 @@ import queue
 import subprocess
 import time
 import traceback
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ except Exception:
     Image = None
 
 from openhands.agenthub.codeact_agent.codeact_agent import CodeActAgent
+from openhands.agenthub.gui_agent.gui_agent import GuiAgent
 from openhands.controller.state.state import State
 from openhands.events.action import (
     Action,
@@ -230,24 +232,6 @@ def is_last_action_finish(state: State) -> bool:
     return False
 
 
-def _cleanup_previous_screenshot_images(screenshot_dir: str) -> None:
-    try:
-        os.makedirs(screenshot_dir, exist_ok=True)
-    except Exception:
-        return
-    try:
-        for fname in os.listdir(screenshot_dir):
-            if fname.startswith('screenshot_') or fname.startswith('som_'):
-                fpath = os.path.join(screenshot_dir, fname)
-                if os.path.isfile(fpath):
-                    try:
-                        os.remove(fpath)
-                    except Exception:
-                        pass
-    except Exception:
-        pass
-
-
 def ngram_repetition_reward(
     sequence: np.ndarray, ngram_size: int = 64, penalty: float = -0.001
 ) -> np.ndarray:
@@ -342,95 +326,67 @@ def process_messages_from_agent_state(
         )
         token_level_generation = False
 
-    # Fallback for VisualBrowsingAgent (does not implement _get_* helpers)
-    use_visual_browsing_fallback = not (
-        hasattr(agent, '_get_initial_user_message') and hasattr(agent, '_get_messages')
-    )
-
     gif_paths: dict[str, str | None] = {'screenshots_gif': None, 'som_gif': None}
-    if job_details is not None and job_details.config is not None:
-        # Determine workspace for GIF output; prefer file_store_path or workspace_base
-        workspace_dir = (
-            getattr(job_details.config, 'workspace_base', None)
-            or getattr(job_details.config, 'workspace_mount_path', None)
-            or os.getcwd()
+    should_save, trajectory_path = _should_save_screenshots()
+    if (
+        should_save
+        and job_details is not None
+        and job_details.config is not None
+        and isinstance(agent, GuiAgent)
+    ):
+        # When should_save is True, trajectory_path is guaranteed to be a string
+        assert trajectory_path is not None, (
+            'trajectory_path should not be None when should_save is True'
         )
-        logs_dir = os.path.join(
-            '/lustre/fsw/portfolios/llmservice/users/shaokunz/project/OpenHands_internal',
-            'logs',
+        logger.info(
+            f'Saving screenshots and GIFs to trajectory path: {trajectory_path}'
         )
-        try:
-            os.makedirs(logs_dir, exist_ok=True)
-        except Exception:
-            pass
-        # Clean up any previous screenshot images before saving new ones and generating GIFs
-        screenshot_dir = os.path.join(workspace_dir, '.browser_screenshots')
-        _cleanup_previous_screenshot_images(screenshot_dir)
-        # Persist SoM images from history to the screenshots dir to enable GIF creation
-        _write_som_images_from_state(
-            state, os.path.join(workspace_dir, '.browser_screenshots')
-        )
-        # Create GIFs similar to test_browser_tool.py
+
+        # Create unique run folder with organized structure
+        run_folder = _get_unique_run_folder(trajectory_path, job_details)
+        som_dir = os.path.join(run_folder, 'SOM')
+        screenshot_dir = os.path.join(run_folder, 'Screenshot')
+
+        logger.debug(f'Created run folder: {run_folder}')
+        logger.debug(f'SOM directory: {som_dir}')
+        logger.debug(f'Screenshot directory: {screenshot_dir}')
+
+        # Persist SoM and regular images from history to their respective directories
+        _write_som_images_from_state(state, som_dir, screenshot_dir)
+
+        # Create GIFs in the run folder (same level as SOM and Screenshot folders)
         gif_paths['screenshots_gif'] = _save_screenshots_gif(
-            workspace_dir,
-            logs_dir,
+            screenshot_dir,
+            run_folder,
             gif_name='browser_run.gif',
             duration_ms=700,
             image_prefix='screenshot_',
         )
         gif_paths['som_gif'] = _save_screenshots_gif(
-            workspace_dir,
-            logs_dir,
+            som_dir,
+            run_folder,
             gif_name='browser_run_som.gif',
             duration_ms=700,
             image_prefix='som_',
         )
 
-    if use_visual_browsing_fallback:
-        # Minimal reconstruction: build a user message from the latest observation context
-        from openhands.core.message import Message, TextContent
-
-        last_obs: BrowserOutputObservation | None = None
-        for ev in state.history:
-            if isinstance(ev, BrowserOutputObservation):
-                last_obs = ev
-        # Basic goal text if available via state inputs
-        goal = None
-        try:
-            goal, _ = state.get_current_user_intent()
-        except Exception:
-            pass
-        if goal is None:
-            goal = state.inputs.get('task', '') if hasattr(state, 'inputs') else ''
-
-        system_msg = (
-            'You are an agent trying to solve a web task based on the content of the page and user instructions. '
-            'You can interact with the page and explore, and send messages to the user when you finish the task.'
-        )
-        user_parts = []
-        if goal:
-            user_parts.append(f'# Goal\n{goal}\n')
-        if last_obs is not None:
-            # Minimal, readable context without ACTree or long content
-            user_parts.append(f'[Current URL: {last_obs.url}]')
-            if last_obs.last_browser_action:
-                user_parts.append(f'[Last action: {last_obs.last_browser_action}]')
-            if last_obs.error and last_obs.last_browser_action_error:
-                user_parts.append(
-                    f'[Last action error: {last_obs.last_browser_action_error}]'
-                )
-        content = '\n'.join([p for p in user_parts if p])
-        raw_messages = [
-            Message(role='system', content=[TextContent(type='text', text=system_msg)]),
-            Message(role='user', content=[TextContent(type='text', text=content)]),
-        ]
+        if gif_paths['screenshots_gif']:
+            logger.info(f'Screenshots GIF saved: {gif_paths["screenshots_gif"]}')
+        if gif_paths['som_gif']:
+            logger.info(f'SOM GIF saved: {gif_paths["som_gif"]}')
     else:
-        initial_user_message = agent._get_initial_user_message(state.history)
-        raw_messages = agent._get_messages(state.history, initial_user_message)
+        if not should_save:
+            logger.debug('Screenshot saving disabled by environment variables')
+        else:
+            logger.debug('Screenshot saving skipped - no job details or config')
 
-    # In visual browsing fallback, keep non-assistant trailing messages to preserve context
+    # Now all agents (including GuiAgent) have _get_initial_user_message and _get_messages methods
+    initial_user_message = agent._get_initial_user_message(state.history)
+    raw_messages = agent._get_messages(state.history, initial_user_message)
+
+    # For GuiAgent, keep non-assistant trailing messages to preserve context
     if (
-        not use_visual_browsing_fallback
+        not isinstance(agent, GuiAgent)
         and raw_messages
         and raw_messages[-1].role != 'assistant'
     ):
@@ -438,31 +394,14 @@ def process_messages_from_agent_state(
 
     messages = agent.llm.format_messages_for_llm(raw_messages)
 
-    # In visual browsing fallback, do not drop trailing non-assistant messages
-    if not use_visual_browsing_fallback:
+    # For GuiAgent, do not drop trailing non-assistant messages
+    if not isinstance(agent, GuiAgent):
         while len(messages) > 0 and messages[-1]['role'] != 'assistant':
             messages = messages[:-1]
 
     from openhands.llm.llm_utils import check_tools
 
     tools = check_tools(agent.tools, agent.llm.config)
-
-    # Build concise per-turn summary from BrowserOutputObservation events
-    turns: list[dict[str, Any]] = []
-    step_index = 0
-    for ev in state.history:
-        if isinstance(ev, BrowserOutputObservation):
-            turns.append(
-                {
-                    'step': step_index,
-                    'url': ev.url,
-                    'action': ev.last_browser_action,
-                    'ok': not ev.error,
-                    'error': ev.last_browser_action_error or None,
-                    'focused_bid': ev.focused_element_bid,
-                }
-            )
-            step_index += 1
 
     new_messages = []
     for message in messages:
@@ -535,52 +474,17 @@ def process_messages_from_agent_state(
                 )
                 new_message.pop('tool_calls')
             new_messages.append(new_message)
-            # Build assistant thoughts list before returning early
-            assistant_thoughts_early: list[str] = []
-            for m in new_messages:
-                if m.get('role') == 'assistant':
-                    content_str = m.get('content', '')
-                    start = content_str.find('<think>')
-                    end = content_str.find('</think>')
-                    if start != -1 and end != -1 and end > start:
-                        assistant_thoughts_early.append(
-                            content_str[start + len('<think>') : end].strip()
-                        )
-                    else:
-                        assistant_thoughts_early.append(content_str)
-            # Attach thoughts to turns
-            for i in range(min(len(turns), len(assistant_thoughts_early))):
-                turns[i]['thought'] = assistant_thoughts_early[i]
             return {
                 'messages': new_messages,
                 'tools': tools,
                 'end_properly': False,
-                'turns': turns,
             }
 
         new_messages.append(new_message)
-
-    # Extract assistant thoughts and attach to turns
-    assistant_thoughts: list[str] = []
-    for m in new_messages:
-        if m.get('role') == 'assistant':
-            content_str = m.get('content', '')
-            start = content_str.find('<think>')
-            end = content_str.find('</think>')
-            if start != -1 and end != -1 and end > start:
-                assistant_thoughts.append(
-                    content_str[start + len('<think>') : end].strip()
-                )
-            else:
-                assistant_thoughts.append(content_str)
-    for i in range(min(len(turns), len(assistant_thoughts))):
-        turns[i]['thought'] = assistant_thoughts[i]
-
     result = {
         'messages': new_messages,
         'tools': tools,
         'end_properly': not state.get_last_agent_format_error(),
-        'turns': turns,
     }
     # Attach GIF paths when available
     if gif_paths['screenshots_gif'] or gif_paths['som_gif']:
@@ -836,20 +740,31 @@ def final_result(job_details: JobDetails):
 
 
 def _save_screenshots_gif(
-    workspace_dir: str,
+    images_dir: str,
     output_dir: str,
     gif_name: str = 'browser_run.gif',
     duration_ms: int = 700,
     image_prefix: str = 'screenshot_',
 ) -> str | None:
+    """Create a GIF from images in the specified directory.
+
+    Args:
+        images_dir: Directory containing the images to create GIF from
+        output_dir: Directory to save the GIF file
+        gif_name: Name of the output GIF file
+        duration_ms: Duration of each frame in milliseconds
+        image_prefix: Prefix to filter image files by
+
+    Returns:
+        Path to the created GIF file, or None if creation failed
+    """
     try:
-        screenshots_dir = os.path.join(workspace_dir, '.browser_screenshots')
-        if not os.path.isdir(screenshots_dir):
+        if not os.path.isdir(images_dir):
             return None
 
         all_files = [
             f
-            for f in os.listdir(screenshots_dir)
+            for f in os.listdir(images_dir)
             if f.lower().endswith(('.png', '.jpg', '.jpeg'))
         ]
         files = [f for f in all_files if f.startswith(image_prefix)]
@@ -865,7 +780,7 @@ def _save_screenshots_gif(
 
         frames = []
         for fname in files:
-            p = os.path.join(screenshots_dir, fname)
+            p = os.path.join(images_dir, fname)
             try:
                 img = Image.open(p).convert('RGB')
                 frames.append(img)
@@ -889,14 +804,31 @@ def _save_screenshots_gif(
         return None
 
 
-def _write_som_images_from_state(state: State, screenshot_dir: str) -> None:
+def _write_som_images_from_state(
+    state: State, som_dir: str, screenshot_dir: str
+) -> None:
+    """Write SOM and regular screenshots to their respective directories.
+
+    Args:
+        state: The agent state containing browser observations
+        som_dir: Directory to save SOM (Set of Marks) images
+        screenshot_dir: Directory to save regular screenshots
+    """
     try:
+        os.makedirs(som_dir, exist_ok=True)
         os.makedirs(screenshot_dir, exist_ok=True)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            f'Failed to create directories {som_dir} and {screenshot_dir}: {e}'
+        )
         return
-    idx = 0
+
+    som_idx = 0
+    screenshot_idx = 0
+
     for event in state.history:
         if isinstance(event, BrowserOutputObservation):
+            # Handle SOM images
             som = getattr(event, 'set_of_marks', None)
             if som:
                 try:
@@ -907,16 +839,17 @@ def _write_som_images_from_state(state: State, screenshot_dir: str) -> None:
                         ts = stem.replace('screenshot_', '')
                     else:
                         ts = time.strftime('%Y%m%d_%H%M%S_%f')
-                    fname = f'som_{ts}_{idx}.png'
-                    idx += 1
-                    som_path = os.path.join(screenshot_dir, fname)
+                    fname = f'som_{ts}_{som_idx}.png'
+                    som_idx += 1
+                    som_path = os.path.join(som_dir, fname)
                     data = som.replace('data:image/png;base64,', '')
                     img_bytes = base64.b64decode(data)
                     with open(som_path, 'wb') as f:
                         f.write(img_bytes)
                 except Exception:
                     continue
-            # Also write regular screenshots if available, using 'screenshot_' prefix
+
+            # Handle regular screenshots
             screenshot_b64 = getattr(event, 'screenshot', '')
             if screenshot_b64:
                 try:
@@ -926,8 +859,8 @@ def _write_som_images_from_state(state: State, screenshot_dir: str) -> None:
                         ts2 = stem2.replace('screenshot_', '')
                     else:
                         ts2 = time.strftime('%Y%m%d_%H%M%S_%f')
-                    fname2 = f'screenshot_{ts2}_{idx}.png'
-                    idx += 1
+                    fname2 = f'screenshot_{ts2}_{screenshot_idx}.png'
+                    screenshot_idx += 1
                     screenshot_path = os.path.join(screenshot_dir, fname2)
                     # Support both data URI and raw base64
                     if screenshot_b64.startswith('data:image'):
@@ -937,3 +870,62 @@ def _write_som_images_from_state(state: State, screenshot_dir: str) -> None:
                         f.write(img_bytes2)
                 except Exception:
                     continue
+
+    logger.debug(f'Saved {som_idx} SOM images to {som_dir}')
+    logger.debug(f'Saved {screenshot_idx} regular screenshots to {screenshot_dir}')
+
+
+def _get_unique_run_folder(
+    base_trajectory_path: str, job_details: JobDetails | None = None
+) -> str:
+    """Create a unique folder for this run with organized subfolders.
+
+    Returns the path to the unique run folder containing:
+    - SOM/ (for SOM screenshots)
+    - Screenshot/ (for regular screenshots)
+    - GIFs will be saved at the same level as these folders
+    """
+    # Generate unique identifier for this run
+    if job_details and job_details.instance:
+        instance_id = job_details.instance.get('instance_id', None)
+        if instance_id:
+            run_id = f'{instance_id}_{int(time.time())}_{str(uuid.uuid4())[:8]}'
+        else:
+            run_id = f'run_{int(time.time())}_{str(uuid.uuid4())[:8]}'
+    else:
+        run_id = f'run_{int(time.time())}_{str(uuid.uuid4())[:8]}'
+
+    run_folder = os.path.join(base_trajectory_path, run_id)
+
+    # Create the folder structure
+    try:
+        os.makedirs(os.path.join(run_folder, 'SOM'), exist_ok=True)
+        os.makedirs(os.path.join(run_folder, 'Screenshot'), exist_ok=True)
+    except Exception as e:
+        logger.warning(f'Failed to create run folder structure: {e}')
+        return run_folder
+
+    return run_folder
+
+
+def _should_save_screenshots() -> tuple[bool, str | None]:
+    """Check if screenshots should be saved based on environment variables.
+
+    Returns:
+        tuple: (should_save, trajectory_path)
+    """
+    save_screenshots = os.environ.get(
+        'OH_SAVE_SCREENSHOTS_IN_TRAJECTORY', 'false'
+    ).lower() in ('1', 'true', 'yes')
+    trajectory_path = os.environ.get('OH_SAVE_TRAJECTORY_PATH')
+
+    if not save_screenshots:
+        return False, None
+
+    if not trajectory_path or not os.path.exists(trajectory_path):
+        logger.warning(
+            f"OH_SAVE_TRAJECTORY_PATH not set or path doesn't exist: {trajectory_path}"
+        )
+        return False, None
+
+    return True, trajectory_path
