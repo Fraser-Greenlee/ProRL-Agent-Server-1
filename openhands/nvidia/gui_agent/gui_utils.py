@@ -26,9 +26,327 @@ from openhands.nvidia.registry import JobDetails, _DEFAULT_AGENT_CONFIG
 from openhands.nvidia.utils import (
     get_instance_id,
     is_last_action_finish,
-    process_messages_from_agent_state,
 )
 from openhands.runtime.base import Runtime
+from openhands.agenthub.gui_agent.gui_agent import GuiAgent
+import base64
+import os
+import time
+import uuid
+from pathlib import Path
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+from openhands.agenthub.gui_agent.gui_agent import GuiAgent
+from openhands.events.observation import BrowserOutputObservation
+
+def process_messages_from_agent_state_gui(
+    agent: GuiAgent,
+    state: State,
+    job_details: JobDetails | None = None,
+) -> dict[str, Any]:
+
+    gif_paths: dict[str, str | None] = {'screenshots_gif': None, 'som_gif': None}
+    should_save, trajectory_path = _should_save_screenshots()
+    assert trajectory_path is not None, (
+        'trajectory_path should not be None when should_save is True'
+    )
+    logger.info(
+        f'Saving screenshots and GIFs to trajectory path: {trajectory_path}'
+    )
+
+    run_folder = _get_unique_run_folder(trajectory_path, job_details)
+    som_dir = os.path.join(run_folder, 'SOM')
+    screenshot_dir = os.path.join(run_folder, 'Screenshot')
+    logger.debug(f'Created run folder: {run_folder}')
+    logger.debug(f'SOM directory: {som_dir}')
+    logger.debug(f'Screenshot directory: {screenshot_dir}')
+
+    _write_som_images_from_state(state, som_dir, screenshot_dir)
+    gif_paths['screenshots_gif'] = _save_screenshots_gif(
+        screenshot_dir,
+        run_folder,
+        gif_name='browser_run.gif',
+        duration_ms=700,
+        image_prefix='screenshot_',
+    )
+    gif_paths['som_gif'] = _save_screenshots_gif(
+        som_dir,
+        run_folder,
+        gif_name='browser_run_som.gif',
+        duration_ms=700,
+        image_prefix='som_',
+    )
+
+    if gif_paths['screenshots_gif']:
+        logger.info(f'Screenshots GIF saved: {gif_paths["screenshots_gif"]}')
+    if gif_paths['som_gif']:
+        logger.info(f'SOM GIF saved: {gif_paths["som_gif"]}')
+
+    initial_user_message = agent._get_initial_user_message(state.history)
+    raw_messages = agent._get_messages(state.history, initial_user_message)
+    messages = agent.llm.format_messages_for_llm(raw_messages)
+
+    while len(messages) > 0 and messages[-1]['role'] != 'assistant':
+        messages = messages[:-1]
+
+    from openhands.llm.llm_utils import check_tools
+    tools = check_tools(agent.tools, agent.llm.config)
+
+    new_messages = []
+    for message in messages:
+        new_message = {'role': message['role']}
+        if isinstance(message['content'], str):
+            new_message['content'] = message['content']
+        elif isinstance(message['content'], list):
+            if len(message['content']) == 0:
+                new_message['content'] = ''  # empty string for default
+            else:
+                new_message['content'] = message['content'][0]['text']
+        else:
+            raise RuntimeError(
+                f'Message content is not a string or list: {message["content"]}'
+            )
+        if 'tool_calls' in message:
+            new_message['tool_calls'] = [
+                tool_call['function'] for tool_call in message['tool_calls']
+            ]
+
+        if (
+            job_details is not None
+            and job_details.agent_config['ensure_thinking_end_properly']
+            and message['role'] == 'assistant'
+            and '<think>' in new_message['content']
+            and '</think>' not in new_message['content']
+        ):
+            if 'tool_calls' in new_message:
+                tool_calls_message = ''
+                for tool_call in new_message['tool_calls']:
+                    current_tool_call = []
+                    current_tool_call.append(
+                        '\n<tool_call>\n{"name": "'
+                        + tool_call['name']
+                        + '", "arguments": '
+                    )
+                    if isinstance(tool_call['arguments'], str):
+                        current_tool_call.append(tool_call['arguments'])
+                    else:
+                        current_tool_call.append(json.dumps(tool_call['arguments']))
+                    current_tool_call.append('}\n</tool_call>')
+                    tool_calls_message += ''.join(current_tool_call)
+                new_message['content'] = (
+                    f'{new_message["content"]}\n{tool_calls_message}</think>'
+                )
+                new_message.pop('tool_calls')
+            new_messages.append(new_message)
+            return {
+                'messages': new_messages,
+                'tools': tools,
+                'end_properly': False,
+            }
+
+        new_messages.append(new_message)
+
+    result = {
+        'messages': new_messages,
+        'tools': tools,
+        'end_properly': not state.get_last_agent_format_error(),
+    }
+    if gif_paths['screenshots_gif'] or gif_paths['som_gif']:
+        result['screenshots_gif'] = gif_paths['screenshots_gif']
+        result['som_gif'] = gif_paths['som_gif']
+    return result
+
+def _should_save_screenshots() -> tuple[bool, str | None]:
+    """Check if screenshots should be saved based on environment variables.
+
+    Returns:
+        tuple: (should_save, trajectory_path)
+    """
+    save_screenshots = os.environ.get(
+        'OH_SAVE_SCREENSHOTS_IN_TRAJECTORY', 'false'
+    ).lower() in ('1', 'true', 'yes')
+    trajectory_path = os.environ.get('OH_SAVE_TRAJECTORY_PATH')
+
+    if not save_screenshots:
+        return False, None
+
+    if not trajectory_path or not os.path.exists(trajectory_path):
+        logger.warning(
+            f"OH_SAVE_TRAJECTORY_PATH not set or path doesn't exist: {trajectory_path}"
+        )
+        return False, None
+
+    return True, trajectory_path
+
+def _get_unique_run_folder(
+    base_trajectory_path: str, job_details: JobDetails | None = None
+) -> str:
+    """Create a unique folder for this run with organized subfolders.
+
+    Returns the path to the unique run folder containing:
+    - SOM/ (for SOM screenshots)
+    - Screenshot/ (for regular screenshots)
+    - GIFs will be saved at the same level as these folders
+    """
+    # Generate unique identifier for this run
+    if job_details and job_details.instance:
+        instance_id = job_details.instance.get('instance_id', None)
+        if instance_id:
+            run_id = f'{instance_id}_{int(time.time())}_{str(uuid.uuid4())[:8]}'
+        else:
+            run_id = f'run_{int(time.time())}_{str(uuid.uuid4())[:8]}'
+    else:
+        run_id = f'run_{int(time.time())}_{str(uuid.uuid4())[:8]}'
+
+    run_folder = os.path.join(base_trajectory_path, run_id)
+
+    # Create the folder structure
+    try:
+        os.makedirs(os.path.join(run_folder, 'SOM'), exist_ok=True)
+        os.makedirs(os.path.join(run_folder, 'Screenshot'), exist_ok=True)
+    except Exception as e:
+        logger.warning(f'Failed to create run folder structure: {e}')
+        return run_folder
+
+    return run_folder
+
+
+def _save_screenshots_gif(
+    images_dir: str,
+    output_dir: str,
+    gif_name: str = 'browser_run.gif',
+    duration_ms: int = 700,
+    image_prefix: str = 'screenshot_',
+) -> str | None:
+    """Create a GIF from images in the specified directory.
+
+    Args:
+        images_dir: Directory containing the images to create GIF from
+        output_dir: Directory to save the GIF file
+        gif_name: Name of the output GIF file
+        duration_ms: Duration of each frame in milliseconds
+        image_prefix: Prefix to filter image files by
+
+    Returns:
+        Path to the created GIF file, or None if creation failed
+    """
+    try:
+        if not os.path.isdir(images_dir):
+            return None
+
+        all_files = [
+            f
+            for f in os.listdir(images_dir)
+            if f.lower().endswith(('.png', '.jpg', '.jpeg'))
+        ]
+        files = [f for f in all_files if f.startswith(image_prefix)]
+        if not files:
+            return None
+        files.sort()
+
+        os.makedirs(output_dir, exist_ok=True)
+        output_path = os.path.join(output_dir, gif_name)
+
+        if Image is None:
+            return None
+
+        frames = []
+        for fname in files:
+            p = os.path.join(images_dir, fname)
+            try:
+                img = Image.open(p).convert('RGB')
+                frames.append(img)
+            except Exception:
+                continue
+        if not frames:
+            return None
+
+        frames[0].save(
+            output_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=True,
+            quality=85,
+            format='GIF',
+        )
+        return output_path
+    except Exception:
+        return None
+
+
+def _write_som_images_from_state(
+    state: State, som_dir: str, screenshot_dir: str
+) -> None:
+    """Write SOM and regular screenshots to their respective directories.
+
+    Args:
+        state: The agent state containing browser observations
+        som_dir: Directory to save SOM (Set of Marks) images
+        screenshot_dir: Directory to save regular screenshots
+    """
+    try:
+        os.makedirs(som_dir, exist_ok=True)
+        os.makedirs(screenshot_dir, exist_ok=True)
+    except Exception as e:
+        logger.warning(
+            f'Failed to create directories {som_dir} and {screenshot_dir}: {e}'
+        )
+        return
+
+    som_idx = 0
+    screenshot_idx = 0
+
+    for event in state.history:
+        if isinstance(event, BrowserOutputObservation):
+            # Handle SOM images
+            som = getattr(event, 'set_of_marks', None)
+            if som:
+                try:
+                    screenshot_path = getattr(event, 'screenshot_path', None)
+                    if screenshot_path is not None:
+                        stem = Path(screenshot_path).stem
+                        # Prefer timestamp from screenshot filename if present
+                        ts = stem.replace('screenshot_', '')
+                    else:
+                        ts = time.strftime('%Y%m%d_%H%M%S_%f')
+                    fname = f'som_{ts}_{som_idx}.png'
+                    som_idx += 1
+                    som_path = os.path.join(som_dir, fname)
+                    data = som.replace('data:image/png;base64,', '')
+                    img_bytes = base64.b64decode(data)
+                    with open(som_path, 'wb') as f:
+                        f.write(img_bytes)
+                except Exception:
+                    continue
+
+            # Handle regular screenshots
+            screenshot_b64 = getattr(event, 'screenshot', '')
+            if screenshot_b64:
+                try:
+                    screenshot_path2 = getattr(event, 'screenshot_path', None)
+                    if screenshot_path2 is not None:
+                        stem2 = Path(screenshot_path2).stem
+                        ts2 = stem2.replace('screenshot_', '')
+                    else:
+                        ts2 = time.strftime('%Y%m%d_%H%M%S_%f')
+                    fname2 = f'screenshot_{ts2}_{screenshot_idx}.png'
+                    screenshot_idx += 1
+                    screenshot_path = os.path.join(screenshot_dir, fname2)
+                    # Support both data URI and raw base64
+                    if screenshot_b64.startswith('data:image'):
+                        screenshot_b64 = screenshot_b64.split(',', 1)[1]
+                    img_bytes2 = base64.b64decode(screenshot_b64)
+                    with open(screenshot_path, 'wb') as f:
+                        f.write(img_bytes2)
+                except Exception:
+                    continue
+
+    logger.debug(f'Saved {som_idx} SOM images to {som_dir}')
+    logger.debug(f'Saved {screenshot_idx} regular screenshots to {screenshot_dir}')
 
 
 def get_config(
@@ -235,7 +553,7 @@ async def run_agent(
 
     # Extract messages from agent state
     try:
-        run_results = process_messages_from_agent_state(agent, state, job_details)  # type: ignore
+        run_results = process_messages_from_agent_state_gui(agent, state, job_details)
     except Exception as e:
         logger.error(f"Error while running GUI agent: {e}")
         raise Exception(f"Failed to retrieve agent messages: {str(e)}")
