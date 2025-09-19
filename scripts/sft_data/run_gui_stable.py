@@ -14,7 +14,7 @@ SINGULARITY_IMAGE_PATH = "/lustre/fsw/portfolios/llmservice/users/shaokunz/proje
 
 DEFAULT_SAMPLING_PARAMS = {
     'model': 'openai/gpt-4.1-mini',
-    'api_key': '',
+    'api_key': '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',
     'modify_params': False,
     'log_completions': False,
     'native_tool_calling': True,
@@ -105,3 +105,4 @@ if __name__ == '__main__':
 # export OH_SAVE_TRAJECTORY_PATH=/lustre/fsw/portfolios/llmservice/users/shaokunz/project/OpenHands_internal/scripts/sft_data/log
 # export OH_SAVE_SCREENSHOTS_IN_TRAJECTORY=true   # 或 false
 # python scripts/sft_data/run_gui_stable.py --num-instances 1
+# sandbox_config.runtime_container_image = "/lustre/fsw/portfolios/llmservice/users/shaokunz/project/OpenHands_internal/singularity_images_oh/oh_v0.40.0_8me96m20iqt6tw9p_t5sffwjb6stny0ze.sif"

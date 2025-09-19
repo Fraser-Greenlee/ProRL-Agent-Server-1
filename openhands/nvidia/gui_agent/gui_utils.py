@@ -375,6 +375,10 @@ def get_config(
         workspace_base=None,
         workspace_mount_path=None,
     )
+    # Optional: save trajectory and screenshots to the specified path
+    # example:
+    # step 1: export OH_SAVE_TRAJECTORY_PATH=/lustre/fsw/portfolios/llmservice/users/shaokunz/project/OpenHands_internal/scripts/sft_data/log
+    # step 2: export OH_SAVE_SCREENSHOTS_IN_TRAJECTORY=true
     config.save_trajectory_path = os.environ.get("OH_SAVE_TRAJECTORY_PATH")  # 例如 /tmp/oh_trajs 或 /tmp/oh_trajs/run.json
     config.save_screenshots_in_trajectory = os.environ.get(
         "OH_SAVE_SCREENSHOTS_IN_TRAJECTORY", "false"
