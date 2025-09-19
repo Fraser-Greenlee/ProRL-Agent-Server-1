@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
 import time
+import uuid
 from pathlib import Path
 from typing import Any, cast
+
+try:
+    from PIL import Image
+except Exception:
+    Image = None
 
 from evaluation.utils.shared import (  # type: ignore
     EvalException,
@@ -12,6 +20,7 @@ from evaluation.utils.shared import (  # type: ignore
     update_llm_config_for_completions_logging,
 )
 
+from openhands.agenthub.gui_agent.gui_agent import GuiAgent
 from openhands.core.config import AgentConfig, OpenHandsConfig
 from openhands.core.config.condenser_config import NoOpCondenserConfig
 from openhands.core.config.llm_config import LLMConfig
@@ -20,6 +29,7 @@ from openhands.core.main import create_runtime
 from openhands.core.setup import create_agent, create_controller
 from openhands.controller.state.state import State
 from openhands.events.action import MessageAction
+from openhands.events.observation import BrowserOutputObservation
 from openhands.nvidia.controller import run_controller_with_controller
 from openhands.nvidia.logger import nvidia_logger as logger
 from openhands.nvidia.registry import JobDetails, _DEFAULT_AGENT_CONFIG
@@ -28,18 +38,6 @@ from openhands.nvidia.utils import (
     is_last_action_finish,
 )
 from openhands.runtime.base import Runtime
-from openhands.agenthub.gui_agent.gui_agent import GuiAgent
-import base64
-import os
-import time
-import uuid
-from pathlib import Path
-try:
-    from PIL import Image
-except Exception:
-    Image = None
-from openhands.agenthub.gui_agent.gui_agent import GuiAgent
-from openhands.events.observation import BrowserOutputObservation
 
 def process_messages_from_agent_state_gui(
     agent: GuiAgent,
@@ -365,7 +363,6 @@ def get_config(
     sandbox_config = get_default_sandbox_config_for_eval()
     # Ensure general-purpose browsing (no fixed benchmark env)
     sandbox_config.browsergym_eval_env = None
-    sandbox_config.runtime_container_image = "/lustre/fsw/portfolios/llmservice/users/shaokunz/project/OpenHands_internal/singularity_images_oh/oh_v0.40.0_8me96m20iqt6tw9p_t5sffwjb6stny0ze.sif"
     # Browsing often benefits from host networking for external access
     # Keep the default as-is; caller environment may override via env vars
 
@@ -553,7 +550,11 @@ async def run_agent(
 
     # Extract messages from agent state
     try:
-        run_results = process_messages_from_agent_state_gui(agent, state, job_details)
+        if agent is None:
+            raise EvalException('Agent is None')
+        if state is None:
+            raise EvalException('State is None')
+        run_results = process_messages_from_agent_state_gui(cast(GuiAgent, agent), state, job_details)
     except Exception as e:
         logger.error(f"Error while running GUI agent: {e}")
         raise Exception(f"Failed to retrieve agent messages: {str(e)}")
