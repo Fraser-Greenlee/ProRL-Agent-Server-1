@@ -206,4 +206,4 @@ parallel = true
 sigterm = true
 
 [tool.coverage.paths]
-source = [".", "/workspace", ""prorl_agent_server/"", "/workspace/prorl_agent_server"]
+source = [".", "/workspace", "prorl_agent_server/", "/workspace/prorl_agent_server"]
