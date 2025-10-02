@@ -44,7 +44,7 @@ jobs:
     with:
       image-name: prorl_agent_server
       dockerfile: docker/Dockerfile.ci
-      runner: self-hosted-nemo
+      runner: linux-amd64-cpu16
     secrets:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
