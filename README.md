@@ -1,5 +1,15 @@
 # ProRLAgent Server: A Scalable Multi-turn Rollout Infrastructure for RL Agents Training
 
+<p align="center"><img src="NVIDIA_Assets/logo.png" alt="logo" width="400" />
+
+<div align="center">
+
+[![codecov](https://codecov.io/gh/NVIDIA-NeMo/ProRL-Agent-Server/graph/badge.svg?token=2F1UIV9HW6)](https://codecov.io/gh/NVIDIA-NeMo/ProRL-Agent-Server)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
+[![GitHub Stars](https://img.shields.io/github/stars/NVIDIA-NeMo/ProRL-Agent-Server.svg?style=social&label=Star)](https://github.com/NVIDIA-NeMo/ProRL-Agent-Server/stargazers/)
+
+</div>
+
 ## ☁️ Introduction
 
 ProRLAgent Server is a scalable multi-turn rollout system for training and evaluating RL agents. Built on top of OpenHands, it offers high concurrency and a pluggable handler interface to support diverse agent tasks.
@@ -167,7 +177,7 @@ More module READMEs (click to open):
 - [`tests/nvidia/README.md`](tests/nvidia/README.md)
 
 ## 💡 Current Results
-![lc](NVIDIA_Assets/learning_curve.png)
+<img src="NVIDIA_Assets/learning_curve.png" alt="learning curve" width="600" />
 
 To validate the functionality of the ProRLAgent servers, we conducted proof-of-concept experiments on software engineering (SWE) tasks by integrating the server with the Verl reinforcement learning (RL) framework. Specifically, we used swe-gym along with a subset of the R2E-gym dataset, comprising a total of 800 training instances, to perform GRPO training. Our experiments were carried out on the Qwen3-4B-Instruct model and evaluated on the SWE-Bench-Verified benchmark. The results demonstrate a performance improvement, with accuracy increasing from **15.0%** to **20.4%**.
 
