@@ -12,34 +12,43 @@ ProRLAgent Server is a scalable multi-turn rollout system for training and evalu
 
 ## 💻 Quick Start
 
-1) Install dependencies
+1) **Install dependencies**
+
+**Option 1: Build from Scratch**
 
 ```bash
 poetry install --with dev,test,runtime,evaluation
-INSTALL_DOCKER=0 make -f Makefile.singularity build
+pip install git+https://github.com/SWE-Gym/SWE-Bench-Package.git
+pip install git+https://github.com/R2E-Gym/R2E-Gym.git
 ```
 
-2) Start the VLLM server with your desired Hugging Face model:
+**Option 2: Using Provided Image**
+
+
+2) **Start the VLLM server with your desired Hugging Face model:**
 
 ```bash
-vllm serve path_to_hf_model
+vllm serve path/to/your/model --enable-auto-tool-choice --tool-call-parser hermes  --host 127.0.0.1 --port 8000 --api-key key --served-model-name model_name &
 ```
 
-Replace `path_to_hf_model` with the actual path to your Hugging Face model.
+Replace `path/to/your/model` with the actual path to your Hugging Face model. Set up the server IP, Port, and model name.
 
-Example:
-```bash
-vllm serve /path/Qwen3-8B --enable-auto-tool-choice --tool-call-parser hermes --reasoning-parser deepseek_r1 --host 127.0.0.1 --port 8000
-```
 
-3) Pull singularity sandboxs for SWE tasks
+3) **Pull singularity sandboxs for swe tasks**
 
 ```bash
-python scripts/pull_swe_images.py --parquet-file /path/to/train.parquet --dest-dir /some/dir
-export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
+python scripts/pull_swe_images.py --parquet-file /path/to/train.parquet --dest-dir /some/dir --temp-base /some/dir --log-name log
 ```
 
-4) Start the async evaluation server (FastAPI)
+Download parquet data from Huggingface. Supported Training data:
+
+- swe-gym: https://huggingface.co/datasets/NovaSky-AI/SkyRL-v0-293-data
+- r2egym: https://huggingface.co/R2E-Gym
+- swe-bench-multimodal: https://huggingface.co/datasets/SWE-bench/SWE-bench_Multimodal
+- swe-bench: https://huggingface.co/datasets/SWE-bench/SWE-bench
+- swe-smith: https://huggingface.co/datasets/SWE-bench/SWE-smith
+
+4) **Start the async evaluation server (FastAPI)**
 
 This command starts the FastAPI-based async evaluation server and listens on the given host/port.
 It exposes /start, /process, and /status endpoints, and uses --max-init-workers/--max-run-workers and --timeout to control concurrency and time limits.
@@ -48,7 +57,15 @@ It exposes /start, /process, and /status endpoints, and uses --max-init-workers/
 python scripts/start_server.py --host 0.0.0.0 --port 8006 --max-init-workers 64 --max-run-workers 64 --timeout 300
 ```
 
-5) Test the server (HTTP I/O)
+5) **Test the server (HTTP I/O)**
+
+**Option 1: Quick test using the built-in script**
+
+```
+python scripts/tests/test_server.py
+```
+
+**Option 2: Test using curl**
 
 Quick try: send a task to `/process` and read the JSON result.
 
@@ -65,12 +82,23 @@ curl -s -X POST http://localhost:8006/process \
   -d '{
     "instance": {
       "data_source": "swebench",
-      "instance_id": "repo__issue__hash",
+      "instance_id": "instance_id",
       "trajectory_id": "t0",
       "patch": "",
       "metadata": {}
     },
-    "sampling_params": {"temperature": 0.3, "top_p": 0.95}
+    "sampling_params": {
+        'model': 'hosted_vllm/model_name',
+        'api_key': 'key',
+        'modify_params': False,
+        'log_completions': True,
+        'native_tool_calling': False,
+        'temperature': 0.6,
+        'top_p': 0.9,
+        'token_level_generation': True,
+        'custom_tokenizer': 'tokenizer_path',
+        'max_iterations': 5,
+    }
   }'
 ```
 
@@ -114,6 +142,7 @@ register_agent_handler(MyTaskHandler())
 Then submit requests with `{"data_source": "my_task", ...}` in the `instance`.
 
 ## 💻 Run unit tests
+
 Example:
 ```bash
 TEST_RUNTIME=singularity RUN_AS_OPENHANDS=False PYTHONPATH='.' pytest tests/runtime/test_browsing.py -v -s
@@ -125,18 +154,6 @@ TEST_RUNTIME=singularity RUN_AS_OPENHANDS=False PYTHONPATH='.' pytest tests/runt
 **`OH_RUNTIME_SINGULARITY_IMAGE_REPO`** - Specifies the directory where Singularity runtime images will be stored.
 ```bash
 OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
-```
-
-#### Network Isolation
-**`SANDBOX_ISOLATE_NETWORK`** - Controls whether to run the container in an isolated network environment for enhanced security.
-```bash
-SANDBOX_ISOLATE_NETWORK=true
-```
-
-#### Fakeroot Execution
-**`SANDBOX_RUN_AS_FAKEROOT`** - Enables running the container with fakeroot privileges, allowing processes to appear as root without requiring actual root access on the host system. Note: This is typically not needed when running on SLURM clusters.
-```bash
-SANDBOX_RUN_AS_FAKEROOT=true
 ```
 
 ## 📄 Documentation
