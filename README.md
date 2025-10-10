@@ -167,7 +167,7 @@ More module READMEs (click to open):
 - [`tests/nvidia/README.md`](tests/nvidia/README.md)
 
 ## 💡 Current Results
-![finish](NVIDIA_Assets/finish.jpg)
-![pass1](NVIDIA_Assets/pass1.jpg)
+![lc](NVIDIA_Assets/learning_curve.png)
+
 To validate the functionality of the ProRLAgent servers, we conducted proof-of-concept experiments on software engineering (SWE) tasks by integrating the server with the Verl reinforcement learning (RL) framework. Specifically, we used swe-gym along with a subset of the R2E-gym dataset, comprising a total of 800 training instances, to perform GRPO training. Our experiments were carried out on the Qwen3-4B-Instruct model and evaluated on the SWE-Bench-Verified benchmark. The results demonstrate a performance improvement, with accuracy increasing from **15.0%** to **20.4%**.
 
