@@ -1,14 +1,12 @@
 # ProRLAgent Server: A Scalable Multi-turn Rollout Infrastructure for RL Agents Training
 
-<p align="center"><img src="NVIDIA_Assets/logo.png" alt="logo" width="400" />
+<p align="center"><img src="NVIDIA_Assets/logo.png" alt="logo" width="400" /></p>
 
-<div align="center">
-
-[![codecov](https://codecov.io/gh/NVIDIA-NeMo/ProRL-Agent-Server/graph/badge.svg?token=2F1UIV9HW6)](https://codecov.io/gh/NVIDIA-NeMo/ProRL-Agent-Server)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/release/python-3100/)
-[![GitHub Stars](https://img.shields.io/github/stars/NVIDIA-NeMo/ProRL-Agent-Server.svg?style=social&label=Star)](https://github.com/NVIDIA-NeMo/ProRL-Agent-Server/stargazers/)
-
-</div>
+<p align="center">
+<a href="https://codecov.io/gh/NVIDIA-NeMo/ProRL-Agent-Server"><img src="https://codecov.io/gh/NVIDIA-NeMo/ProRL-Agent-Server/graph/badge.svg?token=2F1UIV9HW6" alt="codecov" /></a>
+<a href="https://www.python.org/downloads/release/python-3100/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+" /></a>
+<a href="https://github.com/NVIDIA-NeMo/ProRL-Agent-Server/stargazers/"><img src="https://img.shields.io/github/stars/NVIDIA-NeMo/ProRL-Agent-Server.svg?style=social&label=Star" alt="GitHub Stars" /></a>
+</p>
 
 ## ☁️ Introduction
 
