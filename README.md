@@ -17,6 +17,10 @@ ProRLAgent Server is a scalable multi-turn rollout system for training and evalu
 - **Pluggable AgentHandler:**  customize for different tasks and agents.
 - **Lifecycle management:**  built-in support for status tracking, queuing, timeouts, and cleanup.
 - **Token-in / Token-out:** communicate in tokens to maintain turn alignment and ensure stable training.
+- **Singularity runtime:** rootless execution with single-file containers (.sif), seamless Slurm integration, secure multi-user support.
+- **Efficient Bash tool:** ptyprocess-based implementation for 6x speed improvements over tmux-based approach.
+- **Efficient IPython tool:** direct IPython kernel integration without network overhead.
+- **UDS communication:** Unix domain sockets for better throughput and isolation.
 
 ## 💻 Quick Start
 
