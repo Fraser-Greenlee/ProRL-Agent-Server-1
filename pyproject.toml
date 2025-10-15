@@ -84,7 +84,6 @@ anyio = "4.9.0"
 pythonnet = "*"
 fastmcp = "^2.5.2"
 mcpm = "1.12.0"
- # PyJWT removed (not used); avoid transitive inclusion where possible
 
 [tool.poetry.group.dev.dependencies]
 ruff = "0.11.11"
