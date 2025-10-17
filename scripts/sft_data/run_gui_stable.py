@@ -12,7 +12,7 @@ SINGULARITY_IMAGE_PATH = '/lustre/fsw/portfolios/llmservice/users/shaokunz/proje
 
 DEFAULT_SAMPLING_PARAMS = {
     'model': 'openai/gpt-4.1-mini',
-    'api_key': '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',
+    'api_key': '',
     'modify_params': False,
     'log_completions': False,
     'native_tool_calling': True,
