@@ -26,7 +26,7 @@ ProRLAgent Server is a scalable multi-turn rollout system for training and evalu
 
 1) **Install dependencies**
 
-**Option 1: Build from Scratch**
+- Install OpenHands Dependencies
 
 ```bash
 poetry install --with dev,test,runtime,evaluation
@@ -34,9 +34,16 @@ pip install git+https://github.com/SWE-Gym/SWE-Bench-Package.git
 pip install git+https://github.com/R2E-Gym/R2E-Gym.git
 ```
 
-**Option 2: Using Provided Image**
+- Install Singularity/Apptainer Sandbox 
 
-
+```bash
+sudo apt-get update
+sudo apt-get install -y software-properties-common curl gnupg
+sudo apt-get install -y singularity-container fuse
+sudo add-apt-repository -y ppa:apptainer/ppa
+sudo apt-get update
+sudo apt-get install -y apptainer
+```
 2) **Start the VLLM server with your desired Hugging Face model:**
 
 ```bash
@@ -71,6 +78,29 @@ python scripts/start_server.py --host 0.0.0.0 --port 8006 --max-init-workers 64 
 
 5) **Test the server (HTTP I/O)**
 
+Before sending jobs to `/process`, make sure you follow this sequence (assumes you already started a VLLM server in step 2):
+
+1. Register at least one LLM server address (include `/v1`):
+```bash
+curl -X POST http://localhost:8006/add_llm_server \
+  -H 'Content-Type: application/json' \
+  -d '{"address":"http://127.0.0.1:8000/v1"}'
+```
+
+2. Start the worker process:
+```bash
+curl -X POST http://localhost:8006/start
+```
+
+3. (Optional) Check status:
+```bash
+curl http://localhost:8006/status
+```
+
+Notes:
+- You can call `/add_llm_server` before `/start`; the address will be buffered and applied when the worker starts.
+- Ensure the `sampling_params.model` and `api_key` in your request match the model name and key you used when launching VLLM in step 2.
+
 **Option 1: Quick test using the built-in script**
 
 ```
@@ -89,27 +119,27 @@ Input (request body):
 Example:
 
 ```bash
-curl -s -X POST http://localhost:8006/process \
+curl -X POST http://localhost:8006/process \
   -H 'Content-Type: application/json' \
   -d '{
     "instance": {
       "data_source": "swebench",
-      "instance_id": "instance_id",
+      "instance_id": "python__mypy-16203",
       "trajectory_id": "t0",
       "patch": "",
       "metadata": {}
     },
     "sampling_params": {
-        'model': 'hosted_vllm/model_name',
-        'api_key': 'key',
-        'modify_params': False,
-        'log_completions': True,
-        'native_tool_calling': False,
-        'temperature': 0.6,
-        'top_p': 0.9,
-        'token_level_generation': True,
-        'custom_tokenizer': 'tokenizer_path',
-        'max_iterations': 5,
+      "model": "hosted_vllm/Qwen2.5-7B-Instruct",
+      "api_key": "key",
+      "modify_params": false,
+      "log_completions": true,
+      "native_tool_calling": false,
+      "temperature": 0.6,
+      "top_p": 0.9,
+      "token_level_generation": true,
+      "custom_tokenizer": "tokenizer_path",
+      "max_iterations": 5
     }
   }'
 ```
