@@ -5,7 +5,7 @@ file = "frontend/src/mocks/handlers.ts"
  
   [[pulse-trufflehog.files.secrets]]   
   type = "Password"
-  values = [ "pas***********123\" ]
+  values = [ "pas***********123\"" ]
 
 [[pulse-trufflehog.files]]
 file = "tests/unit/test_mcp_config.py"
