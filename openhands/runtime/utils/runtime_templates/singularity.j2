@@ -53,7 +53,8 @@ From: {{ base_image }}
         {%- else %}
         libgl1-mesa-glx \
         {% endif -%}
-        libasound2-plugins libatomic1
+        libasound2-plugins libatomic1 \
+        xvfb xfce4 xfce4-goodies
 
     {% if 'ubuntu' in base_image %}
     # Install Node.js
@@ -170,6 +171,9 @@ From: {{ base_image }}
     /openhands/micromamba/bin/micromamba run -n openhands poetry config virtualenvs.path /openhands/poetry
     /openhands/micromamba/bin/micromamba run -n openhands poetry env use python3.12
 
+    # Regenerate lock file if pyproject.toml has changed
+    /openhands/micromamba/bin/micromamba run -n openhands poetry lock
+
     # Install project dependencies in smaller chunks
     /openhands/micromamba/bin/micromamba run -n openhands poetry install --only main --no-interaction --no-root
     /openhands/micromamba/bin/micromamba run -n openhands poetry install --only runtime --no-interaction --no-root
@@ -178,6 +182,9 @@ From: {{ base_image }}
     apt-get update -o APT::Sandbox::User=root
     /openhands/micromamba/bin/micromamba run -n openhands poetry run pip install playwright
     /openhands/micromamba/bin/micromamba run -n openhands poetry run playwright install --with-deps chromium
+
+    # Install pyautogui and pillow for GUI automation
+    /openhands/micromamba/bin/micromamba run -n openhands poetry run pip install pyautogui pillow
 
     # Set environment variables and permissions
     /openhands/micromamba/bin/micromamba run -n openhands poetry run python -c "import sys; print('OH_INTERPRETER_PATH=' + sys.executable)" >> /etc/environment

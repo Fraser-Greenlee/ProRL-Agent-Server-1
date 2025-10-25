@@ -36,6 +36,7 @@ from pydantic import SecretStr
 import os
 from pathlib import Path
 
+
 def get_config(
     instance: dict,
     metadata: EvalMetadata,
@@ -129,7 +130,7 @@ def get_instruction(instance: pd.Series | dict, metadata: EvalMetadata) -> Messa
         if " Let's think step by step and output the final answer within \\boxed{}." in problem_statement:
             problem_statement = problem_statement.replace(" Let's think step by step and output the final answer within \\boxed{}.", "")
         return problem_statement
-        
+
     instruction = f"""
 Your task is to solve challenging STEM problems by using appropriate tools, such as web search, extraction, or crawling functions provided in the system instruction. These tools allow you to access and analyze real-time web content, structured data, and raw HTML. You are allowed and expected to use these tools to explore, reason, and verify your answers.
 
@@ -185,7 +186,7 @@ async def initialize_agents(
         details=None,
         condenser_config=NoOpCondenserConfig(),
     )
-    
+
     config = get_config(instance, metadata, agent_config)
     runtime = create_runtime(config, sid=sid)
 

@@ -28,7 +28,7 @@ from openhands.runtime.utils.runtime_build import (
 )
 
 OH_VERSION = f'oh_v{oh_version}'
-DEFAULT_BASE_IMAGE = 'nikolaik/python-nodejs:python3.12-nodejs22'
+DEFAULT_BASE_IMAGE = 'ubuntu:24.04'
 
 
 @pytest.fixture

@@ -24,7 +24,7 @@ To create a custom Docker image, it must be Debian based.
 For example, if you want OpenHands to have `ruby` installed, you could create a `Dockerfile` with the following content:
 
 ```dockerfile
-FROM nikolaik/python-nodejs:python3.12-nodejs22
+FROM ubuntu:24.04
 
 # Install required packages
 RUN apt-get update && apt-get install -y ruby

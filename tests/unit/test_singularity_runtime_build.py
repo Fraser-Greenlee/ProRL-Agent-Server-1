@@ -171,7 +171,7 @@ def test_get_runtime_image_path_and_tag():
     assert img_dir == get_runtime_image_repo()
     assert img_tag == f'{OH_VERSION}_image_ubuntu_tag_22.04'
 
-    base_image = 'nikolaik/python-nodejs:python3.12-nodejs22'
+    base_image = 'ubuntu:24.04'
     img_dir, img_tag = get_runtime_image_path_and_tag(base_image)
     assert img_dir == get_runtime_image_repo()
     assert (

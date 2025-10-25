@@ -428,7 +428,7 @@ def test_defaults_dict_after_updates(default_config):
     assert defaults_after_updates['sandbox']['timeout']['default'] == 120
     assert (
         defaults_after_updates['sandbox']['base_container_image']['default']
-        == 'nikolaik/python-nodejs:python3.12-nodejs22'
+        == 'ubuntu:24.04'
     )
     assert defaults_after_updates == initial_defaults
 
