@@ -1,3 +1,4 @@
+import os
 import random
 import socket
 import time
@@ -36,6 +37,45 @@ def find_available_tcp_port(
         if check_port_available(port):
             return port
     return -1
+
+
+def find_available_display_number(
+    min_display: int = 10, max_display: int = 999, max_attempts: int = 50
+) -> int:
+    """Find an available X display number.
+
+    This checks if an X server is running on a display by looking for the X11 socket file.
+
+    Args:
+        min_display (int): The lower bound of the display range (default: 10)
+        max_display (int): The upper bound of the display range (default: 999)
+        max_attempts (int): Maximum number of attempts to find an available display (default: 50)
+
+    Returns:
+        int: An available display number, or the first display in range if none found
+    """
+    rng = random.SystemRandom()
+    displays = list(range(min_display, max_display + 1))
+    rng.shuffle(displays)
+
+    # Check for available displays
+    for display_num in displays[:max_attempts]:
+        # Check if X11 socket exists for this display
+        socket_path = f'/tmp/.X11-unix/X{display_num}'
+        lock_path = f'/tmp/.X{display_num}-lock'
+
+        # Display is available if neither socket nor lock file exists
+        if not os.path.exists(socket_path) and not os.path.exists(lock_path):
+            logger.debug(f'Found available display number: {display_num}')
+            return display_num
+
+    # If we couldn't find an available display, return the first one in range
+    # Xvfb will handle the conflict if it exists
+    logger.warning(
+        f'Could not find definitively available display after {max_attempts} attempts, '
+        f'returning {min_display}'
+    )
+    return min_display
 
 
 def display_number_matrix(number: int) -> str | None:

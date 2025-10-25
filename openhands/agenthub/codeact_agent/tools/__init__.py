@@ -1,5 +1,6 @@
 from .bash import create_cmd_run_tool
 from .browser import BrowserTool
+from .computer_use import ComputerUseTool
 from .finish import FinishTool
 from .ipython import IPythonTool
 from .llm_based_edit import LLMBasedFileEditTool
@@ -8,6 +9,7 @@ from .think import ThinkTool
 
 __all__ = [
     'BrowserTool',
+    'ComputerUseTool',
     'create_cmd_run_tool',
     'FinishTool',
     'IPythonTool',

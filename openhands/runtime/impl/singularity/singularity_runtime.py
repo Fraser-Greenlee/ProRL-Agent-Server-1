@@ -25,7 +25,7 @@ from openhands.runtime.impl.action_execution.action_execution_client import (
     ActionExecutionClient,
 )
 from openhands.runtime.plugins import PluginRequirement
-from openhands.runtime.utils import find_available_tcp_port
+from openhands.runtime.utils import find_available_display_number, find_available_tcp_port
 from openhands.runtime.utils.loopback_ip_allocator import (
     allocate_loopback_ip,
     release_loopback_ip,
@@ -51,6 +51,7 @@ VSCODE_PORT_RANGE = (40000, 44999)
 APP_PORT_RANGE_1 = (50000, 54999)
 APP_PORT_RANGE_2 = (55000, 59999)
 MCP_HTTP_PORT_RANGE = (60000, 64999)
+SCREEN_NUMBER_RANGE = (10, 999)
 
 
 def kill_process_tree(pid):
@@ -147,6 +148,7 @@ class SingularityRuntime(ActionExecutionClient):
 
     When receive an event, it will send the event to runtime-client which run inside the singularity environment.
 
+OSInteractiveAction,
     Args:
         config (OpenHandsConfig): The application configuration.
         event_stream (EventStream): The event stream to subscribe to.
@@ -492,6 +494,7 @@ class SingularityRuntime(ActionExecutionClient):
             self._find_available_port(APP_PORT_RANGE_2),
         ]
         self._mcp_http_port = self._find_available_port(MCP_HTTP_PORT_RANGE)
+        self._screen_number = find_available_display_number(SCREEN_NUMBER_RANGE[0], SCREEN_NUMBER_RANGE[1])
 
         # Prepare environment variables
         env_vars = {
@@ -502,6 +505,7 @@ class SingularityRuntime(ActionExecutionClient):
             'APP_PORT_1': str(self._app_ports[0]),
             'APP_PORT_2': str(self._app_ports[1]),
             'MCP_HTTP_PORT': str(self._mcp_http_port),
+            'SCREEN_NUMBER': str(self._screen_number),
             'PIP_BREAK_SYSTEM_PACKAGES': '1',
             'OPENHANDS_SESSION_ID': self.sid,
             'OMP_NUM_THREADS': '4', # Limit threads at container startup

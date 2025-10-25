@@ -42,6 +42,10 @@ class ActionType(str, Enum):
     """Interact with the browser instance.
     """
 
+    OS_INTERACTIVE = 'os_interactive'
+    """Interact with the operating system using pyautogui.
+    """
+
     MCP = 'call_tool_mcp'
     """Interact with the MCP server.
     """

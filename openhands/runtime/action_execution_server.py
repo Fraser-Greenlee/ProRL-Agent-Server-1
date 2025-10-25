@@ -12,6 +12,7 @@ import json
 import mimetypes
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -54,6 +55,7 @@ from openhands.events.action import (
     FileReadAction,
     FileWriteAction,
     IPythonRunCellAction,
+    OSInteractiveAction,
 )
 from openhands.events.event import FileEditSource, FileReadSource
 from openhands.events.observation import (
@@ -205,6 +207,11 @@ class ActionExecutor:
         self.browser: BrowserEnv | None = None
         self.browser_init_task: asyncio.Task | None = None
         self.browsergym_eval_env = browsergym_eval_env
+
+        # Xvfb for computer_use tool
+        self.xvfb_process: subprocess.Popen | None = None
+        self.xfce4_process: subprocess.Popen | None = None
+        self.xvfb_initialized = False
 
         self.start_time = time.time()
         self.last_execution_time = self.start_time
@@ -636,12 +643,191 @@ class ActionExecutor:
         await self._ensure_browser_ready()
         return await browse(action, self.browser, self.initial_cwd)
 
+    def _ensure_xvfb_ready(self):
+        """Ensure Xvfb is running for computer_use tool."""
+        if sys.platform == 'win32':
+            logger.warning('Xvfb not supported on Windows')
+            return False
+
+        if self.xvfb_initialized:
+            return True
+
+        # Get screen number from environment variable
+        screen_number = os.environ.get('SCREEN_NUMBER', '99')
+        display = f':{screen_number}'
+
+        try:
+            # Check if Xvfb is already running on this display
+            check_cmd = f'pgrep -f "Xvfb {display}"'
+            result = subprocess.run(
+                check_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+
+            xvfb_was_running = result.returncode == 0
+            if xvfb_was_running:
+                # Xvfb is already running
+                logger.info(f'Xvfb already running on display {display}')
+            else:
+                # Start Xvfb
+                logger.info(f'Starting Xvfb on display {display}')
+                xvfb_cmd = [
+                    'Xvfb',
+                    display,
+                    '-screen',
+                    '0',
+                    '1024x768x24',
+                ]
+                self.xvfb_process = subprocess.Popen(
+                    xvfb_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                # Give Xvfb time to start
+                time.sleep(1)
+                logger.info(f'Xvfb started on display {display}')
+
+            # Set the DISPLAY environment variable globally
+            os.environ['DISPLAY'] = display
+
+            # Start xfce4 desktop environment
+            # Check if xfce4-session is already running
+            check_xfce4_cmd = 'pgrep -f "xfce4-session"'
+            xfce4_result = subprocess.run(
+                check_xfce4_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+            )
+
+            if xfce4_result.returncode == 0:
+                logger.info('xfce4-session already running')
+            else:
+                # Start xfce4-session
+                logger.info('Starting xfce4-session')
+                try:
+                    self.xfce4_process = subprocess.Popen(
+                        ['xfce4-session'],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env=os.environ.copy(),
+                    )
+                    # Give xfce4 time to start
+                    time.sleep(2)
+                    logger.info('xfce4-session started')
+                except Exception as e:
+                    logger.warning(
+                        f'Failed to start xfce4-session: {e}. Continuing without desktop environment.'
+                    )
+
+            self.xvfb_initialized = True
+            return True
+
+        except Exception as e:
+            logger.error(f'Failed to initialize Xvfb: {e}')
+            return False
+
+    async def os_interactive(self, action: OSInteractiveAction) -> Observation:
+        """Handle OS interactive actions using pyautogui."""
+        if sys.platform == 'win32':
+            return ErrorObservation('OS interactive actions not supported on Windows.')
+
+        # Ensure Xvfb is ready
+        if not self._ensure_xvfb_ready():
+            return ErrorObservation('Failed to initialize virtual display (Xvfb).')
+
+        try:
+            # Import pyautogui here to avoid import errors if not installed
+            import pyautogui
+
+            # Create a restricted namespace for pyautogui execution
+            namespace = {
+                'moveTo': pyautogui.moveTo,
+                'move': pyautogui.move,
+                'click': pyautogui.click,
+                'doubleClick': pyautogui.doubleClick,
+                'rightClick': pyautogui.rightClick,
+                'drag': pyautogui.drag,
+                'scroll': pyautogui.scroll,
+                'position': pyautogui.position,
+                'typewrite': pyautogui.typewrite,
+                'write': pyautogui.write,
+                'press': pyautogui.press,
+                'keyDown': pyautogui.keyDown,
+                'keyUp': pyautogui.keyUp,
+                'hotkey': pyautogui.hotkey,
+                'size': pyautogui.size,
+                'screenshot': pyautogui.screenshot,
+                'locateOnScreen': pyautogui.locateOnScreen,
+                'locateCenterOnScreen': pyautogui.locateCenterOnScreen,
+                'alert': pyautogui.alert,
+                'confirm': pyautogui.confirm,
+                'prompt': pyautogui.prompt,
+                'sleep': time.sleep,
+            }
+
+            # Execute the OS actions
+            output_lines = []
+            for line in action.os_actions.strip().split('\n'):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                try:
+                    # Execute the line and capture any return value
+                    result = eval(line, {'__builtins__': {}}, namespace)
+                    if result is not None:
+                        output_lines.append(f'{line} -> {result}')
+                    else:
+                        output_lines.append(f'{line}')
+                except Exception as e:
+                    error_msg = f'Error executing "{line}": {str(e)}'
+                    logger.error(error_msg)
+                    output_lines.append(error_msg)
+
+            output = (
+                '\n'.join(output_lines)
+                if output_lines
+                else 'OS actions executed successfully'
+            )
+
+            # Return a CmdOutputObservation since we don't have a specific OS observation
+            return CmdOutputObservation(
+                content=output,
+                command=action.os_actions,
+                exit_code=0,
+            )
+
+        except ImportError:
+            return ErrorObservation(
+                'pyautogui is not installed. Please install it with: pip install pyautogui'
+            )
+        except Exception as e:
+            logger.error(f'Error executing OS actions: {e}')
+            return ErrorObservation(f'Error executing OS actions: {str(e)}')
+
     def close(self):
         self.memory_monitor.stop_monitoring()
         if self.bash_session is not None:
             self.bash_session.close()
         if self.browser is not None:
             self.browser.close()
+        if self.xfce4_process is not None:
+            try:
+                self.xfce4_process.terminate()
+                self.xfce4_process.wait(timeout=5)
+                logger.info('xfce4 process terminated')
+            except Exception as e:
+                logger.warning(f'Failed to terminate xfce4 process: {e}')
+        if self.xvfb_process is not None:
+            try:
+                self.xvfb_process.terminate()
+                self.xvfb_process.wait(timeout=5)
+                logger.info('Xvfb process terminated')
+            except Exception as e:
+                logger.warning(f'Failed to terminate Xvfb process: {e}')
 
 
 if __name__ == '__main__':
@@ -1226,6 +1412,14 @@ if __name__ == '__main__':
         os.unlink(socket_path)
 
     logger.info(f'Starting action execution API on UDS socket: {socket_path}')
+
+    import debugpy
+
+    debugpy.listen(5678)
+    logger.info('Waiting for debugger attach')
+    debugpy.wait_for_client()
+    logger.info('Debugger attached')
+    debugpy.breakpoint()
 
     # Run with UDS socket instead of TCP
     config = Config(app=app, uds=socket_path, log_level='error')

@@ -29,6 +29,7 @@ from openhands.events.action import (
     FileReadAction,
     FileWriteAction,
     IPythonRunCellAction,
+    OSInteractiveAction,
 )
 from openhands.events.action.action import Action
 from openhands.events.action.files import FileEditSource
@@ -361,6 +362,9 @@ class ActionExecutionClient(Runtime):
         return self.send_action_for_execution(action)
 
     def browse_interactive(self, action: BrowseInteractiveAction) -> Observation:
+        return self.send_action_for_execution(action)
+
+    def os_interactive(self, action: OSInteractiveAction) -> Observation:
         return self.send_action_for_execution(action)
 
     def get_mcp_config(

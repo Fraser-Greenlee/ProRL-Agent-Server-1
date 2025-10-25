@@ -22,7 +22,7 @@ from openhands.runtime.impl.action_execution.action_execution_client import (
 )
 from openhands.runtime.impl.docker.containers import stop_all_containers
 from openhands.runtime.plugins import PluginRequirement
-from openhands.runtime.utils import find_available_tcp_port
+from openhands.runtime.utils import find_available_display_number, find_available_tcp_port
 from openhands.runtime.utils.command import (
     DEFAULT_MAIN_MODULE,
     get_action_execution_server_startup_command,
@@ -39,6 +39,7 @@ EXECUTION_SERVER_PORT_RANGE = (30000, 39999)
 VSCODE_PORT_RANGE = (40000, 49999)
 APP_PORT_RANGE_1 = (50000, 54999)
 APP_PORT_RANGE_2 = (55000, 59999)
+SCREEN_NUMBER_RANGE = (10, 999)
 
 
 def _is_retryablewait_until_alive_error(exception):
@@ -278,6 +279,7 @@ class DockerRuntime(ActionExecutionClient):
             self._find_available_port(APP_PORT_RANGE_1),
             self._find_available_port(APP_PORT_RANGE_2),
         ]
+        self._screen_number = find_available_display_number(SCREEN_NUMBER_RANGE[0], SCREEN_NUMBER_RANGE[1])
         self.api_url = f'{self.config.sandbox.local_runtime_url}:{self._container_port}'
 
         use_host_network = self.config.sandbox.use_host_network
@@ -324,6 +326,7 @@ class DockerRuntime(ActionExecutionClient):
             'VSCODE_PORT': str(self._vscode_port),
             'APP_PORT_1': self._app_ports[0],
             'APP_PORT_2': self._app_ports[1],
+            'SCREEN_NUMBER': str(self._screen_number),
             'PIP_BREAK_SYSTEM_PACKAGES': '1',
         }
         if self.config.debug or DEBUG:

@@ -11,6 +11,7 @@ from litellm import (
 
 from openhands.agenthub.codeact_agent.tools import (
     BrowserTool,
+    ComputerUseTool,
     FinishTool,
     IPythonTool,
     LLMBasedFileEditTool,
@@ -34,6 +35,7 @@ from openhands.events.action import (
     FileReadAction,
     IPythonRunCellAction,
     MessageAction,
+    OSInteractiveAction,
 )
 from openhands.events.action.mcp import MCPAction
 from openhands.events.event import FileEditSource, FileReadSource
@@ -218,6 +220,16 @@ def response_to_actions(
                         f'Missing required argument "code" in tool call {tool_call.function.name}'
                     )
                 action = BrowseInteractiveAction(browser_actions=arguments['code'])
+
+            # ================================================
+            # ComputerUseTool
+            # ================================================
+            elif tool_call.function.name == ComputerUseTool['function']['name']:
+                if 'code' not in arguments:
+                    raise FunctionCallValidationError(
+                        f'Missing required argument "code" in tool call {tool_call.function.name}'
+                    )
+                action = OSInteractiveAction(os_actions=arguments['code'])
 
             # ================================================
             # MCPAction (MCP)

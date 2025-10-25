@@ -54,7 +54,7 @@ From: {{ base_image }}
         libgl1-mesa-glx \
         {% endif -%}
         libasound2-plugins libatomic1 \
-        xvfb xfce4 xfce4-goodies
+        xvfb xfce4 xfce4-goodies dbus-x11 x11-utils
 
     {% if 'ubuntu' in base_image %}
     # Install Node.js

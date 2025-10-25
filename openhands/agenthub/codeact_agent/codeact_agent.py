@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 import openhands.agenthub.codeact_agent.function_calling as codeact_function_calling
 from openhands.agenthub.codeact_agent.tools.bash import create_cmd_run_tool
 from openhands.agenthub.codeact_agent.tools.browser import BrowserTool
+from openhands.agenthub.codeact_agent.tools.computer_use import ComputerUseTool
 from openhands.agenthub.codeact_agent.tools.finish import FinishTool
 from openhands.agenthub.codeact_agent.tools.ipython import IPythonTool
 from openhands.agenthub.codeact_agent.tools.llm_based_edit import LLMBasedFileEditTool
@@ -132,6 +133,9 @@ class CodeActAgent(Agent):
                 logger.warning('Windows runtime does not support browsing yet')
             else:
                 tools.append(BrowserTool)
+        # Add computer_use tool for OS-level interactions
+        if sys.platform != 'win32':
+            tools.append(ComputerUseTool)
         if self.config.enable_jupyter:
             tools.append(IPythonTool)
         if self.config.enable_llm_editor:
