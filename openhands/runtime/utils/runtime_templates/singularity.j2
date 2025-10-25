@@ -46,7 +46,7 @@ From: {{ base_image }}
 
 {% macro setup_base_system() %}
     # Install base system dependencies
-    apt-get install -y --no-install-recommends \
+    apt-get install -y --no-install-recommends -o APT::Sandbox::User=root \
         wget curl ca-certificates sudo apt-utils git jq tmux build-essential ripgrep \
         {%- if 'ubuntu' in base_image and (base_image.endswith(':latest') or base_image.endswith(':24.04') or base_image.endswith('24.04.sif')) -%}
         libgl1 \
@@ -54,7 +54,7 @@ From: {{ base_image }}
         libgl1-mesa-glx \
         {% endif -%}
         libasound2-plugins libatomic1 \
-        xvfb xfce4 xfce4-goodies dbus-x11 x11-utils
+        xvfb xfce4 xfce4-goodies dbus-x11 x11-utils gnome-screenshot
 
     {% if 'ubuntu' in base_image %}
     # Install Node.js
@@ -68,7 +68,7 @@ From: {{ base_image }}
     # fi
 
     TZ=Etc/UTC DEBIAN_FRONTEND=noninteractive \
-        apt-get install -y --no-install-recommends nodejs
+        apt-get install -y --no-install-recommends -o APT::Sandbox::User=root nodejs
 
     corepack enable yarn
     {% endif -%}

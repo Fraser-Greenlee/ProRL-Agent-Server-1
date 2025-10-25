@@ -652,21 +652,30 @@ class ActionExecutor:
         if self.xvfb_initialized:
             return True
 
+        # Create .Xauthority file if it doesn't exist
+        xauthority_path = Path.home() / '.Xauthority'
+        try:
+            xauthority_path.touch(exist_ok=True)
+            logger.debug(f'Ensured .Xauthority exists at {xauthority_path}')
+        except Exception as e:
+            logger.warning(f'Failed to create .Xauthority: {e}')
+
+        # Setup XDG_RUNTIME_DIR for D-Bus and xfce4
+        user_runtime_dir = f'/run/user/{os.getuid()}'
+        try:
+            if not os.path.exists(user_runtime_dir):
+                os.makedirs(user_runtime_dir, mode=0o700, exist_ok=True)
+                logger.info(f'Created XDG_RUNTIME_DIR at {user_runtime_dir}')
+            os.environ['XDG_RUNTIME_DIR'] = user_runtime_dir
+        except Exception as e:
+            logger.warning(f'Failed to create XDG_RUNTIME_DIR: {e}')
+
         # Get screen number from environment variable
         screen_number = os.environ.get('SCREEN_NUMBER', '99')
         display = f':{screen_number}'
 
         try:
-            # Check if Xvfb is already running on this display
-            check_cmd = f'pgrep -f "Xvfb {display}"'
-            result = subprocess.run(
-                check_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-
-            xvfb_was_running = result.returncode == 0
+            xvfb_was_running = False
             if xvfb_was_running:
                 # Xvfb is already running
                 logger.info(f'Xvfb already running on display {display}')
@@ -691,36 +700,22 @@ class ActionExecutor:
 
             # Set the DISPLAY environment variable globally
             os.environ['DISPLAY'] = display
-
-            # Start xfce4 desktop environment
-            # Check if xfce4-session is already running
-            check_xfce4_cmd = 'pgrep -f "xfce4-session"'
-            xfce4_result = subprocess.run(
-                check_xfce4_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-            )
-
-            if xfce4_result.returncode == 0:
-                logger.info('xfce4-session already running')
-            else:
-                # Start xfce4-session
-                logger.info('Starting xfce4-session')
-                try:
-                    self.xfce4_process = subprocess.Popen(
-                        ['xfce4-session'],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        env=os.environ.copy(),
-                    )
-                    # Give xfce4 time to start
-                    time.sleep(2)
-                    logger.info('xfce4-session started')
-                except Exception as e:
-                    logger.warning(
-                        f'Failed to start xfce4-session: {e}. Continuing without desktop environment.'
-                    )
+            # Start xfce4-session
+            logger.info('Starting xfce4-session')
+            try:
+                self.xfce4_process = subprocess.Popen(
+                    ['xfce4-session'],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=os.environ.copy(),
+                )
+                # Give xfce4 time to start
+                time.sleep(2)
+                logger.info('xfce4-session started')
+            except Exception as e:
+                logger.warning(
+                    f'Failed to start xfce4-session: {e}. Continuing without desktop environment.'
+                )
 
             self.xvfb_initialized = True
             return True
@@ -1413,13 +1408,12 @@ if __name__ == '__main__':
 
     logger.info(f'Starting action execution API on UDS socket: {socket_path}')
 
-    import debugpy
-
-    debugpy.listen(5678)
-    logger.info('Waiting for debugger attach')
-    debugpy.wait_for_client()
-    logger.info('Debugger attached')
-    debugpy.breakpoint()
+    # import debugpy
+    # debugpy.listen(5678)
+    # logger.info('Waiting for debugger attach')
+    # debugpy.wait_for_client()
+    # logger.info('Debugger attached')
+    # debugpy.breakpoint()
 
     # Run with UDS socket instead of TCP
     config = Config(app=app, uds=socket_path, log_level='error')
