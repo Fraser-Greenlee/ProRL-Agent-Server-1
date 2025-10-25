@@ -737,6 +737,19 @@ class ActionExecutor:
             # Import pyautogui here to avoid import errors if not installed
             import pyautogui
 
+            # Disable the failsafe feature to prevent corner-triggered failures
+            pyautogui.FAILSAFE = False
+
+            # Wrapper for screenshot that creates parent directories
+            def screenshot_with_mkdir(imageFilename=None, region=None):
+                """Wrapper for pyautogui.screenshot that creates parent directories."""
+                if imageFilename:
+                    # Create parent directories if they don't exist
+                    parent_dir = os.path.dirname(imageFilename)
+                    if parent_dir:
+                        os.makedirs(parent_dir, exist_ok=True)
+                return pyautogui.screenshot(imageFilename=imageFilename, region=region)
+
             # Create a restricted namespace for pyautogui execution
             namespace = {
                 'moveTo': pyautogui.moveTo,
@@ -754,7 +767,7 @@ class ActionExecutor:
                 'keyUp': pyautogui.keyUp,
                 'hotkey': pyautogui.hotkey,
                 'size': pyautogui.size,
-                'screenshot': pyautogui.screenshot,
+                'screenshot': screenshot_with_mkdir,
                 'locateOnScreen': pyautogui.locateOnScreen,
                 'locateCenterOnScreen': pyautogui.locateCenterOnScreen,
                 'alert': pyautogui.alert,
