@@ -148,7 +148,6 @@ class SingularityRuntime(ActionExecutionClient):
 
     When receive an event, it will send the event to runtime-client which run inside the singularity environment.
 
-OSInteractiveAction,
     Args:
         config (OpenHandsConfig): The application configuration.
         event_stream (EventStream): The event stream to subscribe to.
