@@ -4,6 +4,10 @@ import json
 import os
 import random
 import threading
+<<<<<<< HEAD
+=======
+from typing import cast
+>>>>>>> f7aaf55d (License & Readme & remove front & CICD etc.)
 
 import aiohttp
 from openai import AsyncOpenAI
@@ -51,7 +55,7 @@ class Reward:
             raise ValueError(
                 f'Invalid reward_model type: {type(instance["reward_model"])}'
             )
-        extra_info = instance.get('extra_info', None)
+        instance.get('extra_info', None)
 
         if data_source == 'stem':
             try:
@@ -113,20 +117,31 @@ class Reward:
 
             if data_source == 'reasoning_gym':
                 try:
+                    entry = None
+                    task = None
+                    reward_model_value = instance['reward_model']
+                    rm_dict = cast(dict, reward_model_value)
+                    entry = rm_dict['entry']
+                    task = rm_dict['reasoning_task']
                     async with session.post(
                         f'http://{ip}:8288/score',
                         json={
                             'answer': solution_str,
-                            'entry': extra_info['reward_model']['entry'],
-                            'task': extra_info['reward_model']['reasoning_task'],
+                            'entry': entry,
+                            'task': task,
                         },
                     ) as response:
+<<<<<<< HEAD
                         response_json = await response.json()
                         res = response_json['score']
+=======
+                        result = await response.json()
+                        res = result['score']
+>>>>>>> f7aaf55d (License & Readme & remove front & CICD etc.)
                 except Exception as e:
                     logger.error(f'Error: {e}, ip: {ip}')
                     logger.info(
-                        f'answer: {solution_str[:10]}, task: {extra_info["reward_model"]["reasoning_task"]}, entry: {extra_info["reward_model"]["entry"]}'[
+                        f'answer: {solution_str[:10]}, task: {task}, entry: {entry}'[
                             :100
                         ]
                     )
@@ -141,8 +156,13 @@ class Reward:
                             'data_source': data_source,
                         },
                     ) as response:
+<<<<<<< HEAD
                         response_json = await response.json()
                         res = response_json['score']
+=======
+                        result = await response.json()
+                        res = result['score']
+>>>>>>> f7aaf55d (License & Readme & remove front & CICD etc.)
                 except Exception as e:
                     logger.error(f'Error: {e}, ip: {ip}')
                     logger.info(
@@ -157,10 +177,14 @@ class Reward:
 
         # TODO: add llm_as_judge reward
 
+<<<<<<< HEAD
         # Convert res to float score
         if isinstance(res, (int, float, bool)):
             score = float(res)
         else:
             raise ValueError(f'Invalid reward type: {type(res)}')
+=======
+        score = float(res)
+>>>>>>> f7aaf55d (License & Readme & remove front & CICD etc.)
 
         return {'resolved': score > 0.99, 'reward': score}
