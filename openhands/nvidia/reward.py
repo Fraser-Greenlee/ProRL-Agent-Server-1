@@ -4,10 +4,7 @@ import json
 import os
 import random
 import threading
-<<<<<<< HEAD
-=======
 from typing import cast
->>>>>>> f7aaf55d (License & Readme & remove front & CICD etc.)
 
 import aiohttp
 from openai import AsyncOpenAI
@@ -131,13 +128,8 @@ class Reward:
                             'task': task,
                         },
                     ) as response:
-<<<<<<< HEAD
                         response_json = await response.json()
                         res = response_json['score']
-=======
-                        result = await response.json()
-                        res = result['score']
->>>>>>> f7aaf55d (License & Readme & remove front & CICD etc.)
                 except Exception as e:
                     logger.error(f'Error: {e}, ip: {ip}')
                     logger.info(
@@ -156,13 +148,8 @@ class Reward:
                             'data_source': data_source,
                         },
                     ) as response:
-<<<<<<< HEAD
                         response_json = await response.json()
                         res = response_json['score']
-=======
-                        result = await response.json()
-                        res = result['score']
->>>>>>> f7aaf55d (License & Readme & remove front & CICD etc.)
                 except Exception as e:
                     logger.error(f'Error: {e}, ip: {ip}')
                     logger.info(
@@ -177,14 +164,11 @@ class Reward:
 
         # TODO: add llm_as_judge reward
 
-<<<<<<< HEAD
         # Convert res to float score
         if isinstance(res, (int, float, bool)):
             score = float(res)
         else:
             raise ValueError(f'Invalid reward type: {type(res)}')
-=======
         score = float(res)
->>>>>>> f7aaf55d (License & Readme & remove front & CICD etc.)
 
         return {'resolved': score > 0.99, 'reward': score}
