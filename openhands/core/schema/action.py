@@ -46,6 +46,10 @@ class ActionType(str, Enum):
     """Interact with the operating system using pyautogui.
     """
 
+    OSWORLD_INTERACTIVE = 'osworld_interactive'
+    """Interact with OSWorld virtual machine using pyautogui.
+    """
+
     MCP = 'call_tool_mcp'
     """Interact with the MCP server.
     """

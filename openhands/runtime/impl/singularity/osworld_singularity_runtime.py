@@ -13,11 +13,14 @@ import time
 import json
 import threading
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import httpx
 
 from openhands.core.config import OpenHandsConfig
+
+if TYPE_CHECKING:
+    from openhands.events.observation import Observation
 from openhands.core.exceptions import (
     AgentRuntimeDisconnectedError,
     AgentRuntimeNotFoundError,
@@ -484,6 +487,31 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             self.log('error', f'Failed to get VM screenshot: {e}')
             return None
     
+    def _execute_pyautogui_command(self, pyautogui_command: str) -> dict:
+        """Execute a PyAutoGUI command string in the VM.
+        
+        Args:
+            pyautogui_command: Raw PyAutoGUI command(s) to execute
+            
+        Returns:
+            Response dictionary from OSWorld server
+        """
+        try:
+            # Wrap the command with necessary imports
+            command = f"import pyautogui; import time; pyautogui.FAILSAFE = False; {pyautogui_command}"
+            command_list = ["python3", "-c", command]
+            payload = {"command": command_list, "shell": False}
+            
+            response = httpx.post(
+                f'{self.osworld_vm_url}/execute',
+                json=payload,
+                timeout=30.0
+            )
+            return response.json()
+        except Exception as e:
+            self.log('error', f'Failed to execute PyAutoGUI command: {e}')
+            return {'status': 'error', 'message': str(e)}
+    
     def execute_vm_action(self, action_data: dict) -> dict:
         """Execute an action in the OSWorld VM.
         
@@ -503,16 +531,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             if pyautogui_command is None:
                 return {'status': 'error', 'message': f'Unknown action type: {action_type}'}
             
-            # Execute the PyAutoGUI command
-            command_list = ["python3", "-c", f"import pyautogui; import time; pyautogui.FAILSAFE = False; {pyautogui_command}"]
-            payload = {"command": command_list, "shell": False}
-            
-            response = httpx.post(
-                f'{self.osworld_vm_url}/execute',
-                json=payload,
-                timeout=30.0
-            )
-            return response.json()
+            # Execute using the common method
+            return self._execute_pyautogui_command(pyautogui_command)
         except Exception as e:
             self.log('error', f'Failed to execute VM action: {e}')
             return {'status': 'error', 'message': str(e)}
@@ -627,4 +647,462 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         
         else:
             return None
+    
+    def run_action(self, action):
+        """Run an action in the OSWorld VM.
+        
+        This method is called by the runtime system to execute actions.
+        For OSWorldInteractiveAction, it converts the actions to PyAutoGUI commands.
+        """
+        from openhands.events.action.os import OSWorldInteractiveAction
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        if isinstance(action, OSWorldInteractiveAction):
+            return self.osworld_interactive(action)
+        else:
+            # Fallback to parent implementation for other actions
+            return super().run_action(action)
+    
+    def osworld_interactive(self, action) -> 'Observation':
+        """Handle OSWorld interactive actions.
+        
+        Dispatches to appropriate handler based on action.method.
+        Supports all PythonController methods from OSWorld.
+        
+        Args:
+            action: OSWorldInteractiveAction with method and params
+            
+        Returns:
+            Appropriate Observation based on the method
+        """
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        try:
+            method = action.method
+            params = action.params or {}
+            
+            # Dispatch to appropriate handler
+            if method == 'execute_action':
+                return self._handle_execute_action(params)
+            elif method == 'get_screenshot':
+                return self._handle_get_screenshot()
+            elif method == 'get_accessibility_tree':
+                return self._handle_get_accessibility_tree()
+            elif method == 'get_terminal_output':
+                return self._handle_get_terminal_output()
+            elif method == 'get_file':
+                return self._handle_get_file(params)
+            elif method == 'execute_python_command':
+                return self._handle_execute_python_command(params)
+            elif method == 'run_python_script':
+                return self._handle_run_python_script(params)
+            elif method == 'run_bash_script':
+                return self._handle_run_bash_script(params)
+            elif method == 'start_recording':
+                return self._handle_start_recording()
+            elif method == 'end_recording':
+                return self._handle_end_recording(params)
+            elif method == 'get_vm_platform':
+                return self._handle_get_vm_platform()
+            elif method == 'get_vm_screen_size':
+                return self._handle_get_vm_screen_size()
+            elif method == 'get_vm_window_size':
+                return self._handle_get_vm_window_size(params)
+            elif method == 'get_vm_wallpaper':
+                return self._handle_get_vm_wallpaper()
+            elif method == 'get_vm_desktop_path':
+                return self._handle_get_vm_desktop_path()
+            elif method == 'get_vm_directory_tree':
+                return self._handle_get_vm_directory_tree(params)
+            else:
+                return ErrorObservation(f'Unknown OSWorld method: {method}')
+                
+        except Exception as e:
+            self.log('error', f'Failed to execute OSWorld interactive action: {e}')
+            return ErrorObservation(f'Failed to execute OSWorld action: {str(e)}')
+    
+    # Handler methods for each PythonController method
+    
+    def _handle_execute_action(self, params: dict) -> 'Observation':
+        """Handle execute_action - PyAutoGUI actions like CLICK, TYPING, etc."""
+        from openhands.events.observation import CmdOutputObservation
+        
+        action_data = params.get('action', params)
+        result = self.execute_vm_action(action_data)
+        
+        if result.get('status') == 'success':
+            return CmdOutputObservation(
+                content=result.get('output', 'Action executed successfully'),
+                command=str(action_data),
+                exit_code=0,
+            )
+        else:
+            error_msg = result.get('error', result.get('message', 'Unknown error'))
+            return CmdOutputObservation(
+                content=f"Error: {error_msg}",
+                command=str(action_data),
+                exit_code=1,
+            )
+    
+    def _handle_get_screenshot(self) -> 'Observation':
+        """Handle get_screenshot - returns screenshot as base64."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        import base64
+        
+        screenshot_bytes = self.get_vm_screenshot()
+        if screenshot_bytes:
+            # Return as base64 encoded string
+            screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+            return CmdOutputObservation(
+                content=f"Screenshot captured ({len(screenshot_bytes)} bytes)",
+                command='get_screenshot',
+                exit_code=0,
+            )
+        else:
+            return ErrorObservation('Failed to capture screenshot')
+    
+    def _handle_get_accessibility_tree(self) -> 'Observation':
+        """Handle get_accessibility_tree."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        try:
+            response = httpx.get(
+                f'{self.osworld_vm_url}/accessibility',
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                at = response.json().get('AT', '')
+                return CmdOutputObservation(
+                    content=at,
+                    command='get_accessibility_tree',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to get accessibility tree: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to get accessibility tree: {e}')
+    
+    def _handle_get_terminal_output(self) -> 'Observation':
+        """Handle get_terminal_output."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        try:
+            response = httpx.get(
+                f'{self.osworld_vm_url}/terminal',
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                output = response.json().get('output', '')
+                return CmdOutputObservation(
+                    content=output,
+                    command='get_terminal_output',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to get terminal output: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to get terminal output: {e}')
+    
+    def _handle_get_file(self, params: dict) -> 'Observation':
+        """Handle get_file - downloads file from VM."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        import base64
+        
+        file_path = params.get('file_path', '')
+        if not file_path:
+            return ErrorObservation('file_path parameter required')
+        
+        try:
+            response = httpx.post(
+                f'{self.osworld_vm_url}/file',
+                data={'file_path': file_path},
+                timeout=30.0
+            )
+            if response.status_code == 200:
+                file_content = response.content
+                # Return as base64
+                content_b64 = base64.b64encode(file_content).decode('utf-8')
+                return CmdOutputObservation(
+                    content=f"File downloaded ({len(file_content)} bytes):\n{content_b64[:100]}...",
+                    command=f'get_file {file_path}',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to get file: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to get file: {e}')
+    
+    def _handle_execute_python_command(self, params: dict) -> 'Observation':
+        """Handle execute_python_command - raw Python command execution."""
+        from openhands.events.observation import CmdOutputObservation
+        
+        command = params.get('command', '')
+        if not command:
+            return CmdOutputObservation(
+                content='Error: command parameter required',
+                command='execute_python_command',
+                exit_code=1,
+            )
+        
+        result = self._execute_pyautogui_command(command)
+        
+        if result.get('status') == 'success':
+            return CmdOutputObservation(
+                content=result.get('output', ''),
+                command=command,
+                exit_code=result.get('returncode', 0),
+            )
+        else:
+            error_msg = result.get('error', result.get('message', 'Unknown error'))
+            return CmdOutputObservation(
+                content=f"Error: {error_msg}",
+                command=command,
+                exit_code=result.get('returncode', 1),
+            )
+    
+    def _handle_run_python_script(self, params: dict) -> 'Observation':
+        """Handle run_python_script."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        script = params.get('script', '')
+        if not script:
+            return ErrorObservation('script parameter required')
+        
+        try:
+            payload = {'code': script}
+            response = httpx.post(
+                f'{self.osworld_vm_url}/run_python',
+                json=payload,
+                timeout=90.0
+            )
+            if response.status_code == 200:
+                result = response.json()
+                output = result.get('output', '')
+                error = result.get('error', '')
+                content = f"Output:\n{output}"
+                if error:
+                    content += f"\nError:\n{error}"
+                return CmdOutputObservation(
+                    content=content,
+                    command='run_python_script',
+                    exit_code=result.get('returncode', 0),
+                )
+            return ErrorObservation(f'Failed to run Python script: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to run Python script: {e}')
+    
+    def _handle_run_bash_script(self, params: dict) -> 'Observation':
+        """Handle run_bash_script."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        script = params.get('script', '')
+        if not script:
+            return ErrorObservation('script parameter required')
+        
+        timeout = params.get('timeout', 30)
+        working_dir = params.get('working_dir')
+        
+        try:
+            payload = {
+                'script': script,
+                'timeout': timeout,
+                'working_dir': working_dir
+            }
+            response = httpx.post(
+                f'{self.osworld_vm_url}/run_bash_script',
+                json=payload,
+                timeout=timeout + 10.0
+            )
+            if response.status_code == 200:
+                result = response.json()
+                output = result.get('output', '')
+                error = result.get('error', '')
+                content = f"Output:\n{output}"
+                if error:
+                    content += f"\nError:\n{error}"
+                return CmdOutputObservation(
+                    content=content,
+                    command='run_bash_script',
+                    exit_code=result.get('returncode', 0),
+                )
+            return ErrorObservation(f'Failed to run bash script: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to run bash script: {e}')
+    
+    def _handle_start_recording(self) -> 'Observation':
+        """Handle start_recording."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        try:
+            response = httpx.post(
+                f'{self.osworld_vm_url}/start_recording',
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                return CmdOutputObservation(
+                    content='Recording started',
+                    command='start_recording',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to start recording: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to start recording: {e}')
+    
+    def _handle_end_recording(self, params: dict) -> 'Observation':
+        """Handle end_recording."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        import base64
+        
+        dest = params.get('dest', '/tmp/recording.mp4')
+        
+        try:
+            response = httpx.post(
+                f'{self.osworld_vm_url}/end_recording',
+                timeout=60.0
+            )
+            if response.status_code == 200:
+                video_content = response.content
+                # Could save to file or return as base64
+                return CmdOutputObservation(
+                    content=f'Recording saved ({len(video_content)} bytes)',
+                    command=f'end_recording {dest}',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to end recording: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to end recording: {e}')
+    
+    def _handle_get_vm_platform(self) -> 'Observation':
+        """Handle get_vm_platform."""
+        from openhands.events.observation import CmdOutputObservation
+        
+        command = "import platform; print(platform.system())"
+        result = self._execute_pyautogui_command(command)
+        
+        if result.get('status') == 'success':
+            platform = result.get('output', '').strip()
+            return CmdOutputObservation(
+                content=platform,
+                command='get_vm_platform',
+                exit_code=0,
+            )
+        else:
+            return CmdOutputObservation(
+                content='Unknown',
+                command='get_vm_platform',
+                exit_code=1,
+            )
+    
+    def _handle_get_vm_screen_size(self) -> 'Observation':
+        """Handle get_vm_screen_size."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        try:
+            response = httpx.post(
+                f'{self.osworld_vm_url}/screen_size',
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                size = response.json()
+                content = f"Width: {size.get('width', 'unknown')}, Height: {size.get('height', 'unknown')}"
+                return CmdOutputObservation(
+                    content=content,
+                    command='get_vm_screen_size',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to get screen size: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to get screen size: {e}')
+    
+    def _handle_get_vm_window_size(self, params: dict) -> 'Observation':
+        """Handle get_vm_window_size."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        app_class_name = params.get('app_class_name', '')
+        if not app_class_name:
+            return ErrorObservation('app_class_name parameter required')
+        
+        try:
+            response = httpx.post(
+                f'{self.osworld_vm_url}/window_size',
+                data={'app_class_name': app_class_name},
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                size = response.json()
+                content = f"Width: {size.get('width', 'unknown')}, Height: {size.get('height', 'unknown')}"
+                return CmdOutputObservation(
+                    content=content,
+                    command=f'get_vm_window_size {app_class_name}',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to get window size: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to get window size: {e}')
+    
+    def _handle_get_vm_wallpaper(self) -> 'Observation':
+        """Handle get_vm_wallpaper."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        import base64
+        
+        try:
+            response = httpx.post(
+                f'{self.osworld_vm_url}/wallpaper',
+                timeout=30.0
+            )
+            if response.status_code == 200:
+                wallpaper_bytes = response.content
+                return CmdOutputObservation(
+                    content=f'Wallpaper captured ({len(wallpaper_bytes)} bytes)',
+                    command='get_vm_wallpaper',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to get wallpaper: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to get wallpaper: {e}')
+    
+    def _handle_get_vm_desktop_path(self) -> 'Observation':
+        """Handle get_vm_desktop_path."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        
+        try:
+            response = httpx.post(
+                f'{self.osworld_vm_url}/desktop_path',
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                desktop_path = response.json().get('desktop_path', '')
+                return CmdOutputObservation(
+                    content=desktop_path,
+                    command='get_vm_desktop_path',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to get desktop path: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to get desktop path: {e}')
+    
+    def _handle_get_vm_directory_tree(self, params: dict) -> 'Observation':
+        """Handle get_vm_directory_tree."""
+        from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        import json
+        
+        path = params.get('path', '')
+        if not path:
+            return ErrorObservation('path parameter required')
+        
+        try:
+            payload = {'path': path}
+            response = httpx.post(
+                f'{self.osworld_vm_url}/list_directory',
+                json=payload,
+                timeout=30.0
+            )
+            if response.status_code == 200:
+                directory_tree = response.json().get('directory_tree', {})
+                content = json.dumps(directory_tree, indent=2)
+                return CmdOutputObservation(
+                    content=content,
+                    command=f'get_vm_directory_tree {path}',
+                    exit_code=0,
+                )
+            return ErrorObservation(f'Failed to get directory tree: {response.status_code}')
+        except Exception as e:
+            return ErrorObservation(f'Failed to get directory tree: {e}')
 

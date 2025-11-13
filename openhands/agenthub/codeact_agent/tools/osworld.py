@@ -1,246 +1,364 @@
-"""OSWorld tools for interacting with virtual machines.
-
-This module provides tools for agents to control OSWorld virtual machines,
-including mouse, keyboard, and screen operations through the OSWorld server API.
 """
+OSWorld Tools
 
-from litellm import ChatCompletionToolParam, ChatCompletionToolParamFunctionChunk
+Provides comprehensive tools for interacting with OSWorld virtual machines.
+These tools expose all PythonController methods from the OSWorld framework,
+including mouse/keyboard control, file operations, screenshots, and more.
+
+Based on: osworld/desktop_env/controllers/python.py
+"""
 
 from openhands.llm.tool_names import OSWORLD_TOOL_NAME
 
-_OSWORLD_DESCRIPTION = """Interact with an OSWorld virtual machine through its server API. 
-Use this tool to control the mouse, keyboard, take screenshots, or execute commands in a real VM environment.
+OSWORLD_TOOLS_DOCSTRING = f'''
+# {OSWORLD_TOOL_NAME}
 
-The tool communicates with an OSWorld Flask server running inside a QEMU VM.
-You can perform GUI automation tasks like clicking, typing, and taking screenshots.
+The `{OSWORLD_TOOL_NAME}` tool allows you to interact with a virtual desktop environment (Ubuntu or Windows)
+running inside a QEMU VM. This tool provides comprehensive control over the desktop including:
 
-Multiple actions can be chained, but they execute sequentially. Complex sequences (>3 actions) 
-may fail or produce unexpected results.
+## Available Methods
+
+### Mouse & Keyboard Actions
+
+1. **execute_action** - Execute PyAutoGUI actions for mouse and keyboard control
+   - Actions: CLICK, DOUBLE_CLICK, RIGHT_CLICK, MOVE_TO, DRAG_TO, SCROLL
+   - Keyboard: TYPING, PRESS, KEY_DOWN, KEY_UP, HOTKEY
+   - Parameters: action dict with action_type and parameters
+
+   Example:
+   ```python
+   osworld(
+       method="execute_action",
+       params={{
+           "action": {{
+               "action_type": "CLICK",
+               "parameters": {{"x": 500, "y": 300, "button": "left"}}
+           }}
+       }}
+   )
+   ```
+
+   ```python
+   osworld(
+       method="execute_action",
+       params={{
+           "action": {{
+               "action_type": "TYPING",
+               "parameters": {{"text": "Hello World"}}
+           }}
+       }}
+   )
+   ```
+
+   ```python
+   osworld(
+       method="execute_action",
+       params={{
+           "action": {{
+               "action_type": "HOTKEY",
+               "parameters": {{"keys": ["ctrl", "c"]}}
+           }}
+       }}
+   )
+   ```
+
+### Screen & Observation
+
+2. **get_screenshot** - Capture a screenshot of the VM desktop (with cursor)
+   - Returns: Screenshot image as base64
+
+   Example:
+   ```python
+   osworld(method="get_screenshot", params={{}})
+   ```
+
+3. **get_accessibility_tree** - Get the accessibility tree of UI elements
+   - Returns: Accessibility tree structure
+
+   Example:
+   ```python
+   osworld(method="get_accessibility_tree", params={{}})
+   ```
+
+4. **get_terminal_output** - Get current terminal output from the VM
+   - Returns: Terminal text output
+
+   Example:
+   ```python
+   osworld(method="get_terminal_output", params={{}})
+   ```
+
+### File Operations
+
+5. **get_file** - Download a file from the VM
+   - Parameters:
+     - file_path (str): Path to the file in the VM
+   - Returns: File content as base64
+
+   Example:
+   ```python
+   osworld(
+       method="get_file",
+       params={{"file_path": "/home/user/document.txt"}}
+   )
+   ```
+
+### Script Execution
+
+6. **execute_python_command** - Execute a raw Python command in the VM
+   - Parameters:
+     - command (str): Python command to execute
+   - Returns: Command output
+
+   Example:
+   ```python
+   osworld(
+       method="execute_python_command",
+       params={{"command": "print('Hello from VM')"}}
+   )
+   ```
+
+7. **run_python_script** - Execute a Python script in the VM
+   - Parameters:
+     - script (str): Python script content
+   - Returns: Script output and errors
+
+   Example:
+   ```python
+   osworld(
+       method="run_python_script",
+       params={{
+           "script": """
+import os
+print(os.getcwd())
+print(os.listdir('.'))
 """
+       }}
+   )
+   ```
 
-_OSWORLD_TOOL_DESCRIPTION = """
-OSWorld VM Control Functions
+8. **run_bash_script** - Execute a bash script in the VM
+   - Parameters:
+     - script (str): Bash script content
+     - timeout (int, optional): Execution timeout in seconds (default: 30)
+     - working_dir (str, optional): Working directory for execution
+   - Returns: Script output, errors, and return code
 
-The OSWorld server exposes actions through HTTP endpoints. Each action is specified as a dictionary
-with 'action_type' and 'parameters' fields.
+   Example:
+   ```python
+   osworld(
+       method="run_bash_script",
+       params={{
+           "script": "ls -la\\necho 'Done'",
+           "timeout": 60,
+           "working_dir": "/home/user"
+       }}
+   )
+   ```
 
-# Mouse Control Actions
+### Screen Recording
 
-CLICK Action:
-    Description: Click the mouse at a specific position
-    Parameters:
-        x (int): X coordinate on screen
-        y (int): Y coordinate on screen  
-        button (str): Mouse button - 'left', 'right', or 'middle' (default: 'left')
-        clicks (int): Number of clicks (default: 1)
+9. **start_recording** - Start recording the VM screen
+   - Returns: Success/failure status
+
+   Example:
+   ```python
+   osworld(method="start_recording", params={{}})
+   ```
+
+10. **end_recording** - Stop recording and get the video
+    - Parameters:
+      - dest (str, optional): Destination path for the recording
+    - Returns: Video file content
+
     Example:
-        {"action_type": "CLICK", "parameters": {"x": 500, "y": 300, "button": "left"}}
+    ```python
+    osworld(
+        method="end_recording",
+        params={{"dest": "/tmp/recording.mp4"}}
+    )
+    ```
 
-DOUBLE_CLICK Action:
-    Description: Double-click at a position
-    Parameters:
-        x (int): X coordinate
-        y (int): Y coordinate
-        button (str): Mouse button (default: 'left')
+### VM Information
+
+11. **get_vm_platform** - Get the VM's operating system platform
+    - Returns: Platform name (e.g., "Linux", "Windows")
+
     Example:
-        {"action_type": "DOUBLE_CLICK", "parameters": {"x": 500, "y": 300}}
+    ```python
+    osworld(method="get_vm_platform", params={{}})
+    ```
 
-RIGHT_CLICK Action:
-    Description: Right-click at a position
-    Parameters:
-        x (int): X coordinate
-        y (int): Y coordinate
+12. **get_vm_screen_size** - Get the VM screen dimensions
+    - Returns: Width and height of the screen
+
     Example:
-        {"action_type": "RIGHT_CLICK", "parameters": {"x": 500, "y": 300}}
+    ```python
+    osworld(method="get_vm_screen_size", params={{}})
+    ```
 
-DRAG Action:
-    Description: Drag from one position to another
-    Parameters:
-        start_x (int): Starting X coordinate
-        start_y (int): Starting Y coordinate
-        end_x (int): Ending X coordinate
-        end_y (int): Ending Y coordinate
-        button (str): Mouse button to hold (default: 'left')
-        duration (float): Time to complete drag in seconds (default: 0.5)
+13. **get_vm_window_size** - Get a specific application window size
+    - Parameters:
+      - app_class_name (str): Application class name
+    - Returns: Window width and height
+
     Example:
-        {"action_type": "DRAG", "parameters": {"start_x": 100, "start_y": 100, "end_x": 500, "end_y": 500}}
+    ```python
+    osworld(
+        method="get_vm_window_size",
+        params={{"app_class_name": "firefox"}}
+    )
+    ```
 
-MOVE_TO Action:
-    Description: Move mouse to a position without clicking
-    Parameters:
-        x (int): X coordinate
-        y (int): Y coordinate
-        duration (float): Time to move in seconds (default: 0.0)
+14. **get_vm_wallpaper** - Get the VM's desktop wallpaper image
+    - Returns: Wallpaper image as base64
+
     Example:
-        {"action_type": "MOVE_TO", "parameters": {"x": 500, "y": 300}}
+    ```python
+    osworld(method="get_vm_wallpaper", params={{}})
+    ```
 
-SCROLL Action:
-    Description: Scroll the mouse wheel
-    Parameters:
-        clicks (int): Amount to scroll (positive = up, negative = down)
-        x (int, optional): X position to scroll at
-        y (int, optional): Y position to scroll at
+15. **get_vm_desktop_path** - Get the path to the desktop directory
+    - Returns: Desktop directory path
+
     Example:
-        {"action_type": "SCROLL", "parameters": {"clicks": -3}}
+    ```python
+    osworld(method="get_vm_desktop_path", params={{}})
+    ```
 
-# Keyboard Control Actions
+16. **get_vm_directory_tree** - List directory contents in the VM
+    - Parameters:
+      - path (str): Directory path to list
+    - Returns: Directory tree structure
 
-TYPING Action:
-    Description: Type a string of text
-    Parameters:
-        text (str): Text to type
-        interval (float): Delay between keypresses in seconds (default: 0.0)
     Example:
-        {"action_type": "TYPING", "parameters": {"text": "Hello World"}}
+    ```python
+    osworld(
+        method="get_vm_directory_tree",
+        params={{"path": "/home/user/Documents"}}
+    )
+    ```
 
-PRESS Action:
-    Description: Press a keyboard key or key combination
-    Parameters:
-        key (str or list): Key name or list of keys to press simultaneously
-        presses (int): Number of times to press (default: 1)
-        interval (float): Delay between presses (default: 0.0)
-    Valid key names: 'enter', 'esc', 'tab', 'space', 'backspace', 'delete', 'up', 'down',
-    'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'f1'-'f12', 'shift', 'ctrl', 'alt',
-    'win', 'command', 'a'-'z', '0'-'9'
-    Example:
-        {"action_type": "PRESS", "parameters": {"key": "enter"}}
-        {"action_type": "PRESS", "parameters": {"key": ["ctrl", "c"]}}
+## Action Types for execute_action
 
-HOTKEY Action:
-    Description: Press a keyboard shortcut (like Ctrl+C)
-    Parameters:
-        keys (list): List of keys to press together
-    Example:
-        {"action_type": "HOTKEY", "parameters": {"keys": ["ctrl", "alt", "delete"]}}
+When using `execute_action`, specify one of these action_type values:
 
-# Screen Operations
+### Mouse Actions
+- **CLICK**: Click mouse button
+  - Parameters: x, y, button ("left"/"right"/"middle"), num_clicks (optional)
+- **DOUBLE_CLICK**: Double-click at position
+  - Parameters: x, y
+- **RIGHT_CLICK**: Right-click at position
+  - Parameters: x, y
+- **MOVE_TO**: Move mouse to position
+  - Parameters: x, y
+- **DRAG_TO**: Drag mouse to position
+  - Parameters: x, y
+- **MOUSE_DOWN**: Press mouse button down
+  - Parameters: button ("left"/"right"/"middle")
+- **MOUSE_UP**: Release mouse button
+  - Parameters: button ("left"/"right"/"middle")
+- **SCROLL**: Scroll horizontally and/or vertically
+  - Parameters: dx (horizontal), dy (vertical)
 
-GET_SCREENSHOT Action:
-    Description: Take a screenshot of the VM screen
-    Parameters: None
-    Returns: PNG image data
-    Example:
-        {"action_type": "GET_SCREENSHOT", "parameters": {}}
+### Keyboard Actions
+- **TYPING**: Type text string
+  - Parameters: text (string to type)
+- **PRESS**: Press and release a key
+  - Parameters: key (key name like "enter", "tab", "a")
+- **KEY_DOWN**: Press a key down
+  - Parameters: key
+- **KEY_UP**: Release a key
+  - Parameters: key
+- **HOTKEY**: Press key combination
+  - Parameters: keys (list of keys like ["ctrl", "c"])
 
-GET_SCREEN_SIZE Action:
-    Description: Get the screen dimensions
-    Parameters: None
-    Returns: {"width": int, "height": int}
-    Example:
-        {"action_type": "GET_SCREEN_SIZE", "parameters": {}}
+## Common Keyboard Keys
 
-GET_ACCESSIBILITY_TREE Action:
-    Description: Get the UI accessibility tree (XML structure of UI elements)
-    Parameters: None
-    Returns: XML string representing UI elements
-    Example:
-        {"action_type": "GET_ACCESSIBILITY_TREE", "parameters": {}}
+Supported keys include:
+- Letters: "a", "b", "c", ..., "z"
+- Numbers: "0", "1", ..., "9"
+- Function keys: "f1", "f2", ..., "f12"
+- Modifiers: "ctrl", "alt", "shift", "win" (or "command" on Mac)
+- Special: "enter", "tab", "space", "backspace", "delete", "esc"
+- Navigation: "up", "down", "left", "right", "home", "end", "pageup", "pagedown"
 
-# Command Execution
+## Usage Guidelines
 
-EXECUTE_PYTHON Action:
-    Description: Execute Python code inside the VM
-    Parameters:
-        code (str): Python code to execute
-    Example:
-        {"action_type": "EXECUTE_PYTHON", "parameters": {"code": "import os; print(os.listdir('/'))"}}
+1. **Start with observation**: Use `get_screenshot` to see the current state
+2. **Locate elements**: Use `get_accessibility_tree` to find UI elements
+3. **Interact**: Use `execute_action` to click, type, etc.
+4. **Verify**: Check results with another screenshot or terminal output
+5. **File operations**: Use bash/python scripts for complex file tasks
+6. **Recording**: Start recording before demos, stop when done
 
-EXECUTE_BASH Action:
-    Description: Execute a bash command inside the VM
-    Parameters:
-        command (str): Bash command to execute
-        timeout (int): Timeout in seconds (default: 30)
-    Example:
-        {"action_type": "EXECUTE_BASH", "parameters": {"command": "ls -la /home"}}
+## Error Handling
 
-# File Operations
+All methods return observations with:
+- Success: content field contains the result
+- Failure: error message in content field, exit_code > 0
 
-GET_FILE Action:
-    Description: Download a file from the VM
-    Parameters:
-        path (str): Path to file in VM
-    Returns: File content as bytes
-    Example:
-        {"action_type": "GET_FILE", "parameters": {"path": "/home/user/document.txt"}}
+Always check the observation to verify your action succeeded before proceeding.
+'''
 
-UPLOAD_FILE Action:
-    Description: Upload a file to the VM
-    Parameters:
-        path (str): Destination path in VM
-        content (bytes or str): File content
-    Example:
-        {"action_type": "UPLOAD_FILE", "parameters": {"path": "/home/user/file.txt", "content": "Hello"}}
+OSWORLD_TOOLS_DESCRIPTION = f'''Use the `{OSWORLD_TOOL_NAME}` tool to interact with a virtual desktop environment running in a QEMU VM.
 
-# VM Control
+This tool supports:
+- Mouse and keyboard control (click, type, hotkeys)
+- Screen capture and accessibility tree
+- File operations and script execution
+- Screen recording
+- VM information queries
 
-GET_VM_PLATFORM Action:
-    Description: Get the VM's operating system platform
-    Parameters: None
-    Returns: "Linux", "Windows", or "Darwin"
-    Example:
-        {"action_type": "GET_VM_PLATFORM", "parameters": {}}
+Call pattern: `{OSWORLD_TOOL_NAME}(method="<method_name>", params={{"key": "value"}})`
 
-START_RECORDING Action:
-    Description: Start recording the VM screen
-    Parameters: None
-    Example:
-        {"action_type": "START_RECORDING", "parameters": {}}
+See the docstring for all available methods and detailed examples.
+'''
 
-STOP_RECORDING Action:
-    Description: Stop recording and save video
-    Parameters:
-        output_path (str): Path to save video file
-    Example:
-        {"action_type": "STOP_RECORDING", "parameters": {"output_path": "/tmp/recording.mp4"}}
 
-# Usage Notes
-
-1. Actions are sent to the OSWorld Flask server running inside the VM
-2. The server uses pyautogui for mouse/keyboard control
-3. All coordinates are in screen pixels (0,0 is top-left)
-4. Multiple actions should be sent separately for better error handling
-5. Screenshots can be large - use sparingly
-6. The VM must have the OSWorld server running on port 5000
-"""
-
-OSWorldTool = ChatCompletionToolParam(
-    type='function',
-    function=ChatCompletionToolParamFunctionChunk(
-        name=OSWORLD_TOOL_NAME,
-        description=_OSWORLD_DESCRIPTION,
-        parameters={
-            'type': 'object',
-            'properties': {
-                'action': {
-                    'type': 'object',
-                    'description': (
-                        'The action to execute in the OSWorld VM. Must be a dictionary with '
-                        '"action_type" and "parameters" fields.\n'
-                        + _OSWORLD_TOOL_DESCRIPTION
-                    ),
-                    'properties': {
-                        'action_type': {
-                            'type': 'string',
-                            'description': 'Type of action to perform',
-                            'enum': [
-                                'CLICK', 'DOUBLE_CLICK', 'RIGHT_CLICK', 'DRAG', 'MOVE_TO', 'SCROLL',
-                                'TYPING', 'PRESS', 'HOTKEY',
-                                'GET_SCREENSHOT', 'GET_SCREEN_SIZE', 'GET_ACCESSIBILITY_TREE',
-                                'EXECUTE_PYTHON', 'EXECUTE_BASH',
-                                'GET_FILE', 'UPLOAD_FILE',
-                                'GET_VM_PLATFORM', 'START_RECORDING', 'STOP_RECORDING'
-                            ]
-                        },
-                        'parameters': {
-                            'type': 'object',
-                            'description': 'Parameters for the action'
-                        }
+def get_osworld_tool() -> dict:
+    """Get the OSWorld tool definition for LLM function calling.
+    
+    Returns:
+        Tool definition dictionary with function schema
+    """
+    return {
+        'type': 'function',
+        'function': {
+            'name': OSWORLD_TOOL_NAME,
+            'description': OSWORLD_TOOLS_DESCRIPTION,
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'method': {
+                        'type': 'string',
+                        'description': 'The OSWorld method to call',
+                        'enum': [
+                            'execute_action',
+                            'get_screenshot',
+                            'get_accessibility_tree',
+                            'get_terminal_output',
+                            'get_file',
+                            'execute_python_command',
+                            'run_python_script',
+                            'run_bash_script',
+                            'start_recording',
+                            'end_recording',
+                            'get_vm_platform',
+                            'get_vm_screen_size',
+                            'get_vm_window_size',
+                            'get_vm_wallpaper',
+                            'get_vm_desktop_path',
+                            'get_vm_directory_tree',
+                        ],
                     },
-                    'required': ['action_type', 'parameters']
-                }
+                    'params': {
+                        'type': 'object',
+                        'description': 'Parameters for the method (varies by method)',
+                        'additionalProperties': True,
+                    },
+                },
+                'required': ['method'],
             },
-            'required': ['action'],
         },
-    ),
-)
-
+    }
