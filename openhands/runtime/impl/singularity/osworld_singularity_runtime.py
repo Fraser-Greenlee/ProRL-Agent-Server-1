@@ -221,11 +221,16 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             '-m', '2G',
             '-smp', '2',
             '-drive', f'file={vm_image_container_path},if=ide',
-            '-netdev', f'user,id=net0,hostfwd=tcp::{self._vm_server_port}-:5000,hostfwd=tcp::{self._vnc_port}-:8006',
+            '-netdev', f'user,id=net0,hostfwd=tcp::{self._vm_server_port}-:5000',
             '-device', 'virtio-net-pci,netdev=net0',
-            '-vnc', ':0',
             '-snapshot',  # Always use snapshot mode (non-persistent)
         ])
+        
+        # Add VNC on the allocated port (not the default 5900)
+        # QEMU VNC uses display numbers: port = 5900 + display_number
+        # Example: if _vnc_port=19242, display=13342, QEMU listens on 5900+13342=19242
+        vnc_display = self._vnc_port - 5900
+        cmd.extend(['-vnc', f'0.0.0.0:{vnc_display}'])  # VNC accessible from any IP
         
         # Note: Don't use -daemonize, we manage the process with Popen
         
@@ -515,7 +520,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
     
     @property
     def vnc_url(self) -> str:
-        """Get the VNC URL for the VM."""
+        """Get the VNC URL for the VM.
+        
+        QEMU's built-in VNC server listens on the allocated VNC port.
+        Connect with: vncviewer localhost:{port}
+        """
         return f'vnc://localhost:{self._vnc_port}'
     
     def get_vm_screenshot(self) -> bytes | None:
