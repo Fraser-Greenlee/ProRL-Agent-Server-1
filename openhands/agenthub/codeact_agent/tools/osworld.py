@@ -65,7 +65,7 @@ running inside a QEMU VM. This tool provides comprehensive control over the desk
 ### Screen & Observation
 
 2. **get_screenshot** - Capture a screenshot of the VM desktop (with cursor)
-   - Returns: Screenshot image as base64
+   - Returns: Screenshot image as base64 (format: base64:<data>)
 
    Example:
    ```python
@@ -92,8 +92,8 @@ running inside a QEMU VM. This tool provides comprehensive control over the desk
 
 5. **get_file** - Download a file from the VM
    - Parameters:
-     - file_path (str): Path to the file in the VM
-   - Returns: File content as base64
+     - file_path (str): Absolute path to the file in the VM
+   - Returns: File content as base64 (format: base64:<data>)
 
    Example:
    ```python
@@ -167,15 +167,14 @@ print(os.listdir('.'))
    ```
 
 10. **end_recording** - Stop recording and get the video
-    - Parameters:
-      - dest (str, optional): Destination path for the recording
-    - Returns: Video file content
+    - Returns: Video file content as base64 (format: base64:<data>)
+    - Note: The endpoint returns the video file directly, not a status message
 
     Example:
     ```python
     osworld(
         method="end_recording",
-        params={{"dest": "/tmp/recording.mp4"}}
+        params={{}}  # dest parameter is ignored
     )
     ```
 
@@ -211,7 +210,7 @@ print(os.listdir('.'))
     ```
 
 14. **get_vm_wallpaper** - Get the VM's desktop wallpaper image
-    - Returns: Wallpaper image as base64
+    - Returns: Wallpaper image as base64 (format: base64:<data>)
 
     Example:
     ```python
@@ -292,11 +291,23 @@ Supported keys include:
 5. **File operations**: Use bash/python scripts for complex file tasks
 6. **Recording**: Start recording before demos, stop when done
 
+## Return Value Formats
+
+Methods that return binary data (images, videos, files) use the format:
+- `base64:<base64_encoded_data>`
+
+To decode:
+```python
+import base64
+if observation.content.startswith('base64:'):
+    data = base64.b64decode(observation.content[7:])  # Remove "base64:" prefix
+```
+
 ## Error Handling
 
 All methods return observations with:
 - Success: content field contains the result
-- Failure: error message in content field, exit_code > 0
+- Failure: error message in content field, exit_code > 0 (if applicable)
 
 Always check the observation to verify your action succeeded before proceeding.
 '''
@@ -307,10 +318,13 @@ This tool supports:
 - Mouse and keyboard control (click, type, hotkeys)
 - Screen capture and accessibility tree
 - File operations and script execution
-- Screen recording
+- Screen recording (returns video as base64)
 - VM information queries
 
 Call pattern: `{OSWORLD_TOOL_NAME}(method="<method_name>", params={{"key": "value"}})`
+
+Note: Methods that return binary data (screenshots, files, videos, wallpaper) use format "base64:<data>".
+Important: The 'dest' parameter in end_recording is ignored by the OSWorld server.
 
 See the docstring for all available methods and detailed examples.
 '''
