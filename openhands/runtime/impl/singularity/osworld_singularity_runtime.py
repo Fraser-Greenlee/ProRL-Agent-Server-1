@@ -942,13 +942,25 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                     command='run_python_script',
                     exit_code=result.get('returncode', 0),
                 )
-            return ErrorObservation(f'Failed to run Python script: {response.status_code}')
+            # Try to get error details from response
+            try:
+                error_detail = response.json()
+                error_msg = error_detail.get('output', error_detail.get('message', 'Unknown error'))
+            except:
+                error_msg = response.text or 'Unknown error'
+            return ErrorObservation(f'Failed to run Python script (HTTP {response.status_code}): {error_msg}')
         except Exception as e:
             return ErrorObservation(f'Failed to run Python script: {e}')
     
     def _handle_run_bash_script(self, params: dict) -> 'Observation':
-        """Handle run_bash_script."""
+        """Handle run_bash_script.
+        
+        Note: The /run_bash_script endpoint has a bug (missing _append_event function).
+        As a workaround, we use /execute with base64 encoding to safely transfer scripts.
+        """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
+        import base64
+        import uuid
         
         script = params.get('script', '')
         if not script:
@@ -958,29 +970,73 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         working_dir = params.get('working_dir')
         
         try:
+            # Workaround: Use /execute endpoint instead of /run_bash_script
+            # Encode script as base64 to avoid escaping issues
+            script_name = f'/tmp/bash_script_{uuid.uuid4().hex}.sh'
+            
+            # Add shebang if not present
+            if '#!/bin/bash' not in script:
+                script = '#!/bin/bash\n\n' + script
+            
+            # Base64 encode the script for safe transfer
+            script_b64 = base64.b64encode(script.encode('utf-8')).decode('ascii')
+            
+            # Build command to decode, write, and execute the script
+            commands = [
+                f'echo "{script_b64}" | base64 -d > {script_name}',
+                f'chmod +x {script_name}',
+            ]
+            
+            # If working_dir is specified, cd to it before executing
+            if working_dir:
+                commands.append(f'cd {working_dir}')
+            
+            # Execute and capture exit code
+            commands.extend([
+                f'{script_name}',
+                f'SCRIPT_EXIT_CODE=$?',
+                f'rm -f {script_name}',
+                f'exit $SCRIPT_EXIT_CODE'
+            ])
+            
+            bash_command = ' && '.join(commands)
+            
+            # Use /execute endpoint with shell=True
             payload = {
-                'script': script,
-                'timeout': timeout,
-                'working_dir': working_dir
+                'command': bash_command,
+                'shell': True
             }
+            
             response = httpx.post(
-                f'{self.osworld_vm_url}/run_bash_script',
+                f'{self.osworld_vm_url}/execute',
                 json=payload,
                 timeout=timeout + 10.0
             )
+            
             if response.status_code == 200:
                 result = response.json()
                 output = result.get('output', '')
                 error = result.get('error', '')
-                content = f"Output:\n{output}"
+                
+                # Combine output and error
+                content = output
                 if error:
-                    content += f"\nError:\n{error}"
+                    content += f'\n{error}' if content else error
+                
                 return CmdOutputObservation(
                     content=content,
                     command='run_bash_script',
                     exit_code=result.get('returncode', 0),
                 )
-            return ErrorObservation(f'Failed to run bash script: {response.status_code}')
+            
+            # Try to get error details from response
+            try:
+                error_detail = response.json()
+                error_msg = error_detail.get('output', error_detail.get('message', 'Unknown error'))
+            except:
+                error_msg = response.text or 'Unknown error'
+            return ErrorObservation(f'Failed to run bash script (HTTP {response.status_code}): {error_msg}')
+        
         except Exception as e:
             return ErrorObservation(f'Failed to run bash script: {e}')
     
