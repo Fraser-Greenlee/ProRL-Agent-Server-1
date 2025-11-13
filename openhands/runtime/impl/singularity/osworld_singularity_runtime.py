@@ -860,7 +860,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to get terminal output: {e}')
     
     def _handle_get_file(self, params: dict) -> 'Observation':
-        """Handle get_file - downloads file from VM."""
+        """Handle get_file - downloads file from VM.
+        
+        Returns the full file content as base64-encoded string in observation.content.
+        Format: "base64:<base64_data>"
+        """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import base64
         
@@ -876,10 +880,10 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             )
             if response.status_code == 200:
                 file_content = response.content
-                # Return as base64
+                # Return full base64 with prefix for easy parsing
                 content_b64 = base64.b64encode(file_content).decode('utf-8')
                 return CmdOutputObservation(
-                    content=f"File downloaded ({len(file_content)} bytes):\n{content_b64[:100]}...",
+                    content=f"base64:{content_b64}",
                     command=f'get_file {file_path}',
                     exit_code=0,
                 )
@@ -1060,11 +1064,16 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to start recording: {e}')
     
     def _handle_end_recording(self, params: dict) -> 'Observation':
-        """Handle end_recording."""
+        """Handle end_recording.
+        
+        Note: The /end_recording endpoint returns the actual recording video file (binary).
+        The 'dest' parameter is IGNORED by the OSWorld server - the recording is always
+        saved to /tmp/recording.mp4 inside the VM. We return the video as base64-encoded data.
+        """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import base64
         
-        dest = params.get('dest', '/tmp/recording.mp4')
+        dest = params.get('dest', '/tmp/recording.mp4')  # Ignored by server, kept for documentation
         
         try:
             response = httpx.post(
@@ -1073,10 +1082,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             )
             if response.status_code == 200:
                 video_content = response.content
-                # Could save to file or return as base64
+                # Return as base64 for consistency with get_file
+                content_b64 = base64.b64encode(video_content).decode('utf-8')
                 return CmdOutputObservation(
-                    content=f'Recording saved ({len(video_content)} bytes)',
-                    command=f'end_recording {dest}',
+                    content=f'base64:{content_b64}',
+                    command=f'end_recording',
                     exit_code=0,
                 )
             return ErrorObservation(f'Failed to end recording: {response.status_code}')
@@ -1152,7 +1162,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to get window size: {e}')
     
     def _handle_get_vm_wallpaper(self) -> 'Observation':
-        """Handle get_vm_wallpaper."""
+        """Handle get_vm_wallpaper.
+        
+        Note: The /wallpaper endpoint returns the actual wallpaper image file (binary),
+        not the path. We return it as base64-encoded data.
+        """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import base64
         
@@ -1163,8 +1177,10 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             )
             if response.status_code == 200:
                 wallpaper_bytes = response.content
+                # Return as base64 for consistency with get_file
+                content_b64 = base64.b64encode(wallpaper_bytes).decode('utf-8')
                 return CmdOutputObservation(
-                    content=f'Wallpaper captured ({len(wallpaper_bytes)} bytes)',
+                    content=f'base64:{content_b64}',
                     command='get_vm_wallpaper',
                     exit_code=0,
                 )
