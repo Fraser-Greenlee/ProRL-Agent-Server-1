@@ -523,7 +523,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         """Get the VNC URL for the VM.
         
         QEMU's built-in VNC server listens on the allocated VNC port.
-        Connect with: vncviewer localhost:{port}
+        Connect with: vncviewer localhost:{display} (where display = port - 5900)
         """
         return f'vnc://localhost:{self._vnc_port}'
     
