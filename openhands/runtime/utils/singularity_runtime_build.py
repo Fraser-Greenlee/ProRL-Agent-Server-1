@@ -104,10 +104,19 @@ class SingularityRuntimeBuilder:
                 logger.debug(f"Build stderr: {result.stderr}")
 
         except subprocess.CalledProcessError as e:
-            logger.error(f"Build failed: {e}")
-            logger.error(f"stdout: {e.stdout}")
-            logger.error(f"stderr: {e.stderr}")
-            raise AgentRuntimeBuildError(f"Singularity build failed: {e}")
+            logger.error("=" * 80)
+            logger.error("SINGULARITY BUILD FAILED")
+            logger.error("=" * 80)
+            logger.error(f"Command: {' '.join(cmd)}")
+            logger.error(f"Exit code: {e.returncode}")
+            logger.error("")
+            logger.error("STDOUT:")
+            logger.error(e.stdout if e.stdout else "(empty)")
+            logger.error("")
+            logger.error("STDERR:")
+            logger.error(e.stderr if e.stderr else "(empty)")
+            logger.error("=" * 80)
+            raise AgentRuntimeBuildError(f"Singularity build failed with exit code {e.returncode}. Check logs above for details.")
 
         # Create symbolic links or copies for additional tags
         primary_path = Path(primary_tag)
@@ -210,6 +219,86 @@ def get_runtime_image_path_and_tag(base_image: str) -> tuple[str, str]:
             )
 
         return repo_dir, new_tag
+
+
+def build_runtime_image_from_template(
+    base_image: str,
+    template_path: str,
+    runtime_builder: SingularityRuntimeBuilder,
+    platform: str | None = None,
+    extra_deps: str | None = None,
+    force_rebuild: bool = False,
+    extra_build_args: list[str] | None = None,
+) -> str:
+    """Build a Singularity runtime image from a custom template.
+
+    Parameters:
+    - base_image (str): The name of the base Docker image to use
+    - template_path (str): Path to the custom Jinja2 template file
+    - runtime_builder (SingularityRuntimeBuilder): The runtime builder to use
+    - platform (str): The target platform for the build (ignored for Singularity)
+    - extra_deps (str): Extra dependencies to install
+    - force_rebuild (bool): if True, force rebuild even if image exists
+    - extra_build_args (List[str]): Additional build arguments to pass to the builder
+
+    Returns:
+    - str: Path to the built SIF file
+    """
+    # Generate unique image name based on template and base image
+    template_name = Path(template_path).stem
+    runtime_image_dir = get_runtime_image_repo()
+    os.makedirs(runtime_image_dir, exist_ok=True)
+    
+    # Create a hash of template content for versioning
+    with open(template_path, 'r') as f:
+        template_content = f.read()
+    template_hash = hashlib.md5(template_content.encode()).hexdigest()[:8]
+    
+    base_tag = base_image.replace(':', '_').replace('/', '_').replace('.', '_')
+    image_name = f'{template_name}_{base_tag}_{template_hash}'
+    image_path = f'{runtime_image_dir}/{image_name}.sif'
+    
+    # Check if image exists and skip rebuild if not forced
+    if not force_rebuild and runtime_builder.image_exists(image_path):
+        logger.info(f'Using existing image: {image_path}')
+        return image_path
+    
+    logger.info(f'Building custom template image: {image_name}')
+    
+    # Create temporary build directory
+    with tempfile.TemporaryDirectory() as temp_dir:
+        build_folder = Path(temp_dir)
+        
+        # Render the template
+        template_dir = Path(template_path).parent
+        template_filename = Path(template_path).name
+        
+        env = Environment(loader=FileSystemLoader(searchpath=str(template_dir)))
+        template = env.get_template(template_filename)
+        
+        def_content = template.render(
+            base_image=base_image,
+            extra_deps=extra_deps if extra_deps is not None else '',
+            oh_version=oh_version,
+        )
+        
+        # Write definition file
+        def_path = build_folder / 'singularity.def'
+        with open(str(def_path), 'w') as f:
+            f.write(def_content)
+        
+        logger.debug(f'Generated definition file at: {def_path}')
+        
+        # Build the image
+        built_path = runtime_builder.build(
+            path=str(build_folder),
+            tags=[image_path],
+            platform=platform,
+            extra_build_args=extra_build_args,
+        )
+        
+        logger.info(f'Successfully built image: {built_path}')
+        return built_path
 
 
 def build_runtime_image(
@@ -477,6 +566,10 @@ if __name__ == '__main__':
     parser.add_argument('--platform', type=str, default=None)
     parser.add_argument('--singularity_cmd', type=str, default='apptainer',
                        help='Singularity command to use (apptainer or singularity)')
+    parser.add_argument('--osworld', action='store_true', default=False,
+                       help='Build OSWorld runtime image using osworld_singularity.j2 template')
+    parser.add_argument('--template', type=str, default=None,
+                       help='Path to custom Jinja2 template file')
     args = parser.parse_args()
 
     if args.build_folder is not None:
@@ -511,9 +604,37 @@ if __name__ == '__main__':
         logger.debug(f'Singularity definition file and source code are ready in {build_folder}')
     else:
         # Build the image directly
-        logger.debug('Building Singularity image in a temporary folder')
         singularity_builder = SingularityRuntimeBuilder(args.singularity_cmd)
-        image_path = build_runtime_image(
-            args.base_image, singularity_builder, platform=args.platform
-        )
-        logger.debug(f'\nBuilt Singularity image: {image_path}\n')
+        
+        # Determine which template to use
+        if args.osworld or args.template:
+            if args.template:
+                template_path = args.template
+                logger.debug(f'Building image using custom template: {template_path}')
+            else:
+                # Use OSWorld template
+                template_path = os.path.join(
+                    os.path.dirname(__file__),
+                    'runtime_templates',
+                    'osworld_singularity.j2'
+                )
+                logger.debug('Building OSWorld runtime image')
+            
+            if not os.path.exists(template_path):
+                raise FileNotFoundError(f'Template file not found: {template_path}')
+            
+            image_path = build_runtime_image_from_template(
+                base_image=args.base_image,
+                template_path=template_path,
+                runtime_builder=singularity_builder,
+                platform=args.platform,
+                force_rebuild=args.force_rebuild,
+            )
+            logger.debug(f'\nBuilt image from template: {image_path}\n')
+        else:
+            # Build standard OpenHands runtime image
+            logger.debug('Building standard OpenHands Singularity image in a temporary folder')
+            image_path = build_runtime_image(
+                args.base_image, singularity_builder, platform=args.platform
+            )
+            logger.debug(f'\nBuilt Singularity image: {image_path}\n')
