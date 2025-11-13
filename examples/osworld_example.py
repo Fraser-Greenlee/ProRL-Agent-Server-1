@@ -128,13 +128,13 @@ async def main():
         print("7. Executing VM actions...")
         
         # Example 1: Click at position
-        print("   a. Clicking at position (500, 300)...")
+        print("   a. Clicking at position (10, 10)...")
         action = OSWorldInteractiveAction(
             method='execute_action',
             params={
                 'action': {
                     'action_type': 'CLICK',
-                    'parameters': {'x': 500, 'y': 300, 'button': 'left'}
+                    'parameters': {'x': 10, 'y': 10, 'button': 'left'}
                 }
             },
             thought='Clicking at center-ish position on the screen'
@@ -485,17 +485,45 @@ echo "Date: $(date)"
                 method='execute_action',
                 params={
                     'action': {
-                        'action_type': 'MOVE',
-                        'parameters': {'x': 400, 'y': 400}
+                        'action_type': 'MOVE_TO',  # Correct: MOVE_TO, not MOVE
+                        'parameters': {'x': 100, 'y': 100}
                     }
                 },
-                thought='Moving mouse during recording'
+                thought='Moving mouse to top-left during recording'
+            )
+            runtime.run_action(action)
+            await asyncio.sleep(1)
+
+            print("   d. Moving to center...")
+            action = OSWorldInteractiveAction(
+                method='execute_action',
+                params={
+                    'action': {
+                        'action_type': 'MOVE_TO',  # Correct: MOVE_TO, not MOVE
+                        'parameters': {'x': 512, 'y': 384}  # Center of 1024x768 screen
+                    }
+                },
+                thought='Moving mouse to center during recording'
+            )
+            runtime.run_action(action)
+            await asyncio.sleep(1)
+            
+            print("   e. Clicking at center...")
+            action = OSWorldInteractiveAction(
+                method='execute_action',
+                params={
+                    'action': {
+                        'action_type': 'CLICK',
+                        'parameters': {'x': 512, 'y': 384}
+                    }
+                },
+                thought='Clicking at center during recording'
             )
             runtime.run_action(action)
             await asyncio.sleep(1)
             
             # Stop recording
-            print("   d. Stopping recording and downloading...")
+            print("   f. Stopping recording and downloading...")
             action = OSWorldInteractiveAction(
                 method='end_recording',
                 params={},  # Note: 'dest' parameter is ignored by OSWorld server
