@@ -81,9 +81,16 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             main_module: Main module to run
             os_type: Type of OS in VM ('linux' or 'windows')
             vm_image_path: Path to QCOW2 VM image file
+        
+        Note:
+            Snapshot mode is ALWAYS enabled (disk writes are not saved).
+            This protects the base QCOW2 image from modifications.
+            Use QCOW2 backing files if you need per-session persistence.
         """
         self.os_type = os_type.lower()
         self.vm_image_path = vm_image_path or self._get_default_vm_image_path()
+        # Permanently enable snapshot mode to protect base images
+        self.snapshot_mode = True
         self.qemu_process: subprocess.Popen | None = None
         self.qemu_pid: int | None = None
         self._qemu_stdout = None
@@ -192,6 +199,9 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         else:
             self.log('warning', 'KVM is not available, running QEMU in emulation mode (slower)')
         
+        # Log snapshot mode (always enabled)
+        self.log('info', 'Snapshot mode ENABLED: disk changes will NOT be saved (protects base image)')
+        
         # Base QEMU command
         cmd = [
             'qemu-system-x86_64',
@@ -214,8 +224,10 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             '-netdev', f'user,id=net0,hostfwd=tcp::{self._vm_server_port}-:5000,hostfwd=tcp::{self._vnc_port}-:8006',
             '-device', 'virtio-net-pci,netdev=net0',
             '-vnc', ':0',
-            # Note: Don't use -daemonize, we manage the process with Popen
+            '-snapshot',  # Always use snapshot mode (non-persistent)
         ])
+        
+        # Note: Don't use -daemonize, we manage the process with Popen
         
         return cmd
     
@@ -647,7 +659,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         
         elif action_type == "TYPING":
             text = parameters.get('text', '')
-            # Use repr() to properly escape the text
+            # Use repr() to properly escape the text (same as OSWorld)
             return f"pyautogui.typewrite({repr(text)})"
         
         elif action_type == "PRESS":
