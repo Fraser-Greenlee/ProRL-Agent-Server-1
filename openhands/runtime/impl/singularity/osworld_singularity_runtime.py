@@ -168,8 +168,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             '-machine', 'q35',
             '-cpu', 'host',
             '-enable-kvm',
-            '-m', '16G',
-            '-smp', '4',
+            '-m', '2G',
+            '-smp', '2',
             '-drive', f'file={vm_image_container_path},if=ide',
             '-netdev', f'user,id=net0,hostfwd=tcp::{self._vm_server_port}-:5000,hostfwd=tcp::{self._vnc_port}-:8006',
             '-device', 'virtio-net-pci,netdev=net0',
@@ -488,19 +488,143 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         """Execute an action in the OSWorld VM.
         
         Args:
-            action_data: Action data dictionary
+            action_data: Action data dictionary with 'action_type' and 'parameters'
             
         Returns:
             Response from OSWorld server
         """
         try:
+            action_type = action_data.get('action_type')
+            parameters = action_data.get('parameters', {})
+            
+            # Convert action to PyAutoGUI command
+            pyautogui_command = self._action_to_pyautogui_command(action_type, parameters)
+            
+            if pyautogui_command is None:
+                return {'status': 'error', 'message': f'Unknown action type: {action_type}'}
+            
+            # Execute the PyAutoGUI command
+            command_list = ["python3", "-c", f"import pyautogui; import time; pyautogui.FAILSAFE = False; {pyautogui_command}"]
+            payload = {"command": command_list, "shell": False}
+            
             response = httpx.post(
                 f'{self.osworld_vm_url}/execute',
-                json=action_data,
+                json=payload,
                 timeout=30.0
             )
             return response.json()
         except Exception as e:
             self.log('error', f'Failed to execute VM action: {e}')
             return {'status': 'error', 'message': str(e)}
+    
+    def _action_to_pyautogui_command(self, action_type: str, parameters: dict) -> str | None:
+        """Convert an action dictionary to a PyAutoGUI command string.
+        
+        Args:
+            action_type: Type of action (e.g., 'CLICK', 'TYPING', 'PRESS')
+            parameters: Action parameters
+            
+        Returns:
+            PyAutoGUI command string or None if unknown action type
+        """
+        import random
+        
+        # For MOVE_TO actions with duration
+        move_mode = random.choice([
+            "pyautogui.easeInQuad", "pyautogui.easeOutQuad", "pyautogui.easeInOutQuad",
+            "pyautogui.easeInBounce", "pyautogui.easeInElastic"
+        ])
+        duration = random.uniform(0.5, 1)
+        
+        if action_type == "CLICK":
+            x = parameters.get('x')
+            y = parameters.get('y')
+            button = parameters.get('button', 'left')
+            num_clicks = parameters.get('num_clicks', 1)
+            
+            if x is not None and y is not None:
+                return f"pyautogui.click(x={x}, y={y}, button='{button}', clicks={num_clicks})"
+            else:
+                return "pyautogui.click()"
+        
+        elif action_type == "DOUBLE_CLICK":
+            x = parameters.get('x')
+            y = parameters.get('y')
+            if x is not None and y is not None:
+                return f"pyautogui.doubleClick(x={x}, y={y})"
+            else:
+                return "pyautogui.doubleClick()"
+        
+        elif action_type == "RIGHT_CLICK":
+            x = parameters.get('x')
+            y = parameters.get('y')
+            if x is not None and y is not None:
+                return f"pyautogui.rightClick(x={x}, y={y})"
+            else:
+                return "pyautogui.rightClick()"
+        
+        elif action_type == "MOVE_TO":
+            x = parameters.get('x')
+            y = parameters.get('y')
+            if x is not None and y is not None:
+                return f"pyautogui.moveTo({x}, {y}, {duration}, {move_mode})"
+            else:
+                return "pyautogui.moveTo()"
+        
+        elif action_type == "DRAG_TO":
+            x = parameters.get('x')
+            y = parameters.get('y')
+            if x is not None and y is not None:
+                return f"pyautogui.dragTo({x}, {y}, duration=1.0, button='left', mouseDownUp=True)"
+            return None
+        
+        elif action_type == "SCROLL":
+            dx = parameters.get('dx', 0)
+            dy = parameters.get('dy', 0)
+            commands = []
+            if dx != 0:
+                commands.append(f"pyautogui.hscroll({dx})")
+            if dy != 0:
+                commands.append(f"pyautogui.vscroll({dy})")
+            return "; ".join(commands) if commands else None
+        
+        elif action_type == "TYPING":
+            text = parameters.get('text', '')
+            # Use repr() to properly escape the text
+            return f"pyautogui.typewrite({repr(text)})"
+        
+        elif action_type == "PRESS":
+            key = parameters.get('key', '')
+            if isinstance(key, list):
+                # Multiple keys - treat as hotkey
+                keys_str = "', '".join(key)
+                return f"pyautogui.hotkey('{keys_str}')"
+            else:
+                return f"pyautogui.press('{key}')"
+        
+        elif action_type == "HOTKEY":
+            keys = parameters.get('keys', [])
+            if isinstance(keys, list) and keys:
+                keys_str = "', '".join(keys)
+                return f"pyautogui.hotkey('{keys_str}')"
+            return None
+        
+        elif action_type == "KEY_DOWN":
+            key = parameters.get('key', '')
+            return f"pyautogui.keyDown('{key}')"
+        
+        elif action_type == "KEY_UP":
+            key = parameters.get('key', '')
+            return f"pyautogui.keyUp('{key}')"
+        
+        elif action_type == "MOUSE_DOWN":
+            button = parameters.get('button', 'left')
+            return f"pyautogui.mouseDown(button='{button}')"
+        
+        elif action_type == "MOUSE_UP":
+            button = parameters.get('button', 'left')
+            return f"pyautogui.mouseUp(button='{button}')"
+        
+        else:
+            return None
 
