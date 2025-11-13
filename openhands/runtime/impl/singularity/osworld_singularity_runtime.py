@@ -151,6 +151,27 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             )
             return vm_server_port, vnc_port
     
+    def _check_kvm_available(self) -> bool:
+        """Check if KVM is available and accessible.
+        
+        Returns:
+            True if /dev/kvm exists and has read/write permissions, False otherwise
+        """
+        kvm_device = '/dev/kvm'
+        
+        # Check if the device exists
+        if not os.path.exists(kvm_device):
+            self.log('debug', f'KVM device {kvm_device} does not exist')
+            return False
+        
+        # Check if we have read and write permissions
+        if not os.access(kvm_device, os.R_OK | os.W_OK):
+            self.log('debug', f'KVM device {kvm_device} exists but lacks read/write permissions')
+            return False
+        
+        self.log('debug', f'KVM device {kvm_device} is available and accessible')
+        return True
+    
     def _get_qemu_command(self) -> list[str]:
         """Build QEMU command based on OS type and configuration."""
         # Check if VM image exists
@@ -164,13 +185,29 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         vm_image_filename = os.path.basename(self.vm_image_path)
         vm_image_container_path = f'/OS_images/{vm_image_filename}'
         
+        # Check if KVM is available
+        kvm_available = self._check_kvm_available()
+        if kvm_available:
+            self.log('info', 'KVM is available, enabling hardware acceleration')
+        else:
+            self.log('warning', 'KVM is not available, running QEMU in emulation mode (slower)')
+        
         # Base QEMU command
         cmd = [
             'qemu-system-x86_64',
             '-bios', '/usr/share/ovmf/OVMF.fd',
             '-machine', 'q35',
-            '-cpu', 'host',
-            '-enable-kvm',
+        ]
+        
+        # Add KVM flags only if available
+        if kvm_available:
+            cmd.extend(['-cpu', 'host', '-enable-kvm'])
+        else:
+            # Use generic CPU for emulation mode
+            cmd.extend(['-cpu', 'qemu64'])
+        
+        # Continue with common flags
+        cmd.extend([
             '-m', '2G',
             '-smp', '2',
             '-drive', f'file={vm_image_container_path},if=ide',
@@ -178,7 +215,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             '-device', 'virtio-net-pci,netdev=net0',
             '-vnc', ':0',
             # Note: Don't use -daemonize, we manage the process with Popen
-        ]
+        ])
         
         return cmd
     
