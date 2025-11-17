@@ -581,8 +581,12 @@ echo "Date: $(date)"
         print(f"2. View wallpaper: open /tmp/osworld_wallpaper.png")
         print(f"3. View recording: vlc /tmp/osworld_recording.mp4")
         print(f"4. View downloaded file: cat /tmp/osworld_downloaded_file.txt")
-        print(f"5. Connect via VNC: {runtime.vnc_url}")
-        print(f"6. Access VM API: curl {runtime.osworld_vm_url}/screenshot")
+        print()
+        print("VM Service URLs:")
+        print(f"  • VNC: {runtime.vnc_url} (display :{runtime._vnc_port - 5900})")
+        print(f"  • OSWorld API: {runtime.osworld_vm_url}")
+        print(f"  • Chrome DevTools: {runtime.chromium_devtools_url}")
+        print(f"  • VLC Web Interface: {runtime.vlc_url}")
         print()
         
         return 0

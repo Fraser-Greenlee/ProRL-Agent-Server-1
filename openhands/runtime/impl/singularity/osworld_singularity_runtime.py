@@ -36,8 +36,10 @@ from openhands.runtime.utils import find_available_tcp_port
 from openhands.runtime.utils.command import DEFAULT_MAIN_MODULE
 
 # Port ranges for OSWorld VM services
-OSWORLD_VM_SERVER_PORT_RANGE = (15000, 19999)  # OSWorld Flask server inside VM
-OSWORLD_VNC_PORT_RANGE = (18000, 19999)  # VNC server for VM display
+OSWORLD_VM_SERVER_PORT_RANGE = (15000, 19999)  # OSWorld Flask server inside VM (port 5000)
+OSWORLD_VNC_PORT_RANGE = (18000, 22999)  # VNC server for VM display
+OSWORLD_CHROMIUM_PORT_RANGE = (19000, 22999)  # Chrome DevTools Protocol (port 9222)
+OSWORLD_VLC_PORT_RANGE = (20000, 22999)  # VLC web interface (port 8080)
 
 OSWORLD_CONTAINER_NAME_PREFIX = 'openhands-osworld-runtime-'
 
@@ -97,6 +99,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         self._qemu_stderr = None
         self._vm_server_port: int = -1
         self._vnc_port: int = -1
+        self._chromium_port: int = -1
+        self._vlc_port: int = -1
         
         # Override container name prefix for OSWorld
         self.container_name = OSWORLD_CONTAINER_NAME_PREFIX + sid
@@ -141,11 +145,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         os.makedirs(image_repo, exist_ok=True)
         return f'{image_repo}/osworld_ubuntu_24_04.sif'
     
-    def _allocate_osworld_ports(self) -> tuple[int, int]:
-        """Allocate ports for OSWorld VM server and VNC.
+    def _allocate_osworld_ports(self) -> tuple[int, int, int, int]:
+        """Allocate ports for OSWorld VM services.
         
         Returns:
-            Tuple of (vm_server_port, vnc_port)
+            Tuple of (vm_server_port, vnc_port, chromium_port, vlc_port)
         """
         with OSWorldSingularityRuntime._osworld_port_allocation_lock:
             vm_server_port = find_available_tcp_port(
@@ -156,7 +160,15 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 OSWORLD_VNC_PORT_RANGE[0],
                 OSWORLD_VNC_PORT_RANGE[1]
             )
-            return vm_server_port, vnc_port
+            chromium_port = find_available_tcp_port(
+                OSWORLD_CHROMIUM_PORT_RANGE[0],
+                OSWORLD_CHROMIUM_PORT_RANGE[1]
+            )
+            vlc_port = find_available_tcp_port(
+                OSWORLD_VLC_PORT_RANGE[0],
+                OSWORLD_VLC_PORT_RANGE[1]
+            )
+            return vm_server_port, vnc_port, chromium_port, vlc_port
     
     def _check_kvm_available(self) -> bool:
         """Check if KVM is available and accessible.
@@ -217,11 +229,19 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             cmd.extend(['-cpu', 'qemu64'])
         
         # Continue with common flags
+        # Port forwarding: VM:5000->host:vm_server_port, VM:9222->host:chromium_port, VM:8080->host:vlc_port
+        portfwd = (
+            f'user,id=net0,'
+            f'hostfwd=tcp::{self._vm_server_port}-:5000,'
+            f'hostfwd=tcp::{self._chromium_port}-:9222,'
+            f'hostfwd=tcp::{self._vlc_port}-:8080'
+        )
+        
         cmd.extend([
             '-m', '2G',
             '-smp', '2',
             '-drive', f'file={vm_image_container_path},if=ide',
-            '-netdev', f'user,id=net0,hostfwd=tcp::{self._vm_server_port}-:5000',
+            '-netdev', portfwd,
             '-device', 'virtio-net-pci,netdev=net0',
             '-snapshot',  # Always use snapshot mode (non-persistent)
         ])
@@ -275,11 +295,15 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         self.send_status_message('STATUS$PREPARING_CONTAINER')
         
         # Allocate ports for OSWorld services
-        self._vm_server_port, self._vnc_port = self._allocate_osworld_ports()
+        self._vm_server_port, self._vnc_port, self._chromium_port, self._vlc_port = self._allocate_osworld_ports()
         
         self.log(
             'info',
-            f'Allocated OSWorld ports - VM Server: {self._vm_server_port}, VNC: {self._vnc_port}'
+            f'Allocated OSWorld ports - '
+            f'VM Server: {self._vm_server_port}, '
+            f'VNC: {self._vnc_port}, '
+            f'Chromium DevTools: {self._chromium_port}, '
+            f'VLC: {self._vlc_port}'
         )
         
         # Get the image path
@@ -291,6 +315,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         env_vars = {
             'VM_SERVER_PORT': str(self._vm_server_port),
             'VNC_PORT': str(self._vnc_port),
+            'CHROMIUM_PORT': str(self._chromium_port),
+            'VLC_PORT': str(self._vlc_port),
             'OS_TYPE': self.os_type,
         }
         
@@ -372,6 +398,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             session_info = {
                 'vm_server_port': self._vm_server_port,
                 'vnc_port': self._vnc_port,
+                'chromium_port': self._chromium_port,
+                'vlc_port': self._vlc_port,
                 'os_type': self.os_type,
                 'vm_image_path': self.vm_image_path,
                 'qemu_pid': self.qemu_pid,
@@ -379,6 +407,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             self._save_session_port_info(session_info)
             
             self.log('info', 'OSWorld VM is ready')
+            self.log('info', f'VM Services:')
+            self.log('info', f'  • OSWorld API: {self.osworld_vm_url}')
+            self.log('info', f'  • VNC: {self.vnc_url} (display :{self._vnc_port - 5900})')
+            self.log('info', f'  • Chrome DevTools: {self.chromium_devtools_url}')
+            self.log('info', f'  • VLC Web Interface: {self.vlc_url}')
             self.send_status_message('STATUS$CONTAINER_STARTED')
             
         except Exception as e:
@@ -455,6 +488,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         
         self._vm_server_port = session_info.get('vm_server_port', -1)
         self._vnc_port = session_info.get('vnc_port', -1)
+        self._chromium_port = session_info.get('chromium_port', -1)
+        self._vlc_port = session_info.get('vlc_port', -1)
         self.os_type = session_info.get('os_type', 'linux')
         self.vm_image_path = session_info.get('vm_image_path', self._get_default_vm_image_path())
         self.qemu_pid = session_info.get('qemu_pid')
@@ -462,7 +497,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         self.log(
             'debug',
             f'Attached to OSWorld container: {self.container_name} '
-            f'VM Server: {self._vm_server_port}, VNC: {self._vnc_port}, QEMU PID: {self.qemu_pid}'
+            f'VM Server: {self._vm_server_port}, VNC: {self._vnc_port}, '
+            f'Chromium: {self._chromium_port}, VLC: {self._vlc_port}, QEMU PID: {self.qemu_pid}'
         )
     
     def check_if_alive(self) -> None:
@@ -526,6 +562,23 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         Connect with: vncviewer localhost:{display} (where display = port - 5900)
         """
         return f'vnc://localhost:{self._vnc_port}'
+    
+    @property
+    def chromium_devtools_url(self) -> str:
+        """Get the Chrome DevTools Protocol URL.
+        
+        Access the Chromium browser's DevTools interface inside the VM.
+        Example usage: Connect Puppeteer or Chrome DevTools to this endpoint.
+        """
+        return f'http://localhost:{self._chromium_port}'
+    
+    @property
+    def vlc_url(self) -> str:
+        """Get the VLC web interface URL.
+        
+        Access the VLC media player's web interface inside the VM.
+        """
+        return f'http://localhost:{self._vlc_port}'
     
     def get_vm_screenshot(self) -> bytes | None:
         """Get screenshot from the VM.
