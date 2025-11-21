@@ -272,11 +272,15 @@ Your task is to imagine a reasonable sub-goal you could achieve based on the cur
 
 Guidelines for choosing goals:
 - Choose realistic, achievable goals from the visible UI elements
-- Goals should be specific and actionable (e.g., "Open Google Chrome", "Click on Files icon", "Type text in search box")
+- Goals should be specific and actionable (e.g., "Type 'news' in search box", "Open Google Chrome") 
+- Goals has to be atomic one action at a time. Click an element is one goal, type text is another goal.
 - Consider the actionable items available in the current screen
-- Be curious and explore different parts of the system
-- Don't repeat the same goal - try new things
-- If you feel stuck or exploration is complete, you can say "stop exploring"
+- Be curious and explore different parts of the system and applications.
+- Don't ask clarification questions - just generate a goal
+- It is better to generate coherent goals for example, if you have opened the browser, you should stay in the browser for a while, you can type a URL and search for information to finish some minitasks.
+- Don't do random app switch goals, which is too random and not useful for the task.
+- Goals has to be achievable with current screen state and available actions.
+
 
 Current Screen State:
 {state['simplified_ast']}
@@ -346,8 +350,8 @@ Based on the available actionable items, what sub-goal would you like to achieve
         system_prompt = f"""You are an AI agent controlling a Ubuntu desktop environment.
 
 Available action types:
-1. Click on elements: Use execute_action with CLICK action_type
-2. Type text: Use execute_action with TYPING action_type
+1. Type text: Use execute_action with TYPING action_type
+2. Click on elements: Use execute_action with CLICK action_type
 3. Press keys: Use execute_action with PRESS action_type
 4. Move mouse: Use execute_action with MOVE_TO action_type
 
@@ -511,8 +515,9 @@ Your current goal: {goal}"""
         
         conversation_history = []
         historical_goals = []  # Track goals separately
+        await asyncio.sleep(4.0) # Wait for the UI to update
         
-        for step in range(self.max_steps_per_trajectory):
+        for step in range(self.max_steps_per_trajectory + 1):
             logger.info(f"\nStep {step + 1}/{self.max_steps_per_trajectory}")
             logger.info("-" * 80)
             
@@ -525,6 +530,18 @@ Your current goal: {goal}"""
                 trajectory_id,
                 step
             )
+
+            if step == self.max_steps_per_trajectory:
+                step_data = {
+                    'step': step,
+                    'timestamp': state['timestamp'],
+                    'screenshot': screenshot_path,
+                    'ast_xml': state['ast_xml'],  # Keep full AST (not truncated)
+                    'simplified_ast': state['simplified_ast'],
+                }
+                trajectory['steps'].append(step_data)
+                break
+
             
             # Step 1: Generate sub-goal
             goal = self.generate_goal(state, historical_goals)
@@ -556,14 +573,14 @@ Your current goal: {goal}"""
             observation = self.execute_action(action_info)
             
             # Wait a bit for UI to update
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(4.0)
             
             # Save step data
             step_data = {
                 'step': step,
                 'timestamp': state['timestamp'],
                 'screenshot': screenshot_path,
-                'ast_xml': state['ast_xml'][:1000] + '...' if len(state['ast_xml']) > 1000 else state['ast_xml'],  # Truncate for storage
+                'ast_xml': state['ast_xml'],  # Keep full AST (not truncated)
                 'simplified_ast': state['simplified_ast'],
                 'goal': action_info['goal'],
                 'reasoning': action_info['reasoning'],

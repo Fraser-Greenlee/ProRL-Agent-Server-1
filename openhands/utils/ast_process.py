@@ -1,5 +1,6 @@
 import xml.etree.ElementTree as ET
 import re
+from typing import Optional, Dict, Tuple, List
 
 # Shared namespace configuration
 NAMESPACES = {
@@ -32,10 +33,139 @@ def _parse_coords(coord_str):
     except:
         return 0, 0
 
-def simplify_accessibility_tree(xml_string):
+
+def get_foreground_window(root: ET.Element) -> Optional[Dict[str, any]]:
+    """
+    Identifies the foreground window based on active/modal state and visibility.
+    
+    Args:
+        root: Root element of the accessibility tree
+        
+    Returns:
+        Dictionary with foreground window info (name, role, box) or None
+    """
+    candidates = []
+    
+    # Helper to get bounding box
+    def get_box(node):
+        pos = _get_attr(node, 'screencoord', '0, 0')
+        size = _get_attr(node, 'size', '0, 0')
+        x, y = _parse_coords(pos)
+        w, h = _parse_coords(size)
+        return (x, y, w, h)
+    
+    # Traverse applications to find frames/windows/dialogs
+    for app in root.findall(".//application"):
+        app_name = app.attrib.get('name', '')
+        
+        for win in app.findall(".//*"):
+            tag = win.tag.split('}')[-1]
+            
+            if tag in ['frame', 'window', 'dialog']:
+                is_active = _get_attr(win, 'active') == 'true'
+                is_modal = _get_attr(win, 'modal') == 'true'
+                is_showing = _get_attr(win, 'showing') == 'true'
+                is_visible = _get_attr(win, 'visible') == 'true'
+                
+                # Only consider visible and showing windows
+                if is_showing and is_visible:
+                    box = get_box(win)
+                    candidates.append({
+                        'name': win.attrib.get('name', ''),
+                        'app': app_name,
+                        'role': tag,
+                        'active': is_active,
+                        'modal': is_modal,
+                        'box': box,
+                        'element': win
+                    })
+    
+    # Priority: Modal > Active > Largest area
+    foreground = None
+    
+    # Check for modals first (they block everything else)
+    modals = [c for c in candidates if c['modal']]
+    if modals:
+        foreground = modals[-1]  # Last modal is top-most
+    else:
+        # Check for active window
+        active = [c for c in candidates if c['active']]
+        if active:
+            # If multiple active, pick the one with largest area
+            foreground = max(active, key=lambda c: c['box'][2] * c['box'][3])
+        else:
+            # Fallback: pick largest visible window
+            if candidates:
+                foreground = max(candidates, key=lambda c: c['box'][2] * c['box'][3])
+    
+    return foreground
+
+
+def is_element_in_foreground(element: ET.Element, foreground_window: Dict, parent_map: Dict) -> bool:
+    """
+    Check if an element is within the foreground window or is a global UI element.
+    
+    Args:
+        element: Element to check
+        foreground_window: Foreground window info from get_foreground_window()
+        parent_map: Dictionary mapping child elements to parents
+        
+    Returns:
+        True if element should be shown, False if occluded
+    """
+    if not foreground_window:
+        return True  # No foreground window, show everything
+    
+    # Global UI elements (always visible)
+    tag = element.tag.split('}')[-1]
+    
+    # Desktop frame and gnome-shell elements are always visible
+    parent_app = None
+    current = element
+    while current is not None:
+        if current.tag.split('}')[-1] == 'application':
+            parent_app = current.attrib.get('name', '')
+            break
+        current = parent_map.get(current)
+    
+    # Global UI apps (always shown)
+    global_apps = ['gnome-shell', 'gjs']
+    if parent_app in global_apps:
+        return True
+    
+    # Desktop frame is always visible
+    if tag == 'desktop-frame':
+        return True
+    
+    # Check if element is within foreground window
+    # Walk up the tree to find parent window/frame
+    current = element
+    while current is not None:
+        current_tag = current.tag.split('}')[-1]
+        if current_tag in ['frame', 'window', 'dialog']:
+            # Check if this is the foreground window (compare by id)
+            if id(current) == id(foreground_window['element']):
+                return True
+            else:
+                # This element belongs to a different window - it's occluded
+                return False
+        
+        current = parent_map.get(current)
+    
+    # If no parent window found, it's a global element
+    return True
+
+def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
     """
     Parses a verbose accessibility XML and returns a simplified XML string
     optimized for LLM processing with bounding boxes.
+    
+    Args:
+        xml_string: Raw accessibility tree XML
+        filter_occlusion: If True, filters out occluded elements behind other windows
+        
+    Returns:
+        Simplified XML string with only visible, actionable elements
     """
     _register_namespaces()
 
@@ -43,22 +173,41 @@ def simplify_accessibility_tree(xml_string):
         root = ET.fromstring(xml_string)
     except ET.ParseError as e:
         return f"Error parsing XML: {e}"
+    
+    # Build parent map for traversal
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    
+    # Get foreground window if filtering occlusion
+    foreground_window = None
+    foreground_element_id = None
+    if filter_occlusion:
+        foreground_window = get_foreground_window(root)
+        if foreground_window:
+            foreground_element_id = id(foreground_window['element'])
+            # Suppress print for production use
+            # print(f"Foreground window: {foreground_window['app']} - {foreground_window['name']}")
 
-    def simplify_node(node):
+    def simplify_node(node, parent_in_foreground=True):
         # 1. VISIBILITY CHECK - Filter out invisible or occluded elements
         visible = _get_attr(node, 'visible')
         showing = _get_attr(node, 'showing')
         
         # Element must be both visible AND showing (not occluded)
-        # If either is explicitly false, skip this element
         if visible == 'false' or showing == 'false':
             return None
         
         # For safety, only process elements that are explicitly showing=true
-        # This filters out occluded elements more strictly
         # Allow elements without showing attribute for compatibility
         if showing is not None and showing != 'true':
             return None
+        
+        # 2. OCCLUSION CHECK - Filter out elements behind other windows
+        if filter_occlusion and foreground_window:
+            # Check if this element is in the foreground
+            in_foreground = is_element_in_foreground(node, foreground_window, parent_map)
+            if not in_foreground:
+                return None
+            parent_in_foreground = in_foreground
 
         # 2. EXTRACT CRITICAL DATA
         tag = node.tag.split('}')[-1]
@@ -105,7 +254,7 @@ def simplify_accessibility_tree(xml_string):
         # 6. RECURSION - Process children first
         children = []
         for child in node:
-            simplified_child = simplify_node(child)
+            simplified_child = simplify_node(child, parent_in_foreground)
             if simplified_child is not None:
                 children.append(simplified_child)
         

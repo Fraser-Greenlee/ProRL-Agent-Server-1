@@ -334,6 +334,19 @@ Keyboard actions:
 - PRESS: params={{"action": {{"action_type": "PRESS", "parameters": {{"key": "enter"}}}}}}
 - HOTKEY: params={{"action": {{"action_type": "HOTKEY", "parameters": {{"keys": ["ctrl", "c"]}}}}}}
 
+Example:
+   ```python
+   {OSWORLD_TOOL_NAME}(
+       method="execute_action",
+       params={{
+           "action": {{
+               "action_type": "TYPING",
+               "parameters": {{"text": "Hello World"}}
+           }}
+       }}
+   )
+   ```
+
 **2. get_screenshot** - Capture screen
 Format: method="get_screenshot", params={{}}
 Returns: base64-encoded PNG image
