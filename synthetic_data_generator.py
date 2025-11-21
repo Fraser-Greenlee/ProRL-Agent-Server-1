@@ -152,10 +152,10 @@ class SyntheticDataGenerator:
     
     def get_current_state(self) -> Dict[str, Any]:
         """
-        Get the current screen state including screenshot and accessibility tree.
+        Get the current screen state including screenshot, accessibility tree, and cursor position.
         
         Returns:
-            Dictionary with screenshot, AST, and simplified AST
+            Dictionary with screenshot, AST, simplified AST, and cursor position
         """
         logger.info("Getting current screen state...")
         
@@ -165,6 +165,25 @@ class SyntheticDataGenerator:
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
         else:
             screenshot_b64 = ''
+        
+        # Get cursor position
+        cursor_x, cursor_y = 0, 0
+        try:
+            # Get cursor position via pyautogui in the VM
+            action = OSWorldInteractiveAction(
+                method='execute_python_command',
+                params={'command': 'import pyautogui; pos = pyautogui.position(); print(f"{pos.x},{pos.y}")'},
+                thought='Getting cursor position'
+            )
+            cursor_obs = self.runtime.run_action(action)
+            if cursor_obs and cursor_obs.content:
+                coords = cursor_obs.content.strip().split(',')
+                if len(coords) == 2:
+                    cursor_x = int(coords[0])
+                    cursor_y = int(coords[1])
+                    logger.info(f"Cursor position: ({cursor_x}, {cursor_y})")
+        except Exception as e:
+            logger.warning(f"Could not get cursor position: {e}")
         
         # Get accessibility tree
         action = OSWorldInteractiveAction(
@@ -189,6 +208,7 @@ class SyntheticDataGenerator:
             'screenshot': screenshot_b64,
             'ast_xml': ast_xml,
             'simplified_ast': simplified_ast,
+            'cursor_position': {'x': cursor_x, 'y': cursor_y},
             'timestamp': time.time()
         }
     
@@ -266,6 +286,9 @@ class SyntheticDataGenerator:
             goals_history += "\nTry to finish the previous goal. e.g. if you clicked on URL previously, you next goal can be typing the URL\n"
         
         # Prepare system prompt for goal generation
+        cursor_info = state.get('cursor_position', {})
+        cursor_text = f"\n**Current Cursor Position:** ({cursor_info.get('x', 'unknown')}, {cursor_info.get('y', 'unknown')})\n" if cursor_info else ""
+        
         system_prompt = f"""You are an AI agent exploring a Ubuntu desktop environment.
 
 Your task is to imagine a reasonable sub-goal you could achieve based on the current screen state.
@@ -281,7 +304,7 @@ Guidelines for choosing goals:
 - Don't do random app switch goals, which is too random and not useful for the task.
 - Goals has to be achievable with current screen state and available actions.
 
-
+{cursor_text}
 Current Screen State:
 {state['simplified_ast']}
 {goals_history}
@@ -373,9 +396,13 @@ Don't use "CLICK" action type to type text.
             {"role": "system", "content": system_prompt}
         ]
         
+        # Add cursor position info
+        cursor_info = state.get('cursor_position', {})
+        cursor_text = f"**Current Cursor Position:** ({cursor_info.get('x', 'unknown')}, {cursor_info.get('y', 'unknown')})\n\n" if cursor_info else ""
+        
         # Add recent history
         # messages.extend(conversation_history[-4:] if len(conversation_history) > 4 else conversation_history)
-        user_prompt = f"""Current Screen State:
+        user_prompt = f"""{cursor_text}Current Screen State:
 {state['simplified_ast']}
 
 Your current goal: {goal}"""
@@ -597,6 +624,7 @@ Your current goal: {goal}"""
                 'screenshot': screenshot_path,
                 'ast_xml': state['ast_xml'],  # Keep full AST (not truncated)
                 'simplified_ast': state['simplified_ast'],
+                'cursor_position': state.get('cursor_position', {}),
                 'goal': [action_info['goal'] for action_info in action_infos],
                 'reasoning': action_info['reasoning'],
                 'action': [{
