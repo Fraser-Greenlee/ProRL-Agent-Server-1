@@ -34,7 +34,7 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import (
     OSWorldSingularityRuntime,
 )
 from openhands.storage import get_file_store
-from openhands.utils.accessibility_tree_simplifier import simplify_accessibility_tree
+from openhands.utils.ast_process import simplify_accessibility_tree
 from openhands.agenthub.codeact_agent.tools.osworld import get_osworld_tool
 
 
@@ -181,14 +181,9 @@ class SyntheticDataGenerator:
         except:
             ast_xml = ast_obs.content
         
-        # Simplify AST for LLM
-        simplified_ast = simplify_accessibility_tree(
-            ast_xml,
-            screen_width=self.screen_width,
-            screen_height=self.screen_height,
-            platform='ubuntu',
-            output_format='prompt'
-        )
+        # Simplify AST for LLM using ast_process simplifier
+        # This returns clean XML with center coordinates and bounding boxes
+        simplified_ast = simplify_accessibility_tree(ast_xml)
         
         return {
             'screenshot': screenshot_b64,
@@ -248,19 +243,27 @@ class SyntheticDataGenerator:
     def generate_goal(
         self,
         state: Dict[str, Any],
-        conversation_history: List[Dict[str, Any]]
+        historical_goals: List[str]
     ) -> Optional[str]:
         """
         Use LLM to generate a sub-goal based on current state.
         
         Args:
             state: Current screen state with simplified AST
-            conversation_history: Previous conversation messages
+            historical_goals: List of previously generated goals
             
         Returns:
             Goal string, or None if LLM decides to stop
         """
         logger.info("Generating sub-goal with LLM...")
+        
+        # Format historical goals
+        goals_history = ""
+        if historical_goals:
+            goals_history = "\nPrevious goals you've pursued:\n"
+            for i, goal in enumerate(historical_goals[-5:], 1):  # Show last 5 goals
+                goals_history += f"{i}. {goal}\n"
+            goals_history += "\nTry to choose a different goal to explore new areas of the desktop."
         
         # Prepare system prompt for goal generation
         system_prompt = f"""You are an AI agent exploring a Ubuntu desktop environment.
@@ -272,11 +275,12 @@ Guidelines for choosing goals:
 - Goals should be specific and actionable (e.g., "Open Google Chrome", "Click on Files icon", "Type text in search box")
 - Consider the actionable items available in the current screen
 - Be curious and explore different parts of the system
-- Don't repeat the same goal too many times
+- Don't repeat the same goal - try new things
 - If you feel stuck or exploration is complete, you can say "stop exploring"
 
 Current Screen State:
 {state['simplified_ast']}
+{goals_history}
 
 Based on the available actionable items, what sub-goal would you like to achieve next?"""
 
@@ -284,9 +288,6 @@ Based on the available actionable items, what sub-goal would you like to achieve
         messages = [
             {"role": "system", "content": system_prompt}
         ]
-        
-        # Add conversation history (keep only recent history)
-#        messages.extend(conversation_history[-6:] if len(conversation_history) > 6 else conversation_history)
         
         # Add current user message
         messages.append({
@@ -509,6 +510,7 @@ Your current goal: {goal}"""
         }
         
         conversation_history = []
+        historical_goals = []  # Track goals separately
         
         for step in range(self.max_steps_per_trajectory):
             logger.info(f"\nStep {step + 1}/{self.max_steps_per_trajectory}")
@@ -525,11 +527,14 @@ Your current goal: {goal}"""
             )
             
             # Step 1: Generate sub-goal
-            goal = self.generate_goal(state, conversation_history)
+            goal = self.generate_goal(state, historical_goals)
             
             if goal is None:
                 logger.info("Agent decided to stop or failed to generate goal")
                 break
+            
+            # Add goal to history
+            historical_goals.append(goal)
             
             # Step 2: Generate action for the goal
             action_info = self.generate_action(state, goal, conversation_history)

@@ -41,3 +41,24 @@ except ImportError:
     # If lxml is not available, skip
     pass
 
+# Make ast_process utilities easily importable
+try:
+    from .ast_process import (
+        simplify_accessibility_tree as simplify_ast_to_xml,
+        get_actionable_centers
+    )
+    # Add to __all__
+    if '__all__' in locals():
+        __all__.extend([
+            'simplify_ast_to_xml',
+            'get_actionable_centers'
+        ])
+    else:
+        __all__ = [
+            'simplify_ast_to_xml',
+            'get_actionable_centers'
+        ]
+except ImportError:
+    # If dependencies not available, skip
+    pass
+

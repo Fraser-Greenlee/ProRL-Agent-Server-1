@@ -28,7 +28,7 @@ class AccessibilityTreeSimplifier:
         'tab', 'link', 'terminal', 'document-text', 'document-web',
         'tool-bar', 'split-pane', 'page-tab', 'check-menu-item',
         'radio-menu-item', 'spin-button', 'tree-table', 'table-cell',
-        'icon', 'canvas', 'drawing-area', 'paragraph'
+        'icon', 'canvas', 'drawing-area', 'paragraph', 'label'
     }
     
     # Clickable elements
@@ -37,7 +37,7 @@ class AccessibilityTreeSimplifier:
         'button', 'menu', 'menu-item', 'link', 'tab', 'combo-box',
         'list-item', 'tree-item', 'icon', 'tool-bar', 'page-tab',
         'check-menu-item', 'radio-menu-item', 'spin-button', 'scroll-bar',
-        'slider', 'tree-table', 'table-cell'
+        'slider', 'tree-table', 'table-cell', 'canvas', 'label'
     }
     
     # Typeable elements
@@ -145,9 +145,34 @@ class AccessibilityTreeSimplifier:
             if tag in self.ACTIONABLE_ROLES:
                 item = self._extract_item_info(element, tag, app_name, window_name)
                 if item:
+                    # Smart deduplication strategy
+                    # Skip standalone labels that are children of list-items (already captured in list-item name)
+                    if item['role'] == 'label':
+                        # Check if parent is a list-item
+                        parent = element.getparent()
+                        if parent is not None:
+                            parent_tag = parent.tag.split('}')[-1]
+                            if parent_tag == 'list-item':
+                                # Skip this label, already captured in list-item
+                                for child in element:
+                                    traverse(child, app_name, window_name)
+                                return
+                    
+                    # Skip standalone icons that are within list-items/buttons
+                    if item['role'] == 'icon' and not item['name']:
+                        parent = element.getparent()
+                        if parent is not None:
+                            parent_tag = parent.tag.split('}')[-1]
+                            if parent_tag in ['list-item', 'push-button', 'toggle-button']:
+                                # Skip unnamed icons within buttons/list-items
+                                for child in element:
+                                    traverse(child, app_name, window_name)
+                                return
+                    
                     # Create unique identifier
-                    item_id = (item['role'], item['name'], 
-                              item['coords']['pixel_x'], item['coords']['pixel_y'])
+                    approx_x = item['coords']['pixel_x'] // 10 * 10
+                    approx_y = item['coords']['pixel_y'] // 10 * 10
+                    item_id = (item['role'], item['name'], approx_x, approx_y)
                     
                     if item_id not in seen_items:
                         items.append(item)
@@ -163,8 +188,28 @@ class AccessibilityTreeSimplifier:
     def _extract_item_info(self, element: etree.Element, role: str, 
                            app_name: str, window_name: str) -> Optional[Dict[str, Any]]:
         """Extract information about a single actionable item."""
-        # Get element name
+        # Get element name - try multiple sources
         name = element.get('name', '') or element.text or ''
+        
+        # If name is empty or generic, try to find nested label text
+        if not name or name.strip() == '':
+            # Look for nested label elements
+            labels = element.findall('.//label', namespaces=element.nsmap)
+            for label in labels:
+                label_text = label.get('name', '') or label.text or ''
+                if label_text and label_text.strip():
+                    name = label_text
+                    break
+            
+            # If still no name, try nested text elements
+            if not name or name.strip() == '':
+                texts = element.findall('.//text', namespaces=element.nsmap)
+                for text_elem in texts:
+                    text_content = text_elem.text or ''
+                    if text_content and text_content.strip():
+                        name = text_content
+                        break
+        
         name = self._clean_text(name)
         
         # Skip invisible or non-showing elements
