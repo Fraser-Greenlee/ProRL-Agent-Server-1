@@ -261,9 +261,9 @@ class SyntheticDataGenerator:
         goals_history = ""
         if historical_goals:
             goals_history = "\nPrevious goals you've pursued:\n"
-            for i, goal in enumerate(historical_goals[-5:], 1):  # Show last 5 goals
+            for i, goal in enumerate(historical_goals): 
                 goals_history += f"{i}. {goal}\n"
-            goals_history += "\nTry to choose a different goal to explore new areas of the desktop."
+            goals_history += "\nTry to finish the previous goal. e.g. if you clicked on URL previously, you next goal can be typing the URL\n"
         
         # Prepare system prompt for goal generation
         system_prompt = f"""You are an AI agent exploring a Ubuntu desktop environment.
@@ -356,7 +356,17 @@ Available action types:
 4. Move mouse: Use execute_action with MOVE_TO action_type
 
 Look at the actionable items in the screen state and select the most appropriate action to achieve the goal.
-Use the exact coordinates provided in the simplified AST."""
+Use the exact coordinates provided in the simplified AST.
+If your goal is to type Type “ubuntu.com”, use 
+       method="execute_action",
+       params={{
+           "action": {{
+               "action_type": "TYPING",
+               "parameters": {{"text": "ubuntu.com"}}
+           }}
+       }}
+Don't use "CLICK" action type to type text.
+"""
 
         # Prepare messages
         messages = [
@@ -390,22 +400,25 @@ Your current goal: {goal}"""
             
             # Check if tool was called
             if message.tool_calls:
-                tool_call = message.tool_calls[0]
-                func_name = tool_call.function.name
-                func_args = json.loads(tool_call.function.arguments)
+                output_tool_calls = []
+                logger.info(f"LLM tool calls: {message.tool_calls}")
+                for tool_call in message.tool_calls:
+                    func_name = tool_call.function.name
+                    func_args = json.loads(tool_call.function.arguments)
                 
-                reasoning = message.content if message.content else f"Executing action to achieve: {goal}"
+                    reasoning = message.content if message.content else message.reasoning
                 
-                logger.info(f"LLM Action: {func_name}({func_args})")
+                    logger.info(f"LLM Action: {func_name}({func_args})")
                 
-                return {
-                    'goal': goal,
-                    'tool_name': func_name,
-                    'method': func_args.get('method', ''),
-                    'params': func_args.get('params', {}),
-                    'reasoning': reasoning,
-                    'tool_call_id': tool_call.id
-                }
+                    output_tool_calls.append({
+                        'goal': goal,
+                        'tool_name': func_name,
+                        'method': func_args.get('method', ''),
+                        'params': func_args.get('params', {}),
+                        'reasoning': reasoning,
+                        'tool_call_id': tool_call.id
+                    })
+                return output_tool_calls
             else:
                 # No tool call
                 logger.warning(f"LLM did not call tool. Response: {message.content}")
@@ -554,9 +567,9 @@ Your current goal: {goal}"""
             historical_goals.append(goal)
             
             # Step 2: Generate action for the goal
-            action_info = self.generate_action(state, goal, conversation_history)
+            action_infos = self.generate_action(state, goal, conversation_history)
             
-            if action_info is None:
+            if action_infos is None:
                 logger.info("Failed to generate action for goal")
                 # Try to continue with next step instead of breaking
                 conversation_history.append({
@@ -570,10 +583,12 @@ Your current goal: {goal}"""
                 continue
             
             # Execute action
-            observation = self.execute_action(action_info)
-            
-            # Wait a bit for UI to update
-            await asyncio.sleep(4.0)
+            observations = []
+            for action_info in action_infos:
+                observation = self.execute_action(action_info)
+                observations.append(observation)
+                # Wait a bit for UI to update
+                await asyncio.sleep(4.0)
             
             # Save step data
             step_data = {
@@ -582,13 +597,13 @@ Your current goal: {goal}"""
                 'screenshot': screenshot_path,
                 'ast_xml': state['ast_xml'],  # Keep full AST (not truncated)
                 'simplified_ast': state['simplified_ast'],
-                'goal': action_info['goal'],
+                'goal': [action_info['goal'] for action_info in action_infos],
                 'reasoning': action_info['reasoning'],
-                'action': {
+                'action': [{
                     'method': action_info['method'],
                     'params': action_info['params']
-                },
-                'observation': observation
+                } for action_info in action_infos],
+                'observation': observations
             }
             
             trajectory['steps'].append(step_data)
