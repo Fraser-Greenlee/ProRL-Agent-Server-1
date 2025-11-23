@@ -36,6 +36,7 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import (
 from openhands.storage import get_file_store
 from openhands.utils.ast_process import simplify_accessibility_tree
 from openhands.agenthub.codeact_agent.tools.osworld import get_osworld_tool_vllm
+import time
 
 
 class SyntheticDataGenerator:
@@ -346,7 +347,9 @@ What specific sub-goal would you like to achieve next based on the visible eleme
         self,
         state: Dict[str, Any],
         goal: str,
-        max_tool_loops: int = 5
+        steps: List[Dict[str, Any]],
+        trajectory_id: str,
+        max_tool_loops: int = 10
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Use LLM to select an action based on the goal and current state.
@@ -442,6 +445,40 @@ Select the appropriate action using the osworld tool."""
                     # Execute the action and get result
                     observation = self.execute_action(action_info)
                     observations.append(observation)
+
+                    time.sleep(4.0)
+
+                    # Get current state
+                    state = self.get_current_state()
+
+                    step = len(steps) + 1
+                    
+                    # Save screenshot
+                    screenshot_path = self.save_screenshot(
+                        state['screenshot'],
+                        trajectory_id,
+                        step
+                    )
+
+                    # Save step data
+                    step_data = {
+                        'step': step,
+                        'timestamp': state['timestamp'],
+                        'screenshot': screenshot_path,
+                        'ast_xml': state['ast_xml'],  # Keep full AST (not truncated)
+                        'simplified_ast': state['simplified_ast'],
+                        'cursor_position': state.get('cursor_position', {}),
+                        'goal': action_info['goal'],
+                        'reasoning': action_info['reasoning'],
+                        'action': {
+                            'method': action_info['method'],
+                            'params': action_info['params']
+                        },
+                        'observation': observation
+                    }
+                    steps.append(step_data)
+                    observation['Current Screen State'] = state['simplified_ast']
+                    observation['Current Cursor Position'] = state['cursor_position']
                     
                     # Feed result back to model
                     next_inputs.append({
@@ -466,10 +503,10 @@ Select the appropriate action using the osworld tool."""
                     break
             
             if all_actions:
-                return all_actions, observations
+                return state
             else:
                 logger.warning("No actions generated")
-                return None, None
+                return state
         
         except Exception as e:
             logger.error(f"Error generating action: {e}")
@@ -575,20 +612,21 @@ Select the appropriate action using the osworld tool."""
         
         historical_goals = []  # Track goals separately
         await asyncio.sleep(4.0) # Wait for the UI to update
+
+         # Get current state
+        state = self.get_current_state()
         
+        # Save screenshot
+        screenshot_path = self.save_screenshot(
+            state['screenshot'],
+            trajectory_id,
+            0
+        )
+       
         for step in range(self.max_steps_per_trajectory + 1):
             logger.info(f"\nStep {step + 1}/{self.max_steps_per_trajectory}")
             logger.info("-" * 80)
             
-            # Get current state
-            state = self.get_current_state()
-            
-            # Save screenshot
-            screenshot_path = self.save_screenshot(
-                state['screenshot'],
-                trajectory_id,
-                step
-            )
 
             if step == self.max_steps_per_trajectory:
                 step_data = {
@@ -613,29 +651,8 @@ Select the appropriate action using the osworld tool."""
             historical_goals.append(goal)
             
             # Step 2: Generate action for the goal
-            action_infos, observations = self.generate_action(state, goal)
-            
-       
-            await asyncio.sleep(4.0)
-            # Save step data
-            step_data = {
-                'step': step,
-                'timestamp': state['timestamp'],
-                'screenshot': screenshot_path,
-                'ast_xml': state['ast_xml'],  # Keep full AST (not truncated)
-                'simplified_ast': state['simplified_ast'],
-                'cursor_position': state.get('cursor_position', {}),
-                'goal': [action_info['goal'] for action_info in action_infos],
-                'reasoning': action_infos[0]['reasoning'],
-                'action': [{
-                    'method': action_info['method'],
-                    'params': action_info['params']
-                } for action_info in action_infos],
-                'observation': observations
-            }
-            
-            trajectory['steps'].append(step_data)
-            
+            state = self.generate_action(state, goal, trajectory['steps'], trajectory_id)
+           
             logger.info(f"✓ Step {step + 1} completed")
         
         trajectory['end_time'] = datetime.now().isoformat()
