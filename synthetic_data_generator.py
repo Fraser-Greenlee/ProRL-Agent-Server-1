@@ -22,7 +22,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+import random
 
+import pandas as pd
 from openai import OpenAI
 from PIL import Image
 from openhands.core.config import OpenHandsConfig
@@ -50,6 +52,7 @@ class SyntheticDataGenerator:
         llm_model: str = 'openai/gpt-oss-120b',
         max_steps_per_trajectory: int = 20,
         max_trajectories: int = 10,
+        persona_dataset_path: Optional[str] = '/work/Projects/data/nemotron_data/data',
     ):
         """
         Initialize the synthetic data generator.
@@ -61,6 +64,7 @@ class SyntheticDataGenerator:
             llm_model: Model name to use
             max_steps_per_trajectory: Maximum steps per trajectory
             max_trajectories: Maximum number of trajectories to collect
+            persona_dataset_path: Path to nemotron persona dataset (parquet files)
         """
         self.vm_image_path = vm_image_path
         self.output_dir = Path(output_dir)
@@ -85,11 +89,76 @@ class SyntheticDataGenerator:
         self.screen_width = 1920
         self.screen_height = 1080
         
+        # Load persona dataset
+        self.persona_df = None
+        self.persona_dataset_path = persona_dataset_path
+        if persona_dataset_path and os.path.exists(persona_dataset_path):
+            self._load_persona_dataset()
+        else:
+            logger.warning(f"Persona dataset path not found: {persona_dataset_path}")
+            logger.warning("  Continuing without persona-based goal generation")
+        
         logger.info(f"Initialized SyntheticDataGenerator")
         logger.info(f"  Output directory: {self.output_dir}")
         logger.info(f"  LLM: {llm_model} @ {llm_base_url}")
         logger.info(f"  Max steps per trajectory: {max_steps_per_trajectory}")
         logger.info(f"  Max trajectories: {max_trajectories}")
+        if self.persona_df is not None:
+            logger.info(f"  Personas loaded: {len(self.persona_df):,} records")
+    
+    def _load_persona_dataset(self):
+        """Load the nemotron persona dataset from parquet files."""
+        logger.info(f"Loading persona dataset from {self.persona_dataset_path}...")
+        
+        try:
+            # Load all parquet files
+            parquet_files = list(Path(self.persona_dataset_path).glob('train-*.parquet'))
+            
+            if not parquet_files:
+                logger.warning(f"No parquet files found in {self.persona_dataset_path}")
+                return
+            
+            logger.info(f"  Found {len(parquet_files)} parquet files")
+            
+            # Load first file for efficiency (contains ~90k personas)
+            # Can load all files if needed: pd.concat([pd.read_parquet(f) for f in parquet_files])
+            self.persona_df = pd.read_parquet(parquet_files[0])
+            
+            logger.info(f"  ✓ Loaded {len(self.persona_df):,} persona records")
+            logger.info(f"  Fields: {', '.join(self.persona_df.columns[:8])}...")
+            
+        except Exception as e:
+            logger.error(f"Error loading persona dataset: {e}")
+            self.persona_df = None
+    
+    def sample_persona(self) -> Optional[Dict[str, Any]]:
+        """
+        Sample a random persona from the dataset.
+        
+        Returns:
+            Dictionary containing persona information, or None if dataset not loaded
+        """
+        if self.persona_df is None or len(self.persona_df) == 0:
+            return None
+        
+        # Sample random persona
+        persona_record = self.persona_df.sample(n=1).iloc[0].to_dict()
+        
+        # Extract key fields for goal generation
+        persona_info = {
+            'professional': persona_record.get('professional_persona', ''),
+            'hobbies': persona_record.get('hobbies_and_interests', ''),
+            'occupation': persona_record.get('occupation', ''),
+            'age': persona_record.get('age', ''),
+            'education': persona_record.get('education_level', ''),
+            'city': persona_record.get('city', ''),
+            'state': persona_record.get('state', ''),
+            'skills': persona_record.get('skills_and_expertise', ''),
+            'interests_list': persona_record.get('hobbies_and_interests_list', ''),
+            'career_goals': persona_record.get('career_goals_and_ambitions', ''),
+        }
+        
+        return persona_info
     
     async def initialize_runtime(self):
         """Initialize OSWorld runtime and connect to VM."""
@@ -264,14 +333,16 @@ class SyntheticDataGenerator:
     def generate_goal(
         self,
         state: Dict[str, Any],
-        historical_goals: List[str]
+        historical_goals: List[str],
+        persona: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """
-        Use LLM to generate a sub-goal based on current state.
+        Use LLM to generate a sub-goal based on current state and persona.
         
         Args:
             state: Current screen state with simplified AST
             historical_goals: List of previously generated goals
+            persona: Optional persona information to guide goal generation
             
         Returns:
             Goal string, or None if LLM decides to stop
@@ -286,11 +357,57 @@ class SyntheticDataGenerator:
                 goals_history += f"{i+1}. {goal}\n"
             goals_history += "\nTry to finish the previous goal. e.g. if you clicked on URL field, your next goal can be typing the URL\n"
         
+        # Prepare persona context
+        persona_context = ""
+        if persona:
+            persona_context = f"\n**Your Persona Context:**\n"
+            
+            # Add occupation and demographics
+            if persona.get('occupation'):
+                occupation = persona['occupation'].replace('_', ' ').title()
+                persona_context += f"- Occupation: {occupation}"
+                if persona.get('age'):
+                    persona_context += f" (age {persona['age']})"
+                if persona.get('city') and persona.get('state'):
+                    persona_context += f" from {persona['city']}, {persona['state']}"
+                persona_context += "\n"
+            
+            # Add interests/hobbies (parse from list string)
+            if persona.get('interests_list'):
+                try:
+                    import ast
+                    interests = ast.literal_eval(persona['interests_list'])
+                    if interests and len(interests) > 0:
+                        # Sample 3-5 interests for variety
+                        sample_interests = random.sample(interests, min(5, len(interests)))
+                        persona_context += f"- Interests: {', '.join(sample_interests)}\n"
+                except:
+                    pass
+            
+            # Add brief professional/hobby description (truncated)
+            if persona.get('professional'):
+                prof_text = persona['professional'][:200].strip()
+                if len(persona['professional']) > 200:
+                    # Find last complete sentence
+                    last_period = prof_text.rfind('.')
+                    if last_period > 100:
+                        prof_text = prof_text[:last_period+1]
+                persona_context += f"- Work style: {prof_text}\n"
+            
+            if persona.get('hobbies'):
+                hobby_text = persona['hobbies'][:200].strip()
+                if len(persona['hobbies']) > 200:
+                    last_period = hobby_text.rfind('.')
+                    if last_period > 100:
+                        hobby_text = hobby_text[:last_period+1]
+                persona_context += f"- Personal interests: {hobby_text}\n"
+            
+            persona_context += "\nGenerate goals that align with this persona's background, interests, and typical activities.\n"
+        
         # Prepare instructions (general guidelines)
         instructions = """You are an AI agent exploring a Ubuntu desktop environment.
 
 Your task is to imagine ONE reasonable sub-goal you could achieve based on the current screen state.
-
 
 Respond with a single, specific goal."""
         
@@ -298,7 +415,7 @@ Respond with a single, specific goal."""
         cursor_info = state.get('cursor_position', {})
         cursor_text = f"**Current Cursor Position:** ({cursor_info.get('x', 'unknown')}, {cursor_info.get('y', 'unknown')})\n\n" if cursor_info else ""
         
-        user_message = f"""{cursor_text}Current Screen State:
+        user_message = f"""{cursor_text}{persona_context}Current Screen State:
 {state['simplified_ast']}
 {goals_history}
 
@@ -312,8 +429,9 @@ Guidelines:
 - Generate coherent goal sequences (e.g., if browser is open, search for something)
 - Don't do random app switches in your goals
 - Goals must be achievable with current screen state
+{('- If persona context is provided, generate goals aligned with their interests, occupation, and typical activities' if persona else '')}
 
-What specific sub-goal would you like to achieve next based on the visible elements?"""
+What specific sub-goal would you like to achieve next based on the visible elements{' and your persona' if persona else ''}?"""
         
         try:
             # Use responses.create API (vLLM)
@@ -330,7 +448,7 @@ What specific sub-goal would you like to achieve next based on the visible eleme
                 return None
             
             # Check if agent wants to stop
-            if any(word in goal.lower() for word in ['stop', 'done', 'complete', 'cannot', 'unable']):
+            if any(word in goal.lower() for word in []):
                 logger.info(f"Agent decided to stop: {goal}")
                 return None
             
@@ -608,6 +726,12 @@ Select the appropriate action using the osworld tool."""
         logger.info(f"Collecting trajectory: {trajectory_id}")
         logger.info(f"=" * 80)
         
+        # Sample a persona for this trajectory
+        persona = self.sample_persona()
+        if persona:
+            logger.info(f"Persona: {persona.get('occupation', 'N/A')} from {persona.get('city', 'N/A')}, {persona.get('state', 'N/A')}")
+            logger.info(f"  Age: {persona.get('age', 'N/A')}, Education: {persona.get('education', 'N/A')}")
+        
         trajectory = {
             'trajectory_id': trajectory_id,
             'start_time': datetime.now().isoformat(),
@@ -615,7 +739,8 @@ Select the appropriate action using the osworld tool."""
             'metadata': {
                 'vm_image': self.vm_image_path,
                 'llm_model': self.llm_model,
-                'screen_size': f"{self.screen_width}x{self.screen_height}"
+                'screen_size': f"{self.screen_width}x{self.screen_height}",
+                'persona': persona  # Include persona in metadata
             }
         }
         
@@ -649,8 +774,8 @@ Select the appropriate action using the osworld tool."""
                 break
 
             
-            # Step 1: Generate sub-goal
-            goal = self.generate_goal(state, historical_goals)
+            # Step 1: Generate sub-goal (with persona context)
+            goal = self.generate_goal(state, historical_goals, persona)
             
             if goal is None:
                 logger.info("Agent decided to stop or failed to generate goal")
