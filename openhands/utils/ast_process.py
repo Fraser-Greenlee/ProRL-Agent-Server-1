@@ -36,7 +36,7 @@ def _parse_coords(coord_str):
 
 def get_foreground_window(root: ET.Element) -> Optional[Dict[str, any]]:
     """
-    Identifies the foreground window based on active/modal state and visibility.
+    Identifies the foreground window based on active/focused/modal state and visibility.
     
     Args:
         root: Root element of the accessibility tree
@@ -54,15 +54,17 @@ def get_foreground_window(root: ET.Element) -> Optional[Dict[str, any]]:
         w, h = _parse_coords(size)
         return (x, y, w, h)
     
-    # Traverse applications to find frames/windows/dialogs
+    # Traverse applications to find frames/windows/dialogs/alerts
     for app in root.findall(".//application"):
         app_name = app.attrib.get('name', '')
         
         for win in app.findall(".//*"):
             tag = win.tag.split('}')[-1]
             
-            if tag in ['frame', 'window', 'dialog']:
+            # Include alert dialogs in addition to frames/windows/dialogs
+            if tag in ['frame', 'window', 'dialog', 'alert']:
                 is_active = _get_attr(win, 'active') == 'true'
+                is_focused = _get_attr(win, 'focused') == 'true'
                 is_modal = _get_attr(win, 'modal') == 'true'
                 is_showing = _get_attr(win, 'showing') == 'true'
                 is_visible = _get_attr(win, 'visible') == 'true'
@@ -70,33 +72,46 @@ def get_foreground_window(root: ET.Element) -> Optional[Dict[str, any]]:
                 # Only consider visible and showing windows
                 if is_showing and is_visible:
                     box = get_box(win)
+                    # Calculate area for z-order tie-breaking
+                    area = box[2] * box[3]
+                    
                     candidates.append({
                         'name': win.attrib.get('name', ''),
                         'app': app_name,
                         'role': tag,
                         'active': is_active,
+                        'focused': is_focused,
                         'modal': is_modal,
                         'box': box,
+                        'area': area,
                         'element': win
                     })
     
-    # Priority: Modal > Active > Largest area
+    # Priority: Modal > Active > Focused > Largest area
+    # This reflects typical desktop behavior where:
+    # - Modal dialogs block everything
+    # - Active window is the user's current focus
+    # - Non-modal alerts/notifications don't occlude active windows
     foreground = None
     
-    # Check for modals first (they block everything else)
+    # 1. Check for TRUE modals first (they block everything)
     modals = [c for c in candidates if c['modal']]
     if modals:
-        foreground = modals[-1]  # Last modal is top-most
-    else:
-        # Check for active window
+        # Pick the one with most recent/topmost position (last in tree = topmost)
+        foreground = modals[-1]
+    # 2. Check for active window (user's current application)
+    elif any(c['active'] for c in candidates):
         active = [c for c in candidates if c['active']]
-        if active:
-            # If multiple active, pick the one with largest area
-            foreground = max(active, key=lambda c: c['box'][2] * c['box'][3])
-        else:
-            # Fallback: pick largest visible window
-            if candidates:
-                foreground = max(candidates, key=lambda c: c['box'][2] * c['box'][3])
+        # If multiple active, pick the largest
+        foreground = max(active, key=lambda c: c['area'])
+    # 3. Check for focused window
+    elif any(c['focused'] for c in candidates):
+        focused = [c for c in candidates if c['focused']]
+        # If multiple focused, pick largest (shouldn't happen but handle it)
+        foreground = max(focused, key=lambda c: c['area'])
+    # 4. Fallback: pick largest visible window (might be alert/notification)
+    elif candidates:
+        foreground = max(candidates, key=lambda c: c['area'])
     
     return foreground
 
@@ -104,6 +119,7 @@ def get_foreground_window(root: ET.Element) -> Optional[Dict[str, any]]:
 def is_element_in_foreground(element: ET.Element, foreground_window: Dict, parent_map: Dict) -> bool:
     """
     Check if an element is within the foreground window or is a global UI element.
+    Also allows active/focused elements to pass through even if not in foreground.
     
     Args:
         element: Element to check
@@ -115,6 +131,12 @@ def is_element_in_foreground(element: ET.Element, foreground_window: Dict, paren
     """
     if not foreground_window:
         return True  # No foreground window, show everything
+    
+    # Check if this element itself is active or focused (always show these)
+    is_active = _get_attr(element, 'active') == 'true'
+    is_focused = _get_attr(element, 'focused') == 'true'
+    if is_active or is_focused:
+        return True
     
     # Global UI elements (always visible)
     tag = element.tag.split('}')[-1]
@@ -128,7 +150,7 @@ def is_element_in_foreground(element: ET.Element, foreground_window: Dict, paren
             break
         current = parent_map.get(current)
     
-    # Global UI apps (always shown)
+    # Global UI apps (always shown) - desktop shell elements overlay everything
     global_apps = ['gnome-shell', 'gjs']
     if parent_app in global_apps:
         return True
@@ -138,16 +160,20 @@ def is_element_in_foreground(element: ET.Element, foreground_window: Dict, paren
         return True
     
     # Check if element is within foreground window
-    # Walk up the tree to find parent window/frame
+    # Walk up the tree to find parent window/frame/alert
     current = element
     while current is not None:
         current_tag = current.tag.split('}')[-1]
-        if current_tag in ['frame', 'window', 'dialog']:
+        # Include 'alert' in the list of window types
+        if current_tag in ['frame', 'window', 'dialog', 'alert']:
             # Check if this is the foreground window (compare by id)
             if id(current) == id(foreground_window['element']):
                 return True
             else:
-                # This element belongs to a different window - it's occluded
+                # This element belongs to a different window - check if it's active/focused
+                if _get_attr(current, 'active') == 'true' or _get_attr(current, 'focused') == 'true':
+                    return True
+                # Otherwise it's occluded
                 return False
         
         current = parent_map.get(current)
@@ -184,10 +210,14 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
         foreground_window = get_foreground_window(root)
         if foreground_window:
             foreground_element_id = id(foreground_window['element'])
-            # Suppress print for production use
-            # print(f"Foreground window: {foreground_window['app']} - {foreground_window['name']}")
+            # Debug: Print foreground window info (can be suppressed in production)
+            import os
+            if os.getenv('DEBUG_AST', '0') == '1':
+                print(f"[AST] Foreground: {foreground_window['app']} - {foreground_window['name']} "
+                      f"(role={foreground_window['role']}, active={foreground_window['active']}, "
+                      f"focused={foreground_window['focused']}, modal={foreground_window['modal']})")
 
-    def simplify_node(node, parent_in_foreground=True):
+    def simplify_node(node, parent_in_foreground=True, parent_app=None):
         # 1. VISIBILITY CHECK - Filter out invisible or occluded elements
         visible = _get_attr(node, 'visible')
         showing = _get_attr(node, 'showing')
@@ -214,6 +244,11 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
         name = node.attrib.get('name', '')
         text_content = node.text.strip() if node.text else ""
         
+        # Track application name for context
+        current_app = parent_app
+        if tag == 'application':
+            current_app = node.attrib.get('name', '')
+        
         # 3. COORDINATES (Bounding Box)
         pos_str = _get_attr(node, 'screencoord')
         size_str = _get_attr(node, 'size')
@@ -229,6 +264,12 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
         is_enabled = _get_attr(node, 'enabled') == 'true'
         is_selected = _get_attr(node, 'selected') == 'true'
         is_checked = _get_attr(node, 'checked') == 'true'
+        is_active = _get_attr(node, 'active') == 'true'
+        is_focused_raw = _get_attr(node, 'focused') == 'true'
+        
+        # Only mark widget-level focus, not window-level focus
+        # Windows/frames can have focus but it's less meaningful for agents
+        is_focused = is_focused_raw and tag not in ['window', 'frame', 'dialog', 'alert']
         
         # 5. SIMPLIFICATION LOGIC
         tag_map = {
@@ -247,14 +288,14 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
         has_coords = (w > 0 and h > 0)
         
         is_interesting = (
-            (name or text_content or actions or is_selected or is_checked)
+            (name or text_content or actions or is_selected or is_checked or is_active or is_focused)
             and has_coords  # Must have valid coordinates
         )
 
         # 6. RECURSION - Process children first
         children = []
         for child in node:
-            simplified_child = simplify_node(child, parent_in_foreground)
+            simplified_child = simplify_node(child, parent_in_foreground, current_app)
             if simplified_child is not None:
                 children.append(simplified_child)
         
@@ -264,6 +305,10 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
             new_elem = ET.Element(simple_tag)
             if name: new_elem.set("name", name)
             if text_content and text_content != name: new_elem.set("text", text_content)
+            
+            # Add application name for window-type elements
+            if tag in ['frame', 'window', 'dialog', 'alert'] and current_app:
+                new_elem.set("app", current_app)
             
             # Add bounding box [left, top, width, height]
             new_elem.set("box", f"[{x},{y},{w},{h}]")
@@ -275,6 +320,8 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
             if actions: new_elem.set("act", ",".join(actions))
             if is_selected: new_elem.set("selected", "true")
             if is_checked: new_elem.set("checked", "true")
+            if is_active: new_elem.set("active", "true")
+            if is_focused: new_elem.set("focused", "true")
             if not is_enabled: new_elem.set("enabled", "false")
             
             # Add children
