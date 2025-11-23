@@ -379,7 +379,7 @@ def get_osworld_tool() -> dict:
     """Get the OSWorld tool definition for LLM function calling.
     
     Returns:
-        Tool definition dictionary with function schema
+        Tool definition dictionary with function schema (OpenAI nested format)
     """
     return {
         'type': 'function',
@@ -420,4 +420,51 @@ def get_osworld_tool() -> dict:
                 'required': ['method'],
             },
         },
+    }
+
+
+def get_osworld_tool_vllm() -> dict:
+    """Get the OSWorld tool definition for vLLM Responses API.
+    
+    Returns:
+        Tool definition in vLLM flat format (matching client_test.py pattern)
+    """
+    return {
+        'type': 'function',
+        'name': OSWORLD_TOOL_NAME,
+        'description': OSWORLD_TOOLS_DESCRIPTION,
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'method': {
+                    'type': 'string',
+                    'description': 'The OSWorld method to call',
+                    'enum': [
+                        'execute_action',
+                        'get_screenshot',
+                        'get_accessibility_tree',
+                        'get_terminal_output',
+                        'get_file',
+                        'execute_python_command',
+                        'run_python_script',
+                        'run_bash_script',
+                        'start_recording',
+                        'end_recording',
+                        'get_vm_platform',
+                        'get_vm_screen_size',
+                        'get_vm_window_size',
+                        'get_vm_wallpaper',
+                        'get_vm_desktop_path',
+                        'get_vm_directory_tree',
+                    ],
+                },
+                'params': {
+                    'type': 'object',
+                    'description': 'Parameters for the method (varies by method)',
+                    'additionalProperties': True,
+                },
+            },
+            'required': ['method'],
+        },
+        'strict': True,
     }

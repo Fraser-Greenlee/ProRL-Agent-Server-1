@@ -35,7 +35,7 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import (
 )
 from openhands.storage import get_file_store
 from openhands.utils.ast_process import simplify_accessibility_tree
-from openhands.agenthub.codeact_agent.tools.osworld import get_osworld_tool
+from openhands.agenthub.codeact_agent.tools.osworld import get_osworld_tool_vllm
 
 
 class SyntheticDataGenerator:
@@ -45,8 +45,8 @@ class SyntheticDataGenerator:
         self,
         vm_image_path: str,
         output_dir: str = './trajectories',
-        llm_base_url: str = 'http://localhost:11434/v1',
-        llm_model: str = 'gpt-oss:120b',
+        llm_base_url: str = 'http://localhost:8000/v1',
+        llm_model: str = 'openai/gpt-oss-120b',
         max_steps_per_trajectory: int = 20,
         max_trajectories: int = 10,
     ):
@@ -73,11 +73,11 @@ class SyntheticDataGenerator:
         # Initialize LLM client
         self.llm_client = OpenAI(
             base_url=llm_base_url,
-            api_key='ollama',  # Required but unused for Ollama
+            api_key='EMPTY',  # vLLM ignores this by default
         )
         
-        # Get OSWorld tool definition
-        self.osworld_tool = get_osworld_tool()
+        # Get OSWorld tool definition for vLLM
+        self.osworld_tool = get_osworld_tool_vllm()
         
         # Runtime will be initialized in async context
         self.runtime: Optional[OSWorldSingularityRuntime] = None
@@ -282,62 +282,54 @@ class SyntheticDataGenerator:
         if historical_goals:
             goals_history = "\nPrevious goals you've pursued:\n"
             for i, goal in enumerate(historical_goals): 
-                goals_history += f"{i}. {goal}\n"
-            goals_history += "\nTry to finish the previous goal. e.g. if you clicked on URL previously, you next goal can be typing the URL\n"
+                goals_history += f"{i+1}. {goal}\n"
+            goals_history += "\nTry to finish the previous goal. e.g. if you clicked on URL field, your next goal can be typing the URL\n"
         
-        # Prepare system prompt for goal generation
+        # Prepare instructions (general guidelines)
+        instructions = """You are an AI agent exploring a Ubuntu desktop environment.
+
+Your task is to imagine ONE reasonable sub-goal you could achieve based on the current screen state.
+
+
+Respond with a single, specific goal."""
+        
+        # Prepare user message with actual state data
         cursor_info = state.get('cursor_position', {})
-        cursor_text = f"\n**Current Cursor Position:** ({cursor_info.get('x', 'unknown')}, {cursor_info.get('y', 'unknown')})\n" if cursor_info else ""
+        cursor_text = f"**Current Cursor Position:** ({cursor_info.get('x', 'unknown')}, {cursor_info.get('y', 'unknown')})\n\n" if cursor_info else ""
         
-        system_prompt = f"""You are an AI agent exploring a Ubuntu desktop environment.
-
-Your task is to imagine a reasonable sub-goal you could achieve based on the current screen state.
-
-Guidelines for choosing goals:
-- Choose realistic, achievable goals from the visible UI elements
-- Goals should be specific and actionable (e.g., "Type 'news' in search box", "Open Google Chrome") 
-- Goals has to be atomic one action at a time. Click an element is one goal, type text is another goal.
-- Consider the actionable items available in the current screen
-- Be curious and explore different parts of the system and applications.
-- Don't ask clarification questions - just generate a goal
-- It is better to generate coherent goals for example, if you have opened the browser, you should stay in the browser for a while, you can type a URL and search for information to finish some minitasks.
-- Don't do random app switch goals, which is too random and not useful for the task.
-- Goals has to be achievable with current screen state and available actions.
-
-{cursor_text}
-Current Screen State:
+        user_message = f"""{cursor_text}Current Screen State:
 {state['simplified_ast']}
 {goals_history}
 
-Based on the available actionable items, what sub-goal would you like to achieve next?"""
+Guidelines:
+- Don't ask clarification questions - just generate a simple goal
+- A larger objective is irrelevant. We just need a local sub-goal to navigate the system. Don't ask for it!
+- Choose realistic, achievable goals from visible UI elements
+- Goals should be specific and actionable (e.g., "Type 'news' in search box", "Open Google Chrome") 
+- Goals must be atomic - ONE action at a time. Click is one goal, type is another goal.
+- Be curious and explore different parts of the system
+- Generate coherent goal sequences (e.g., if browser is open, search for something)
+- Don't do random app switches in your goals
+- Goals must be achievable with current screen state
 
-        # Prepare messages
-        messages = [
-            {"role": "system", "content": system_prompt}
-        ]
-        
-        # Add current user message
-        messages.append({
-            "role": "user",
-            "content": "What specific sub-goal would you like to achieve next based on the visible elements?"
-        })
+What specific sub-goal would you like to achieve next based on the visible elements?"""
         
         try:
-            # Call LLM for goal generation
-            response = self.llm_client.chat.completions.create(
+            # Use responses.create API (vLLM)
+            response = self.llm_client.responses.create(
                 model=self.llm_model,
-                messages=messages,
-                temperature=0.7,
+                instructions=instructions,
+                input=[{"role": "user", "content": user_message}],
             )
             
-            goal = response.choices[0].message.content
+            goal = response.output_text.strip() if hasattr(response, 'output_text') else ""
             
             if not goal:
                 logger.warning("LLM returned empty goal")
                 return None
             
             # Check if agent wants to stop
-            if any(word in goal.lower() for word in ['stop', 'done', 'complete', 'finish', 'end']):
+            if any(word in goal.lower() for word in ['stop', 'done', 'complete', 'cannot', 'unable']):
                 logger.info(f"Agent decided to stop: {goal}")
                 return None
             
@@ -354,102 +346,130 @@ Based on the available actionable items, what sub-goal would you like to achieve
         self,
         state: Dict[str, Any],
         goal: str,
-        conversation_history: List[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
+        max_tool_loops: int = 5
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Use LLM to select an action based on the goal and current state.
+        Uses tool calling loop until final answer (following client_test.py pattern).
         
         Args:
             state: Current screen state with simplified AST
             goal: The sub-goal to achieve
             conversation_history: Previous conversation messages
+            max_tool_loops: Maximum tool call iterations
             
         Returns:
-            Dictionary with action details, or None if failed
+            List of action dictionaries, or None if failed
         """
         logger.info(f"Generating action for goal: {goal}")
-        
-        # Prepare system prompt for action selection
-        system_prompt = f"""You are an AI agent controlling a Ubuntu desktop environment.
-
-Available action types:
-1. Type text: Use execute_action with TYPING action_type
-2. Click on elements: Use execute_action with CLICK action_type
-3. Press keys: Use execute_action with PRESS action_type
-4. Move mouse: Use execute_action with MOVE_TO action_type
-
-Look at the actionable items in the screen state and select the most appropriate action to achieve the goal.
-Use the exact coordinates provided in the simplified AST.
-If your goal is to type Type “ubuntu.com”, use 
-       method="execute_action",
-       params={{
-           "action": {{
-               "action_type": "TYPING",
-               "parameters": {{"text": "ubuntu.com"}}
-           }}
-       }}
-Don't use "CLICK" action type to type text.
-"""
-
-        # Prepare messages
-        messages = [
-            {"role": "system", "content": system_prompt}
-        ]
         
         # Add cursor position info
         cursor_info = state.get('cursor_position', {})
         cursor_text = f"**Current Cursor Position:** ({cursor_info.get('x', 'unknown')}, {cursor_info.get('y', 'unknown')})\n\n" if cursor_info else ""
         
-        # Add recent history
-        # messages.extend(conversation_history[-4:] if len(conversation_history) > 4 else conversation_history)
-        user_prompt = f"""{cursor_text}Current Screen State:
+        # Prepare instructions for vLLM responses API
+        instructions = f"""You are an AI agent controlling a Ubuntu desktop environment.
+
+Available actions:
+1. Type text: execute_action with TYPING action_type
+2. Click elements: execute_action with CLICK action_type  
+3. Press keys: execute_action with PRESS action_type
+
+Use the osworld tool to interact. Look at the screen state and cursor position, select the appropriate action.
+Use exact coordinates from the simplified AST.
+
+Example for typing:
+  osworld(method="execute_action", params={{"action": {{"action_type": "TYPING", "parameters": {{"text": "ubuntu.com"}}}}}})
+
+Example for clicking:
+  osworld(method="execute_action", params={{"action": {{"action_type": "CLICK", "parameters": {{"x": 100, "y": 200, "button": "left"}}}}}})"""
+
+        user_content = f"""{cursor_text}Current Screen State:
 {state['simplified_ast']}
 
-Your current goal: {goal}"""
-        
-        # Add current user message
-        messages.append({
-            "role": "user",
-            "content": user_prompt
-        })
+Goal: {goal}
+
+Select the appropriate action using the osworld tool."""
         
         try:
-            # Call LLM with tool calling
-            response = self.llm_client.chat.completions.create(
+            # First turn: ask for action
+            response = self.llm_client.responses.create(
                 model=self.llm_model,
-                messages=messages,
+                instructions=instructions,
+                input=[{"role": "user", "content": user_content}],
                 tools=[self.osworld_tool],
-                tool_choice="auto",
-                temperature=0.5,  # Lower temperature for more precise actions
             )
             
-            message = response.choices[0].message
+            all_actions = []
+            observations = []
+            loop = 0
             
-            # Check if tool was called
-            if message.tool_calls:
-                output_tool_calls = []
-                logger.info(f"LLM tool calls: {message.tool_calls}")
-                for tool_call in message.tool_calls:
-                    func_name = tool_call.function.name
-                    func_args = json.loads(tool_call.function.arguments)
+            while loop < max_tool_loops:
+                loop += 1
                 
-                    reasoning = message.content if message.content else message.reasoning
+                # Extract tool calls from this turn
+                tool_calls = [item for item in response.output if item.type == "function_call"]
+                reasoning = [item for item in response.output if item.type == "reasoning"]
                 
-                    logger.info(f"LLM Action: {func_name}({func_args})")
+                if not tool_calls:
+                    # No more tool calls - final answer reached
+                    logger.info(f"=== FINAL ANSWER === {response.output_text}")
+                    break
                 
-                    output_tool_calls.append({
+                logger.info(f"=== TOOL LOOP {loop} === {len(tool_calls)} tool calls")
+                next_inputs = []
+                
+                for call in tool_calls:
+                    # vLLM tool format has name at top level
+                    if call.name != self.osworld_tool['name']:
+                        logger.warning(f"Ignoring unknown tool: {call.name}")
+                        continue
+                    
+                    func_args = json.loads(call.arguments or "{}")
+                    logger.info(f"Tool call: {call.name}({func_args})")
+                    
+                    # Store the action
+                    action_info = {
                         'goal': goal,
-                        'tool_name': func_name,
+                        'tool_name': call.name,
                         'method': func_args.get('method', ''),
                         'params': func_args.get('params', {}),
-                        'reasoning': reasoning,
-                        'tool_call_id': tool_call.id
+                        'reasoning': reasoning[0].content if reasoning else f"Achieving goal: {goal}",
+                        'tool_call_id': call.call_id
+                    }
+                    all_actions.append(action_info)
+                    
+                    # Execute the action and get result
+                    observation = self.execute_action(action_info)
+                    observations.append(observation)
+                    
+                    # Feed result back to model
+                    next_inputs.append({
+                        "type": "function_call_output",
+                        "call_id": call.call_id,
+                        "output": json.dumps(observation)
                     })
-                return output_tool_calls
+                
+                if not next_inputs:
+                    break
+                
+                # Continue conversation with previous_response_id
+                try:
+                    response = self.llm_client.responses.create(
+                        model=self.llm_model,
+                        previous_response_id=response.id,
+                        input=next_inputs,
+                        tools=[self.osworld_tool],
+                    )
+                except Exception as e:
+                    logger.error(f"Error in tool loop continuation: {e}")
+                    break
+            
+            if all_actions:
+                return all_actions, observations
             else:
-                # No tool call
-                logger.warning(f"LLM did not call tool. Response: {message.content}")
-                return None
+                logger.warning("No actions generated")
+                return None, None
         
         except Exception as e:
             logger.error(f"Error generating action: {e}")
@@ -553,7 +573,6 @@ Your current goal: {goal}"""
             }
         }
         
-        conversation_history = []
         historical_goals = []  # Track goals separately
         await asyncio.sleep(4.0) # Wait for the UI to update
         
@@ -594,29 +613,10 @@ Your current goal: {goal}"""
             historical_goals.append(goal)
             
             # Step 2: Generate action for the goal
-            action_infos = self.generate_action(state, goal, conversation_history)
+            action_infos, observations = self.generate_action(state, goal)
             
-            if action_infos is None:
-                logger.info("Failed to generate action for goal")
-                # Try to continue with next step instead of breaking
-                conversation_history.append({
-                    "role": "assistant",
-                    "content": f"Goal: {goal}"
-                })
-                conversation_history.append({
-                    "role": "user",
-                    "content": "Failed to generate action, try a different goal."
-                })
-                continue
-            
-            # Execute action
-            observations = []
-            for action_info in action_infos:
-                observation = self.execute_action(action_info)
-                observations.append(observation)
-                # Wait a bit for UI to update
-                await asyncio.sleep(4.0)
-            
+       
+            await asyncio.sleep(4.0)
             # Save step data
             step_data = {
                 'step': step,
@@ -626,7 +626,7 @@ Your current goal: {goal}"""
                 'simplified_ast': state['simplified_ast'],
                 'cursor_position': state.get('cursor_position', {}),
                 'goal': [action_info['goal'] for action_info in action_infos],
-                'reasoning': action_info['reasoning'],
+                'reasoning': action_infos[0]['reasoning'],
                 'action': [{
                     'method': action_info['method'],
                     'params': action_info['params']
@@ -635,21 +635,6 @@ Your current goal: {goal}"""
             }
             
             trajectory['steps'].append(step_data)
-            
-            # Update conversation history for next iteration
-            conversation_history.append({
-                "role": "assistant",
-                "content": action_info['reasoning']
-            })
-            
-            conversation_history.append({
-                "role": "user",
-                "content": f"Action executed. Result: {observation['content'][:200]}"
-            })
-            
-            # Keep history manageable
-            if len(conversation_history) > 10:
-                conversation_history = conversation_history[-10:]
             
             logger.info(f"✓ Step {step + 1} completed")
         
@@ -741,13 +726,13 @@ async def main():
     parser.add_argument(
         '--llm-url',
         type=str,
-        default='http://localhost:11434/v1',
-        help='LLM API base URL'
+        default='http://localhost:8000/v1',
+        help='LLM API base URL (vLLM server)'
     )
     parser.add_argument(
         '--llm-model',
         type=str,
-        default='gpt-oss:120b',
+        default='openai/gpt-oss-120b',
         help='LLM model name'
     )
     parser.add_argument(

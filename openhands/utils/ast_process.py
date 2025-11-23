@@ -173,7 +173,7 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
         root = ET.fromstring(xml_string)
     except ET.ParseError as e:
         return f"Error parsing XML: {e}"
-    
+
     # Build parent map for traversal
     parent_map = {child: parent for parent in root.iter() for child in parent}
     
