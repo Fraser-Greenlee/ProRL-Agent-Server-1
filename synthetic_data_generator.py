@@ -426,6 +426,15 @@ Select the appropriate action using the osworld tool."""
                     # vLLM tool format has name at top level
                     if call.name != self.osworld_tool['name']:
                         logger.warning(f"Ignoring unknown tool: {call.name}")
+                        next_inputs.append({
+                            "type": "function_call_output",
+                            "call_id": call.call_id,
+                            "output": json.dumps({
+                                "success": False,
+                                "content": f"Unknown tool: {call.name}",
+                                "exit_code": -1
+                            })
+                        })
                         continue
                     
                     func_args = json.loads(call.arguments or "{}")
