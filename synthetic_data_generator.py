@@ -122,7 +122,8 @@ class SyntheticDataGenerator:
         self.screen_height = 1080
         
         # Load persona dataset
-        self.persona_df = None
+        self.persona_dfs = []  # List of memory-mapped dataframes
+        self.persona_df_weights = []  # Weights for sampling
         self.persona_dataset_path = persona_dataset_path
         if persona_dataset_path and os.path.exists(persona_dataset_path):
             self._load_persona_dataset()
@@ -136,8 +137,8 @@ class SyntheticDataGenerator:
         logger.info(f"  Max steps per trajectory: {max_steps_per_trajectory}")
         logger.info(f"  Max trajectories: {max_trajectories}")
         logger.info(f"  Max parallel workers: {max_parallel}")
-        if self.persona_df is not None:
-            logger.info(f"  Personas loaded: {len(self.persona_df):,} records")
+        if self.persona_dfs:
+            logger.info(f"  Personas loaded: {sum(self.persona_df_weights):,} records")
     
     def _load_persona_dataset(self):
         """Load the nemotron persona dataset from parquet files."""
@@ -153,29 +154,44 @@ class SyntheticDataGenerator:
             
             logger.info(f"  Found {len(parquet_files)} parquet files")
             
-            # Load first file for efficiency (contains ~90k personas)
-            # Can load all files if needed: pd.concat([pd.read_parquet(f) for f in parquet_files])
-            self.persona_df = pd.read_parquet(parquet_files[0])
+            # Load all parquet files using memory mapping for efficiency
+            # Keep them as separate dataframes to maintain memory mapping benefits
+            logger.info("  Loading files with memory mapping...")
+            self.persona_dfs = []  # List of memory-mapped dataframes
+            self.persona_df_weights = []  # Weights for random sampling
+            total_records = 0
             
-            logger.info(f"  ✓ Loaded {len(self.persona_df):,} persona records")
-            logger.info(f"  Fields: {', '.join(self.persona_df.columns[:8])}...")
+            for pf in parquet_files:
+                df = pd.read_parquet(pf, memory_map=True)
+                self.persona_dfs.append(df)
+                self.persona_df_weights.append(len(df))
+                total_records += len(df)
+                logger.info(f"    Loaded {pf.name}: {len(df):,} records")
+            
+            logger.info(f"  ✓ Loaded {total_records:,} total persona records from {len(parquet_files)} files (memory-mapped)")
+            logger.info(f"  Fields: {', '.join(self.persona_dfs[0].columns[:8])}...")
             
         except Exception as e:
             logger.error(f"Error loading persona dataset: {e}")
-            self.persona_df = None
+            self.persona_dfs = []
+            self.persona_df_weights = []
     
     def sample_persona(self) -> Optional[Dict[str, Any]]:
         """
         Sample a random persona from the dataset.
+        Uses weighted random selection across memory-mapped dataframes.
         
         Returns:
             Dictionary containing persona information, or None if dataset not loaded
         """
-        if self.persona_df is None or len(self.persona_df) == 0:
+        if not self.persona_dfs or sum(self.persona_df_weights) == 0:
             return None
         
-        # Sample random persona
-        persona_record = self.persona_df.sample(n=1).iloc[0].to_dict()
+        # Randomly select a dataframe (weighted by number of records)
+        selected_df = random.choices(self.persona_dfs, weights=self.persona_df_weights, k=1)[0]
+        
+        # Sample random persona from the selected dataframe
+        persona_record = selected_df.sample(n=1).iloc[0].to_dict()
         
         # Extract key fields for goal generation
         persona_info = {
