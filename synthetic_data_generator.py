@@ -426,7 +426,7 @@ Guidelines:
 - Goals should be specific and actionable (e.g., "Type 'news' in search box", "Open Google Chrome") 
 - Goals must be atomic - ONE action at a time. Click is one goal, type is another goal.
 - Be curious and explore different parts of the system
-- If the same goal is generated multiple times, try to generate a different goal.
+- If the same goal is generated multiple times, it means you have been stuck in a loop. Try to backtrack and generate a different goal.
 - Generate coherent goal sequences (e.g., if browser is open, search for something)
 - Don't do random app switches in your goals
 - Goals must be achievable with current screen state
