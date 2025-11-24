@@ -426,6 +426,7 @@ Guidelines:
 - Goals should be specific and actionable (e.g., "Type 'news' in search box", "Open Google Chrome") 
 - Goals must be atomic - ONE action at a time. Click is one goal, type is another goal.
 - Be curious and explore different parts of the system
+- If the same goal is generated multiple times, try to generate a different goal.
 - Generate coherent goal sequences (e.g., if browser is open, search for something)
 - Don't do random app switches in your goals
 - Goals must be achievable with current screen state
@@ -439,6 +440,7 @@ What specific sub-goal would you like to achieve next based on the visible eleme
                 model=self.llm_model,
                 instructions=instructions,
                 input=[{"role": "user", "content": user_message}],
+                reasoning={"effort": "high"},
             )
             
             goal = response.output_text.strip() if hasattr(response, 'output_text') else ""
@@ -624,6 +626,7 @@ Select the appropriate action using the osworld tool."""
                         previous_response_id=response.id,
                         input=next_inputs,
                         tools=[self.osworld_tool],
+                        reasoning={"effort": "high"},
                     )
                 except Exception as e:
                     logger.error(f"Error in tool loop continuation: {e}")
