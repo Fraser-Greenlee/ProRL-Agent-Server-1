@@ -102,10 +102,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         self._chromium_port: int = -1
         self._vlc_port: int = -1
         
-        # Override container name prefix for OSWorld
-        self.container_name = OSWORLD_CONTAINER_NAME_PREFIX + sid
-        
-        # Call parent constructor
+        # Call parent constructor first
         super().__init__(
             config=config,
             event_stream=event_stream,
@@ -117,6 +114,10 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             headless_mode=headless_mode,
             main_module=main_module,
         )
+        
+        # Override container name prefix for OSWorld (AFTER parent init)
+        # This must come after super().__init__() to avoid being overwritten
+        self.container_name = OSWORLD_CONTAINER_NAME_PREFIX + sid
         
     def _get_default_vm_image_path(self) -> str:
         """Get default VM image path based on OS type."""

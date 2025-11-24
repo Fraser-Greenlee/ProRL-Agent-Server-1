@@ -113,6 +113,11 @@ class SyntheticDataGenerator:
         self._server_running: bool = False
         self._executor: Optional[ThreadPoolExecutor] = None
         
+        # Concurrency control: limit total concurrent runtimes
+        self._runtime_semaphore = threading.Semaphore(max_parallel)
+        self._active_runtime_count = 0
+        self._active_runtime_lock = threading.Lock()
+        
         self.screen_width = 1920
         self.screen_height = 1080
         
@@ -274,18 +279,35 @@ class SyntheticDataGenerator:
                     self.init_queue.task_done()
                     continue
             
-            logger.info(f"[init-worker-{worker_id}] Initializing runtime for {job_id}")
+            # WAIT for available slot (blocks if max_parallel runtimes already active)
+            logger.info(f"[init-worker-{worker_id}] Waiting for runtime slot...")
+            await asyncio.to_thread(self._runtime_semaphore.acquire)
+            
+            with self._active_runtime_lock:
+                self._active_runtime_count += 1
+            
+            logger.info(f"[init-worker-{worker_id}] Runtime slot acquired ({self._active_runtime_count}/{self.max_parallel}), initializing {job_id}")
             
             try:
-                # Create runtime
+                # Create runtime configuration
                 config = OpenHandsConfig()
                 config.runtime = 'osworld'
                 config.sandbox.base_container_image = 'ubuntu:24.04'
                 config.sandbox.run_as_fakeroot = True
+                # runtime_container_image will be built automatically if None
+                config.sandbox.runtime_container_image = None  # Trigger auto-build
                 
                 # Unique event stream per trajectory
                 file_store = get_file_store('local', f'/tmp/synthetic_data_gen_{job_id}')
                 event_stream = EventStream(sid=job_id, file_store=file_store)
+                
+                # Validate VM image path exists
+                if not os.path.exists(self.vm_image_path):
+                    raise RuntimeError(f"VM image not found: {self.vm_image_path}")
+                
+                logger.info(f"[init-worker-{worker_id}] Creating runtime for {job_id}")
+                logger.info(f"[init-worker-{worker_id}]   VM image: {self.vm_image_path}")
+                logger.info(f"[init-worker-{worker_id}]   Base image: {config.sandbox.base_container_image}")
                 
                 # Create runtime
                 runtime = OSWorldSingularityRuntime(
@@ -297,9 +319,12 @@ class SyntheticDataGenerator:
                     attach_to_existing=False,
                 )
                 
+                logger.info(f"[init-worker-{worker_id}] Runtime object created, connecting to VM...")
+                
                 # Connect to VM
                 await runtime.connect()
-                logger.info(f"[init-worker-{worker_id}] ✓ Runtime initialized for {job_id}")
+                logger.info(f"[init-worker-{worker_id}] ✓ Runtime initialized and connected for {job_id}")
+                logger.info(f"[init-worker-{worker_id}]   VM URL: {runtime.osworld_vm_url if hasattr(runtime, 'osworld_vm_url') else 'N/A'}")
                 
                 # Store runtime in job details
                 with self._job_details_lock:
@@ -314,6 +339,12 @@ class SyntheticDataGenerator:
                     if job_id in self._job_details:
                         self._job_details[job_id].error = str(e)
                         self._job_details[job_id].event.set()
+                
+                # Release semaphore on failure (no runtime to cleanup later)
+                self._runtime_semaphore.release()
+                with self._active_runtime_lock:
+                    self._active_runtime_count -= 1
+                logger.info(f"[init-worker-{worker_id}] Runtime slot released due to error ({self._active_runtime_count}/{self.max_parallel})")
             
             finally:
                 self.init_queue.task_done()
@@ -377,6 +408,12 @@ class SyntheticDataGenerator:
                     with self._job_details_lock:
                         if job_id in self._job_details:
                             self._job_details[job_id].runtime = None
+                
+                # Release semaphore slot (allow next runtime to be created)
+                self._runtime_semaphore.release()
+                with self._active_runtime_lock:
+                    self._active_runtime_count -= 1
+                logger.info(f"[collect-worker-{worker_id}] Runtime slot released ({self._active_runtime_count}/{self.max_parallel})")
                 
                 # Signal completion
                 if job_details.event:
@@ -1078,7 +1115,8 @@ Select the appropriate action using the osworld tool."""
                 job_ids.append(job_id)
             
             logger.info(f"\n✓ Submitted {len(job_ids)} trajectory jobs to queue")
-            logger.info(f"  Workers will process them in parallel ({self.max_parallel} at a time)\n")
+            logger.info(f"  Max concurrent runtimes: {self.max_parallel}")
+            logger.info(f"  Workers will process jobs sequentially, max {self.max_parallel} runtimes alive at once\n")
             
             # Wait for all jobs to complete
             logger.info("Waiting for all trajectories to complete...")
