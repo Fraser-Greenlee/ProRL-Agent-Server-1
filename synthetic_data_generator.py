@@ -389,15 +389,15 @@ class SyntheticDataGenerator:
             logger.info(f"[collect-worker-{worker_id}] Collecting trajectory {job_details.trajectory_id}")
             
             try:
-                # Collect trajectory
+                # Collect trajectory (saves incrementally after each step)
                 trajectory_data = await self.collect_trajectory(
                     job_details.trajectory_id,
                     job_details.runtime,
                     job_details.persona
                 )
                 
-                # Save trajectory
-                self.save_trajectory(trajectory_data)
+                # Final save with verbose logging
+                self.save_trajectory(trajectory_data, verbose=True)
                 
                 # Store results
                 with self._job_details_lock:
@@ -531,6 +531,35 @@ class SyntheticDataGenerator:
             'cursor_position': {'x': cursor_x, 'y': cursor_y},
             'timestamp': time.time()
         }
+    
+    def _truncate_observation(self, observation: Dict[str, Any], max_chars: int = 20000) -> Dict[str, Any]:
+        """
+        Truncate observation data if it's too large to prevent context overflow.
+        
+        Args:
+            observation: Observation dictionary to potentially truncate
+            max_chars: Maximum characters allowed in JSON representation
+            
+        Returns:
+            Truncated observation dictionary
+        """
+        obs_json = json.dumps(observation)
+        
+        if len(obs_json) <= max_chars:
+            return observation
+        
+        logger.warning(f"Observation too large ({len(obs_json):,} chars), truncating to {max_chars:,} chars")
+        
+        # Create truncated copy
+        truncated_obs = observation.copy()
+        
+        # Truncate the most verbose fields
+        if 'Current Screen State' in truncated_obs:
+            state_str = str(truncated_obs['Current Screen State'])
+            if len(state_str) > max_chars // 2:
+                truncated_obs['Current Screen State'] = state_str[:max_chars // 2] + "\n... [TRUNCATED]"
+        
+        return truncated_obs
     
     def save_screenshot(self, screenshot_content: str, trajectory_id: str, step: int) -> str:
         """
@@ -862,11 +891,14 @@ Select the appropriate action using the osworld tool."""
                     observation['Current Screen State'] = state['simplified_ast']
                     observation['Current Cursor Position'] = state['cursor_position']
                     
+                    # Truncate observation if too large to prevent context overflow
+                    truncated_observation = self._truncate_observation(observation)
+                    
                     # Feed result back to model
                     next_inputs.append({
                         "type": "function_call_output",
                         "call_id": call.call_id,
-                        "output": json.dumps(observation)
+                        "output": json.dumps(truncated_observation)
                     })
                 
                 if not next_inputs:
@@ -882,7 +914,15 @@ Select the appropriate action using the osworld tool."""
                         reasoning={"effort": "high"},
                     )
                 except Exception as e:
-                    logger.error(f"Error in tool loop continuation: {e}")
+                    error_msg = str(e)
+                    logger.error(f"Error in tool loop continuation: {error_msg}")
+                    
+                    # Check if it's a max_tokens error (context too large)
+                    if 'max_tokens must be at least 1' in error_msg or 'max_tokens' in error_msg.lower():
+                        logger.warning("Context is too large - observation exceeds model's context window")
+                        logger.warning("Stopping trajectory collection for this step to prevent overflow")
+                    
+                    # Break the tool loop on any error
                     break
             
             if all_actions:
@@ -1049,29 +1089,41 @@ Select the appropriate action using the osworld tool."""
             # Step 2: Generate action for the goal
             state = self.generate_action(state, goal, trajectory['steps'], trajectory_id, runtime)
            
-            logger.info(f"✓ Step {step + 1} completed")
+            # Save trajectory incrementally after each step
+            trajectory['end_time'] = datetime.now().isoformat()
+            trajectory['total_steps'] = len(trajectory['steps'])
+            self.save_trajectory(trajectory)
+           
+            logger.info(f"✓ Step {step + 1} completed and saved")
         
         trajectory['end_time'] = datetime.now().isoformat()
         trajectory['total_steps'] = len(trajectory['steps'])
         
         return trajectory
     
-    def save_trajectory(self, trajectory: Dict[str, Any]):
+    def save_trajectory(self, trajectory: Dict[str, Any], verbose: bool = False):
         """
         Save trajectory data to JSON file.
+        Supports incremental saves - overwrites the file each time with updated data.
         
         Args:
             trajectory: Trajectory data to save
+            verbose: If True, log detailed save information (default: False for quieter incremental saves)
         """
         traj_dir = self.output_dir / trajectory['trajectory_id']
+        traj_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
         traj_file = traj_dir / 'trajectory.json'
         
-        logger.info(f"Saving trajectory to {traj_file}")
-        
-        with open(traj_file, 'w') as f:
-            json.dump(trajectory, f, indent=2)
-        
-        logger.info(f"✓ Trajectory saved: {trajectory['total_steps']} steps")
+        try:
+            with open(traj_file, 'w') as f:
+                json.dump(trajectory, f, indent=2)
+            
+            if verbose:
+                logger.info(f"✓ Trajectory saved: {trajectory['total_steps']} steps to {traj_file}")
+            else:
+                logger.debug(f"Trajectory checkpoint saved: {trajectory['total_steps']} steps")
+        except Exception as e:
+            logger.error(f"Failed to save trajectory to {traj_file}: {e}")
     
     def submit_trajectory_job(self, trajectory_idx: int) -> str:
         """
