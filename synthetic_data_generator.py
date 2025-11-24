@@ -17,8 +17,11 @@ import asyncio
 import base64
 import json
 import os
+import queue
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -41,6 +44,19 @@ from openhands.agenthub.codeact_agent.tools.osworld import get_osworld_tool_vllm
 import time
 
 
+class TrajectoryJobDetails:
+    """Details for a single trajectory collection job."""
+    def __init__(self):
+        self.job_id: str = ''
+        self.trajectory_id: str = ''
+        self.persona: Optional[Dict[str, Any]] = None
+        self.runtime: Optional[OSWorldSingularityRuntime] = None
+        self.trajectory_data: Optional[Dict[str, Any]] = None
+        self.error: Optional[str] = None
+        self.event: Optional[threading.Event] = None
+        self.completed: bool = False
+
+
 class SyntheticDataGenerator:
     """Generates synthetic computer use trajectories using OSWorld and LLM."""
     
@@ -53,6 +69,7 @@ class SyntheticDataGenerator:
         max_steps_per_trajectory: int = 20,
         max_trajectories: int = 10,
         persona_dataset_path: Optional[str] = '/work/Projects/data/nemotron_data/data',
+        max_parallel: int = 3,
     ):
         """
         Initialize the synthetic data generator.
@@ -65,6 +82,7 @@ class SyntheticDataGenerator:
             max_steps_per_trajectory: Maximum steps per trajectory
             max_trajectories: Maximum number of trajectories to collect
             persona_dataset_path: Path to nemotron persona dataset (parquet files)
+            max_parallel: Maximum number of parallel trajectory collectors (default: 3)
         """
         self.vm_image_path = vm_image_path
         self.output_dir = Path(output_dir)
@@ -74,6 +92,7 @@ class SyntheticDataGenerator:
         self.llm_model = llm_model
         self.max_steps_per_trajectory = max_steps_per_trajectory
         self.max_trajectories = max_trajectories
+        self.max_parallel = max_parallel
         
         # Initialize LLM client
         self.llm_client = OpenAI(
@@ -84,8 +103,16 @@ class SyntheticDataGenerator:
         # Get OSWorld tool definition for vLLM
         self.osworld_tool = get_osworld_tool_vllm()
         
-        # Runtime will be initialized in async context
-        self.runtime: Optional[OSWorldSingularityRuntime] = None
+        # Queue-based architecture (following async_server.py pattern)
+        self.init_queue: queue.Queue[str] = queue.Queue()
+        self.collect_queue: queue.Queue[str] = queue.Queue()
+        self._init_workers: List[Optional[asyncio.AbstractEventLoop]] = []
+        self._collect_workers: List[Optional[asyncio.AbstractEventLoop]] = []
+        self._job_details: Dict[str, TrajectoryJobDetails] = {}
+        self._job_details_lock = threading.RLock()
+        self._server_running: bool = False
+        self._executor: Optional[ThreadPoolExecutor] = None
+        
         self.screen_width = 1920
         self.screen_height = 1080
         
@@ -103,6 +130,7 @@ class SyntheticDataGenerator:
         logger.info(f"  LLM: {llm_model} @ {llm_base_url}")
         logger.info(f"  Max steps per trajectory: {max_steps_per_trajectory}")
         logger.info(f"  Max trajectories: {max_trajectories}")
+        logger.info(f"  Max parallel workers: {max_parallel}")
         if self.persona_df is not None:
             logger.info(f"  Personas loaded: {len(self.persona_df):,} records")
     
@@ -160,77 +188,246 @@ class SyntheticDataGenerator:
         
         return persona_info
     
-    async def initialize_runtime(self):
-        """Initialize OSWorld runtime and connect to VM."""
-        logger.info("Initializing OSWorld runtime...")
+    def start_workers(self):
+        """Start init and collect worker threads."""
+        if self._server_running:
+            raise RuntimeError('Workers are already running')
+        self._server_running = True
         
-        # Create configuration
-        config = OpenHandsConfig()
-        config.runtime = 'osworld'
-        config.sandbox.base_container_image = 'ubuntu:24.04'
-        config.sandbox.run_as_fakeroot = True
-        
-        # Create event stream
-        file_store = get_file_store('local', '/tmp/synthetic_data_gen')
-        event_stream = EventStream(sid='synthetic-data-gen', file_store=file_store)
-        
-        # Create runtime
-        self.runtime = OSWorldSingularityRuntime(
-            config=config,
-            event_stream=event_stream,
-            sid='synthetic-data-gen',
-            os_type='linux',
-            vm_image_path=self.vm_image_path,
-            attach_to_existing=False,
+        # Create thread pool executor
+        self._executor = ThreadPoolExecutor(
+            max_workers=self.max_parallel * 2  # init + collect workers
         )
         
-        # Connect to VM
-        logger.info("Connecting to VM (this may take 1-2 minutes)...")
-        await self.runtime.connect()
-        logger.info(f"✓ Runtime connected! VM URL: {self.runtime.osworld_vm_url}")
+        # Initialize worker lists
+        self._init_workers = [None] * self.max_parallel
+        self._collect_workers = [None] * self.max_parallel
         
-        # Get screen size
-        try:
-            action = OSWorldInteractiveAction(
-                method='get_vm_screen_size',
-                params={},
-                thought='Getting screen dimensions'
-            )
-            observation = self.runtime.run_action(action)
-            if 'width' in observation.content and 'height' in observation.content:
-                screen_info = json.loads(observation.content)
-                self.screen_width = screen_info['width']
-                self.screen_height = screen_info['height']
-                logger.info(f"Screen size: {self.screen_width}x{self.screen_height}")
-        except Exception as e:
-            logger.warning(f"Could not get screen size, using default: {e}")
+        logger.info(f"Starting {self.max_parallel} init workers...")
+        for i in range(self.max_parallel):
+            self._executor.submit(self._run_init_worker_in_thread, i)
+        
+        logger.info(f"Starting {self.max_parallel} collect workers...")
+        for i in range(self.max_parallel):
+            self._executor.submit(self._run_collect_worker_in_thread, i)
+        
+        logger.info(f"✓ Workers started: {self.max_parallel} init + {self.max_parallel} collect")
     
-    async def cleanup_runtime(self):
-        """Clean up runtime resources."""
-        if self.runtime:
-            logger.info("Cleaning up runtime...")
+    def stop_workers(self):
+        """Stop all workers and cleanup."""
+        if not self._server_running:
+            return
+        
+        logger.info("Stopping workers...")
+        self._server_running = False
+        
+        # Send stop signals to all queues
+        for _ in range(self.max_parallel):
             try:
-                # close() might not be async
-                if hasattr(self.runtime, 'close'):
-                    result = self.runtime.close()
-                    # If it returns a coroutine, await it
-                    if hasattr(result, '__await__'):
-                        await result
-                logger.info("✓ Runtime closed")
+                self.init_queue.put_nowait('__STOP__')
+                self.collect_queue.put_nowait('__STOP__')
             except Exception as e:
-                logger.warning(f"Error during cleanup: {e}")
+                logger.warning(f"Error sending stop signal: {e}")
+        
+        # Shutdown executor
+        if self._executor:
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            logger.info("✓ Workers stopped")
     
-    def get_current_state(self) -> Dict[str, Any]:
+    def _cleanup_job_runtime(self, runtime: OSWorldSingularityRuntime, job_id: str):
+        """Cleanup runtime in background thread (following async_server.py pattern)."""
+        def close():
+            try:
+                runtime.close()
+                if hasattr(runtime, 'event_stream') and runtime.event_stream:
+                    try:
+                        runtime.event_stream.close()
+                        logger.debug(f'Event stream closed for job {job_id}')
+                    except Exception as e:
+                        logger.warning(f'Error closing event stream for job {job_id}: {e}')
+                time.sleep(0.1)  # Brief pause for cleanup
+            except Exception as e:
+                logger.error(f'Error cleaning up runtime for job {job_id}: {e}')
+        
+        # Run cleanup in background thread
+        t = threading.Thread(target=close, daemon=True)
+        t.start()
+    
+    async def _init_worker(self, worker_id: int):
+        """Init worker: initializes runtimes for trajectory jobs."""
+        logger.info(f"[init-worker-{worker_id}] Started")
+        
+        while True:
+            # Get job from queue
+            job_id = await asyncio.to_thread(self.init_queue.get)
+            
+            # Check for stop signal
+            if job_id == '__STOP__':
+                logger.info(f"[init-worker-{worker_id}] Received stop signal, exiting")
+                self.init_queue.task_done()
+                break
+            
+            with self._job_details_lock:
+                job_details = self._job_details.get(job_id)
+                if job_details is None:
+                    logger.warning(f"[init-worker-{worker_id}] Job {job_id} not found")
+                    self.init_queue.task_done()
+                    continue
+            
+            logger.info(f"[init-worker-{worker_id}] Initializing runtime for {job_id}")
+            
+            try:
+                # Create runtime
+                config = OpenHandsConfig()
+                config.runtime = 'osworld'
+                config.sandbox.base_container_image = 'ubuntu:24.04'
+                config.sandbox.run_as_fakeroot = True
+                
+                # Unique event stream per trajectory
+                file_store = get_file_store('local', f'/tmp/synthetic_data_gen_{job_id}')
+                event_stream = EventStream(sid=job_id, file_store=file_store)
+                
+                # Create runtime
+                runtime = OSWorldSingularityRuntime(
+                    config=config,
+                    event_stream=event_stream,
+                    sid=job_id,
+                    os_type='linux',
+                    vm_image_path=self.vm_image_path,
+                    attach_to_existing=False,
+                )
+                
+                # Connect to VM
+                await runtime.connect()
+                logger.info(f"[init-worker-{worker_id}] ✓ Runtime initialized for {job_id}")
+                
+                # Store runtime in job details
+                with self._job_details_lock:
+                    if job_id in self._job_details:
+                        self._job_details[job_id].runtime = runtime
+                        # Move to collect queue
+                        self.collect_queue.put(job_id)
+                
+            except Exception as e:
+                logger.error(f"[init-worker-{worker_id}] Failed to init runtime for {job_id}: {e}")
+                with self._job_details_lock:
+                    if job_id in self._job_details:
+                        self._job_details[job_id].error = str(e)
+                        self._job_details[job_id].event.set()
+            
+            finally:
+                self.init_queue.task_done()
+    
+    async def _collect_worker(self, worker_id: int):
+        """Collect worker: collects trajectories using initialized runtimes."""
+        logger.info(f"[collect-worker-{worker_id}] Started")
+        
+        while True:
+            # Get job from queue
+            job_id = await asyncio.to_thread(self.collect_queue.get)
+            
+            # Check for stop signal
+            if job_id == '__STOP__':
+                logger.info(f"[collect-worker-{worker_id}] Received stop signal, exiting")
+                self.collect_queue.task_done()
+                break
+            
+            with self._job_details_lock:
+                job_details = self._job_details.get(job_id)
+                if job_details is None:
+                    logger.warning(f"[collect-worker-{worker_id}] Job {job_id} not found")
+                    self.collect_queue.task_done()
+                    continue
+            
+            logger.info(f"[collect-worker-{worker_id}] Collecting trajectory {job_details.trajectory_id}")
+            
+            try:
+                # Collect trajectory
+                trajectory_data = await self.collect_trajectory(
+                    job_details.trajectory_id,
+                    job_details.runtime,
+                    job_details.persona
+                )
+                
+                # Save trajectory
+                self.save_trajectory(trajectory_data)
+                
+                # Store results
+                with self._job_details_lock:
+                    if job_id in self._job_details:
+                        self._job_details[job_id].trajectory_data = trajectory_data
+                        self._job_details[job_id].completed = True
+                
+                logger.info(f"[collect-worker-{worker_id}] ✓ Trajectory {job_details.trajectory_id} completed")
+                
+            except Exception as e:
+                logger.error(f"[collect-worker-{worker_id}] Error collecting {job_details.trajectory_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                
+                with self._job_details_lock:
+                    if job_id in self._job_details:
+                        self._job_details[job_id].error = str(e)
+            
+            finally:
+                # Cleanup runtime after trajectory completes
+                if job_details.runtime:
+                    logger.info(f"[collect-worker-{worker_id}] Cleaning up runtime for {job_id}")
+                    self._cleanup_job_runtime(job_details.runtime, job_id)
+                    with self._job_details_lock:
+                        if job_id in self._job_details:
+                            self._job_details[job_id].runtime = None
+                
+                # Signal completion
+                if job_details.event:
+                    job_details.event.set()
+                
+                self.collect_queue.task_done()
+    
+    def _run_init_worker_in_thread(self, worker_id: int):
+        """Run init worker in its own thread with event loop."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._init_workers[worker_id] = loop
+        
+        try:
+            loop.run_until_complete(self._init_worker(worker_id))
+        finally:
+            try:
+                loop.close()
+                logger.debug(f'Event loop closed for init worker {worker_id}')
+            except Exception as e:
+                logger.warning(f'Error closing event loop for init worker {worker_id}: {e}')
+    
+    def _run_collect_worker_in_thread(self, worker_id: int):
+        """Run collect worker in its own thread with event loop."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._collect_workers[worker_id] = loop
+        
+        try:
+            loop.run_until_complete(self._collect_worker(worker_id))
+        finally:
+            try:
+                loop.close()
+                logger.debug(f'Event loop closed for collect worker {worker_id}')
+            except Exception as e:
+                logger.warning(f'Error closing event loop for collect worker {worker_id}: {e}')
+    
+    def get_current_state(self, runtime: OSWorldSingularityRuntime) -> Dict[str, Any]:
         """
         Get the current screen state including screenshot, accessibility tree, and cursor position.
         
+        Args:
+            runtime: Runtime instance to use for state capture
+            
         Returns:
             Dictionary with screenshot, AST, simplified AST, and cursor position
         """
         logger.info("Getting current screen state...")
         
         # Get screenshot directly (not as action)
-        screenshot_bytes = self.runtime.get_vm_screenshot()
+        screenshot_bytes = runtime.get_vm_screenshot()
         if screenshot_bytes:
             screenshot_b64 = base64.b64encode(screenshot_bytes).decode('utf-8')
         else:
@@ -245,7 +442,7 @@ class SyntheticDataGenerator:
                 params={'command': 'import pyautogui; pos = pyautogui.position(); print(f"{pos.x},{pos.y}")'},
                 thought='Getting cursor position'
             )
-            cursor_obs = self.runtime.run_action(action)
+            cursor_obs = runtime.run_action(action)
             if cursor_obs and cursor_obs.content:
                 coords = cursor_obs.content.strip().split(',')
                 if len(coords) == 2:
@@ -261,7 +458,7 @@ class SyntheticDataGenerator:
             params={},
             thought='Getting UI accessibility tree'
         )
-        ast_obs = self.runtime.run_action(action)
+        ast_obs = runtime.run_action(action)
         
         # Parse AST (it's returned as JSON with 'AT' key containing XML)
         try:
@@ -469,6 +666,7 @@ What specific sub-goal would you like to achieve next based on the visible eleme
         goal: str,
         steps: List[Dict[str, Any]],
         trajectory_id: str,
+        runtime: OSWorldSingularityRuntime,
         max_tool_loops: int = 10
     ) -> Optional[List[Dict[str, Any]]]:
         """
@@ -478,7 +676,9 @@ What specific sub-goal would you like to achieve next based on the visible eleme
         Args:
             state: Current screen state with simplified AST
             goal: The sub-goal to achieve
-            conversation_history: Previous conversation messages
+            steps: List of step data
+            trajectory_id: Trajectory identifier
+            runtime: Runtime instance to execute actions on
             max_tool_loops: Maximum tool call iterations
             
         Returns:
@@ -572,13 +772,13 @@ Select the appropriate action using the osworld tool."""
                     all_actions.append(action_info)
                     
                     # Execute the action and get result
-                    observation = self.execute_action(action_info)
+                    observation = self.execute_action(action_info, runtime)
                     observations.append(observation)
 
                     time.sleep(4.0)
 
                     # Get current state
-                    state = self.get_current_state()
+                    state = self.get_current_state(runtime)
 
                     step = len(steps) + 1
                     
@@ -644,12 +844,13 @@ Select the appropriate action using the osworld tool."""
             traceback.print_exc()
             return None
     
-    def execute_action(self, action_info: Dict[str, Any]) -> Dict[str, Any]:
+    def execute_action(self, action_info: Dict[str, Any], runtime: OSWorldSingularityRuntime) -> Dict[str, Any]:
         """
         Execute the action selected by LLM.
         
         Args:
             action_info: Action information from LLM
+            runtime: Runtime instance to execute action on
             
         Returns:
             Observation from executing the action
@@ -687,7 +888,7 @@ Select the appropriate action using the osworld tool."""
         
         # Execute action
         try:
-            observation = self.runtime.run_action(action)
+            observation = runtime.run_action(action)
             
             # Check if it's an ErrorObservation
             if isinstance(observation, ErrorObservation):
@@ -715,12 +916,19 @@ Select the appropriate action using the osworld tool."""
                 'exit_code': -1
             }
     
-    async def collect_trajectory(self, trajectory_id: str) -> Dict[str, Any]:
+    async def collect_trajectory(
+        self, 
+        trajectory_id: str, 
+        runtime: OSWorldSingularityRuntime,
+        persona: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
-        Collect a single trajectory.
+        Collect a single trajectory using the provided runtime.
         
         Args:
             trajectory_id: Unique identifier for this trajectory
+            runtime: Runtime instance to use for this trajectory
+            persona: Optional persona context for this trajectory
             
         Returns:
             Trajectory data
@@ -729,8 +937,6 @@ Select the appropriate action using the osworld tool."""
         logger.info(f"Collecting trajectory: {trajectory_id}")
         logger.info(f"=" * 80)
         
-        # Sample a persona for this trajectory
-        persona = self.sample_persona()
         if persona:
             logger.info(f"Persona: {persona.get('occupation', 'N/A')} from {persona.get('city', 'N/A')}, {persona.get('state', 'N/A')}")
             logger.info(f"  Age: {persona.get('age', 'N/A')}, Education: {persona.get('education', 'N/A')}")
@@ -751,7 +957,7 @@ Select the appropriate action using the osworld tool."""
         await asyncio.sleep(4.0) # Wait for the UI to update
 
          # Get current state
-        state = self.get_current_state()
+        state = self.get_current_state(runtime)
         
         # Save screenshot
         screenshot_path = self.save_screenshot(
@@ -788,7 +994,7 @@ Select the appropriate action using the osworld tool."""
             historical_goals.append(goal)
             
             # Step 2: Generate action for the goal
-            state = self.generate_action(state, goal, trajectory['steps'], trajectory_id)
+            state = self.generate_action(state, goal, trajectory['steps'], trajectory_id, runtime)
            
             logger.info(f"✓ Step {step + 1} completed")
         
@@ -814,48 +1020,103 @@ Select the appropriate action using the osworld tool."""
         
         logger.info(f"✓ Trajectory saved: {trajectory['total_steps']} steps")
     
+    def submit_trajectory_job(self, trajectory_idx: int) -> str:
+        """
+        Submit a trajectory collection job to the queue system.
+        
+        Args:
+            trajectory_idx: Index of this trajectory
+            
+        Returns:
+            Job ID for tracking
+        """
+        # Create unique IDs
+        job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{trajectory_idx:03d}"
+        trajectory_id = f"trajectory_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{trajectory_idx:03d}"
+        
+        # Sample persona for this trajectory
+        persona = self.sample_persona()
+        
+        # Create job details
+        job_details = TrajectoryJobDetails()
+        job_details.job_id = job_id
+        job_details.trajectory_id = trajectory_id
+        job_details.persona = persona
+        job_details.event = threading.Event()
+        
+        # Store job details
+        with self._job_details_lock:
+            self._job_details[job_id] = job_details
+        
+        # Add to init queue
+        self.init_queue.put(job_id)
+        logger.info(f"Submitted job {job_id} for trajectory {trajectory_id}")
+        
+        if persona:
+            logger.info(f"  Persona: {persona.get('occupation', 'N/A')} from {persona.get('city', 'N/A')}, {persona.get('state', 'N/A')}")
+        
+        return job_id
+    
     async def generate_trajectories(self):
-        """Generate multiple trajectories."""
+        """Generate multiple trajectories in parallel using queue-based workers."""
         logger.info("=" * 80)
-        logger.info("Starting Synthetic Data Generation")
+        logger.info("Starting Parallel Synthetic Data Generation")
+        logger.info(f"  Parallel workers: {self.max_parallel}")
+        logger.info(f"  Total trajectories: {self.max_trajectories}")
         logger.info("=" * 80)
+        
+        start_time = time.time()
         
         try:
-            # Initialize runtime
-            await self.initialize_runtime()
+            # Start workers
+            self.start_workers()
             
-            # Generate trajectories
+            # Submit all trajectory jobs
+            job_ids = []
             for i in range(self.max_trajectories):
-                trajectory_id = f"trajectory_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{i:03d}"
+                job_id = self.submit_trajectory_job(i)
+                job_ids.append(job_id)
+            
+            logger.info(f"\n✓ Submitted {len(job_ids)} trajectory jobs to queue")
+            logger.info(f"  Workers will process them in parallel ({self.max_parallel} at a time)\n")
+            
+            # Wait for all jobs to complete
+            logger.info("Waiting for all trajectories to complete...")
+            for i, job_id in enumerate(job_ids):
+                with self._job_details_lock:
+                    job_details = self._job_details.get(job_id)
                 
-                try:
-                    # Collect trajectory
-                    trajectory = await self.collect_trajectory(trajectory_id)
+                if job_details and job_details.event:
+                    job_details.event.wait()  # Block until this job completes
                     
-                    # Save trajectory
-                    self.save_trajectory(trajectory)
-                    
-                    logger.info(f"\n✓ Trajectory {i + 1}/{self.max_trajectories} completed\n")
-                    
-                    # Wait between trajectories
-                    if i < self.max_trajectories - 1:
-                        logger.info("Waiting 5 seconds before next trajectory...")
-                        await asyncio.sleep(5)
-                
-                except Exception as e:
-                    logger.error(f"Error collecting trajectory {trajectory_id}: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    continue
+                    # Log progress
+                    completed_count = i + 1
+                    if completed_count % 10 == 0 or completed_count == len(job_ids):
+                        logger.info(f"Progress: {completed_count}/{len(job_ids)} trajectories completed")
+            
+            # Calculate statistics
+            elapsed = time.time() - start_time
+            successes = sum(1 for jid in job_ids 
+                          if jid in self._job_details and self._job_details[jid].completed)
+            failures = len(job_ids) - successes
+            
+            logger.info("\n" + "=" * 80)
+            logger.info("Parallel Synthetic Data Generation Complete")
+            logger.info(f"  Successful trajectories: {successes}/{self.max_trajectories}")
+            logger.info(f"  Failed trajectories: {failures}")
+            logger.info(f"  Total time: {elapsed:.1f}s ({elapsed/60:.1f} minutes)")
+            logger.info(f"  Avg time per trajectory: {elapsed/max(successes, 1):.1f}s")
+            logger.info(f"  Throughput: {successes/(elapsed/60):.2f} trajectories/minute")
+            logger.info(f"  Output directory: {self.output_dir}")
+            logger.info("=" * 80)
         
         finally:
-            # Cleanup
-            await self.cleanup_runtime()
-        
-        logger.info("=" * 80)
-        logger.info("Synthetic Data Generation Complete")
-        logger.info(f"Output directory: {self.output_dir}")
-        logger.info("=" * 80)
+            # Stop workers and cleanup
+            self.stop_workers()
+            
+            # Clear job details
+            with self._job_details_lock:
+                self._job_details.clear()
 
 
 async def main():
@@ -901,6 +1162,18 @@ async def main():
         default=10,
         help='Maximum number of trajectories to collect'
     )
+    parser.add_argument(
+        '--max-parallel',
+        type=int,
+        default=3,
+        help='Maximum number of parallel trajectory collectors (default: 3)'
+    )
+    parser.add_argument(
+        '--persona-dataset',
+        type=str,
+        default='/work/Projects/data/nemotron_data/data',
+        help='Path to nemotron persona dataset directory'
+    )
     
     args = parser.parse_args()
     
@@ -918,6 +1191,8 @@ async def main():
         llm_model=args.llm_model,
         max_steps_per_trajectory=args.max_steps,
         max_trajectories=args.max_trajectories,
+        persona_dataset_path=args.persona_dataset,
+        max_parallel=args.max_parallel,
     )
     
     # Generate trajectories
