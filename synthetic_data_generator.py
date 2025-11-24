@@ -708,6 +708,7 @@ Guidelines:
 - If the same goal is generated multiple times, it means you have been stuck in a loop. Try to backtrack and generate a different goal.
 - Generate coherent goal sequences (e.g., if browser is open, search for something)
 - Don't do random app switches in your goals
+- If you cannot find some file in your previous goals, most likely it doesn't exist and hallucinated. Don't try to find it again and generate a different goal.
 - Goals must be achievable with current screen state
 {('- If persona context is provided, generate goals aligned with their interests, occupation, and typical activities' if persona else '')}
 
