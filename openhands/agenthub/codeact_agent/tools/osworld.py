@@ -312,21 +312,66 @@ All methods return observations with:
 Always check the observation to verify your action succeeded before proceeding.
 '''
 
-OSWORLD_TOOLS_DESCRIPTION = f'''Use the `{OSWORLD_TOOL_NAME}` tool to interact with a virtual desktop environment running in a QEMU VM.
+OSWORLD_TOOLS_DESCRIPTION = f'''Interact with a virtual desktop environment (Ubuntu/Windows) running in a QEMU VM.
 
-This tool supports:
-- Mouse and keyboard control (click, type, hotkeys)
-- Screen capture and accessibility tree
-- File operations and script execution
-- Screen recording (returns video as base64)
-- VM information queries
+## Call Format
 
-Call pattern: `{OSWORLD_TOOL_NAME}(method="<method_name>", params={{"key": "value"}})`
+{OSWORLD_TOOL_NAME}(method="<method_name>", params={{"key": "value"}})
 
-Note: Methods that return binary data (screenshots, files, videos, wallpaper) use format "base64:<data>".
-Important: The 'dest' parameter in end_recording is ignored by the OSWorld server.
+## Most Common Methods
 
-See the docstring for all available methods and detailed examples.
+**1. execute_action** - Perform mouse/keyboard actions
+Format: method="execute_action", params={{"action": {{"action_type": "<TYPE>", "parameters": {{...}}}}}}
+
+Mouse actions:
+- CLICK: params={{"action": {{"action_type": "CLICK", "parameters": {{"x": 100, "y": 200, "button": "left"}}}}}}
+- DOUBLE_CLICK: params={{"action": {{"action_type": "DOUBLE_CLICK", "parameters": {{"x": 100, "y": 200}}}}}}
+- RIGHT_CLICK: params={{"action": {{"action_type": "RIGHT_CLICK", "parameters": {{"x": 100, "y": 200}}}}}}
+- MOVE_TO: params={{"action": {{"action_type": "MOVE_TO", "parameters": {{"x": 100, "y": 200}}}}}}
+
+Keyboard actions:
+- TYPING: params={{"action": {{"action_type": "TYPING", "parameters": {{"text": "Hello World"}}}}}}
+- PRESS: params={{"action": {{"action_type": "PRESS", "parameters": {{"key": "enter"}}}}}}
+- HOTKEY: params={{"action": {{"action_type": "HOTKEY", "parameters": {{"keys": ["ctrl", "c"]}}}}}}
+
+Example:
+   ```python
+   {OSWORLD_TOOL_NAME}(
+       method="execute_action",
+       params={{
+           "action": {{
+               "action_type": "TYPING",
+               "parameters": {{"text": "Hello World"}}
+           }}
+       }}
+   )
+   ```
+
+**2. get_screenshot** - Capture screen
+Format: method="get_screenshot", params={{}}
+Returns: base64-encoded PNG image
+
+**3. get_accessibility_tree** - Get UI element tree
+Format: method="get_accessibility_tree", params={{}}
+Returns: XML accessibility tree
+
+**4. run_bash_script** - Execute bash script
+Format: method="run_bash_script", params={{"script": "echo 'Hello'", "timeout": 30}}
+Returns: Script output
+
+**5. get_file** - Download file from VM
+Format: method="get_file", params={{"file_path": "/path/to/file"}}
+Returns: base64-encoded file content
+
+## Available Methods
+
+execute_action, get_screenshot, get_accessibility_tree, get_terminal_output, get_file, execute_python_command, run_python_script, run_bash_script, start_recording, end_recording, get_vm_platform, get_vm_screen_size, get_vm_window_size, get_vm_wallpaper, get_vm_desktop_path, get_vm_directory_tree
+
+## Important Notes
+
+- Binary data (screenshots, files, videos) returned as "base64:<data>"
+- Coordinates use pixel positions (0,0 is top-left)
+- For execute_action, must use nested format: params={{"action": {{"action_type": "...", "parameters": {{...}}}}}}
 '''
 
 
@@ -334,7 +379,7 @@ def get_osworld_tool() -> dict:
     """Get the OSWorld tool definition for LLM function calling.
     
     Returns:
-        Tool definition dictionary with function schema
+        Tool definition dictionary with function schema (OpenAI nested format)
     """
     return {
         'type': 'function',
@@ -375,4 +420,51 @@ def get_osworld_tool() -> dict:
                 'required': ['method'],
             },
         },
+    }
+
+
+def get_osworld_tool_vllm() -> dict:
+    """Get the OSWorld tool definition for vLLM Responses API.
+    
+    Returns:
+        Tool definition in vLLM flat format (matching client_test.py pattern)
+    """
+    return {
+        'type': 'function',
+        'name': OSWORLD_TOOL_NAME,
+        'description': OSWORLD_TOOLS_DESCRIPTION,
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'method': {
+                    'type': 'string',
+                    'description': 'The OSWorld method to call',
+                    'enum': [
+                        'execute_action',
+                        'get_screenshot',
+                        'get_accessibility_tree',
+                        'get_terminal_output',
+                        'get_file',
+                        'execute_python_command',
+                        'run_python_script',
+                        'run_bash_script',
+                        'start_recording',
+                        'end_recording',
+                        'get_vm_platform',
+                        'get_vm_screen_size',
+                        'get_vm_window_size',
+                        'get_vm_wallpaper',
+                        'get_vm_desktop_path',
+                        'get_vm_directory_tree',
+                    ],
+                },
+                'params': {
+                    'type': 'object',
+                    'description': 'Parameters for the method (varies by method)',
+                    'additionalProperties': True,
+                },
+            },
+            'required': ['method'],
+        },
+        'strict': True,
     }

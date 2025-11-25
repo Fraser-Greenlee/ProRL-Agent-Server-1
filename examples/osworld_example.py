@@ -225,6 +225,9 @@ async def main():
             print(f"      Accessibility tree retrieved ({len(observation.content)} chars)")
             # Show first 200 characters
             print(f"      Preview: {observation.content[:200]}...")
+            with open('/tmp/osworld_accessibility_tree.xml', 'w') as f:
+                f.write(observation.content)
+            print(f"      Accessibility tree saved to /tmp/osworld_accessibility_tree.xml")
         else:
             print("      Note: Accessibility tree not available or empty")
         
