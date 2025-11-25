@@ -13,6 +13,7 @@ import time
 import json
 import threading
 from pathlib import Path
+from turtle import window_width
 from typing import TYPE_CHECKING, Callable
 
 import httpx
@@ -34,6 +35,8 @@ from openhands.runtime.impl.singularity.singularity_runtime import (
 from openhands.runtime.plugins import PluginRequirement
 from openhands.runtime.utils import find_available_tcp_port
 from openhands.runtime.utils.command import DEFAULT_MAIN_MODULE
+
+from openhands.events.tool import ToolCallMetadata
 
 # Port ranges for OSWorld VM services
 OSWORLD_VM_SERVER_PORT_RANGE = (15000, 19999)  # OSWorld Flask server inside VM (port 5000)
@@ -329,7 +332,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             'singularity', 'exec',
             '--pid',
             '--writable-tmpfs',
-            '--no-mount', 'home,cwd,tmp',
+            '--no-mount', 'cwd,tmp',
             '--home', '/root',
         ]
         
@@ -351,7 +354,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         qemu_cmd = self._get_qemu_command()
         cmd.extend(qemu_cmd)
         
-        self.log('debug', f'Starting QEMU VM with command: {" ".join(cmd)}')
+        self.log('info', f'Starting QEMU VM with command: {" ".join(cmd)}')
         
         try:
             # Create log directory for QEMU output
@@ -432,7 +435,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             try:
                 # Try to connect to OSWorld server
                 response = httpx.get(
-                    f'http://localhost:{self._vm_server_port}/screenshot',
+                    #f'http://localhost:{self._vm_server_port}/screenshot',
+                    f'{self.osworld_vm_url}/terminal',
                     timeout=5.0
                 )
                 if response.status_code == 200:
@@ -543,6 +547,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                     os.kill(self.qemu_pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+                self.qemu_pid = None
             except Exception as e:
                 self.log('warning', f'Failed to stop QEMU VM: {e}')
         
@@ -589,10 +594,29 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         try:
             response = httpx.get(
                 f'{self.osworld_vm_url}/screenshot',
-                timeout=10.0
+                timeout=30.0
             )
             if response.status_code == 200:
                 return response.content
+            return None
+        except Exception as e:
+            self.log('error', f'Failed to get VM screenshot: {e}')
+            return None
+
+    def get_vm_accessibility_tree(self) -> str | None:
+        """Get accessibility tree from the VM.
+        
+        Returns:
+            Accessibility tree string or None if failed
+        """
+        try:
+            response = httpx.get(
+                f'{self.osworld_vm_url}/accessibility',
+                timeout=30.0
+            )
+            if response.status_code == 200:
+                at = response.json().get('AT', '')
+                return at
             return None
         except Exception as e:
             self.log('error', f'Failed to get VM screenshot: {e}')
@@ -665,38 +689,66 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             "pyautogui.easeInQuad", "pyautogui.easeOutQuad", "pyautogui.easeInOutQuad",
             "pyautogui.easeInBounce", "pyautogui.easeInElastic"
         ])
-        duration = random.uniform(0.5, 1)
         
         if action_type == "CLICK":
             x = parameters.get('x')
             y = parameters.get('y')
             button = parameters.get('button', 'left')
-            num_clicks = parameters.get('num_clicks', 1)
+            num_clicks = parameters.get('clicks', 1)
+            interval = parameters.get('interval', 0.0)
+            duration = parameters.get('duration', 0.0)
             
             if x is not None and y is not None:
-                return f"pyautogui.click(x={x}, y={y}, button='{button}', clicks={num_clicks})"
+                return f"pyautogui.click(x={x}, y={y}, button='{button}', clicks={num_clicks}, interval={interval}, duration={duration})"
             else:
                 return "pyautogui.click()"
         
         elif action_type == "DOUBLE_CLICK":
             x = parameters.get('x')
             y = parameters.get('y')
+            button = parameters.get('button', 'left')
+            interval = parameters.get('interval', 0.0)
+            duration = parameters.get('duration', 0.0)
             if x is not None and y is not None:
-                return f"pyautogui.doubleClick(x={x}, y={y})"
+                return f"pyautogui.doubleClick(x={x}, y={y}, button='{button}', interval={interval}, duration={duration})"
             else:
                 return "pyautogui.doubleClick()"
+        
+        elif action_type == "TRIPLE_CLICK":
+            x = parameters.get('x')
+            y = parameters.get('y')
+            button = parameters.get('button', 'left')
+            interval = parameters.get('interval', 0.0)
+            duration = parameters.get('duration', 0.0)
+            if x is not None and y is not None:
+                return f"pyautogui.tripleClick(x={x}, y={y}, button='{button}', interval={interval}, duration={duration})"
+            else:
+                return "pyautogui.tripleClick()"
         
         elif action_type == "RIGHT_CLICK":
             x = parameters.get('x')
             y = parameters.get('y')
+            interval = parameters.get('interval', 0.0)
+            duration = parameters.get('duration', 0.0)
             if x is not None and y is not None:
-                return f"pyautogui.rightClick(x={x}, y={y})"
+                return f"pyautogui.rightClick(x={x}, y={y}, interval={interval}, duration={duration})"
             else:
                 return "pyautogui.rightClick()"
+        
+        elif action_type == "MIDDLE_CLICK":
+            x = parameters.get('x')
+            y = parameters.get('y')
+            interval = parameters.get('interval', 0.0)
+            duration = parameters.get('duration', 0.0)
+            if x is not None and y is not None:
+                return f"pyautogui.middleClick(x={x}, y={y}, interval={interval}, duration={duration})"
+            else:
+                return "pyautogui.click(button='middle')"
         
         elif action_type == "MOVE_TO":
             x = parameters.get('x')
             y = parameters.get('y')
+            duration = parameters.get('duration', 0.0)
             if x is not None and y is not None:
                 return f"pyautogui.moveTo({x}, {y}, {duration}, {move_mode})"
             else:
@@ -705,24 +757,30 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         elif action_type == "DRAG_TO":
             x = parameters.get('x')
             y = parameters.get('y')
+            duration = parameters.get('duration', 0.0)
+            button = parameters.get('button', 'left')
+            mouseDownUp = parameters.get('mouseDownUp', True)
             if x is not None and y is not None:
-                return f"pyautogui.dragTo({x}, {y}, duration=1.0, button='left', mouseDownUp=True)"
+                return f"pyautogui.dragTo({x}, {y}, button='{button}', duration={duration}, mouseDownUp={mouseDownUp})"
             return None
         
         elif action_type == "SCROLL":
-            dx = parameters.get('dx', 0)
-            dy = parameters.get('dy', 0)
-            commands = []
-            if dx != 0:
-                commands.append(f"pyautogui.hscroll({dx})")
-            if dy != 0:
-                commands.append(f"pyautogui.vscroll({dy})")
-            return "; ".join(commands) if commands else None
+            x = parameters.get('x', None)
+            y = parameters.get('y', None)
+            amount = parameters.get('amount', 1)
+            return f"pyautogui.scroll({amount}, x={x}, y={y})"
+
+        elif action_type == "HSCROLL":
+            x = parameters.get('x', None)
+            y = parameters.get('y', None)
+            amount = parameters.get('amount', 1)
+            return f"pyautogui.hscroll({amount}, x={x}, y={y})"
         
         elif action_type == "TYPING":
             text = parameters.get('text', '')
+            interval = parameters.get('interval', 0.0)
             # Use repr() to properly escape the text (same as OSWorld)
-            return f"pyautogui.typewrite({repr(text)})"
+            return f"pyautogui.typewrite({repr(text)}, interval={interval})"
         
         elif action_type == "PRESS":
             key = parameters.get('key', '')
@@ -755,6 +813,10 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         elif action_type == "MOUSE_UP":
             button = parameters.get('button', 'left')
             return f"pyautogui.mouseUp(button='{button}')"
+
+        elif action_type == "WAIT":
+            seconds = parameters.get('seconds', 1)
+            return f"time.sleep({seconds})"
         
         else:
             return None
@@ -795,6 +857,8 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             # Dispatch to appropriate handler
             if method == 'execute_action':
                 return self._handle_execute_action(params)
+            elif method == 'execute_agentic_action':
+                return self._handle_execute_agentic_action(params, action.tool_call_metadata, action.pause_time)
             elif method == 'get_screenshot':
                 return self._handle_get_screenshot()
             elif method == 'get_accessibility_tree':
@@ -854,6 +918,64 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 command=str(action_data),
                 exit_code=1,
             )
+
+    def _handle_execute_agentic_action(self, params: dict, tool_call_metadata: ToolCallMetadata | None, pause_time: float = 0.0) -> 'Observation':
+        """Handle execute_action - PyAutoGUI actions like CLICK, TYPING, etc."""
+        from openhands.events.observation.osworld import OSWorldOutputObservation  
+        from openhands.events.observation import ErrorObservation   
+        import base64
+
+        # Always save screenshot and accessibility tree. Will leave message formatting to the agent.
+        include_screenshot = True #self.config.agents['agent'].enable_vision
+        include_a11y_tree = True #self.config.agents['agent'].enable_a11y_tree
+        
+        action_data = params.get('action', params)
+
+        # Convert normalized coordinates to pixel coordinates
+        if not hasattr(self, 'screen_size'):
+            self._handle_get_vm_screen_size()
+        width, height = self.screen_size
+        if 'parameters' in action_data:
+            parameters = action_data['parameters']
+            if 'x' in parameters:
+                parameters['x'] = int(parameters['x'] * width)
+            if 'y' in parameters:
+                parameters['y'] = int(parameters['y'] * height)
+            logger.info(f"Converted normalized coordinates to pixel coordinates: {action_data}. Screen size: {width}x{height}.")
+
+        result = self.execute_vm_action(action_data)
+        
+        if result.get('status') == 'success':
+            if pause_time > 0.5:
+                time.sleep(pause_time)
+            if include_screenshot:
+                screenshot_bytes = self.get_vm_screenshot()
+                if screenshot_bytes:
+                    screenshot_bytes = base64.b64encode(screenshot_bytes).decode('utf-8')
+            else:
+                screenshot_bytes = None
+
+            if include_a11y_tree:
+                accessibility_tree = self.get_vm_accessibility_tree()
+            else:
+                accessibility_tree = None
+
+            return OSWorldOutputObservation(
+                command=str(action_data),
+                screenshot=screenshot_bytes,
+                accessibility_tree=accessibility_tree,
+                tool_call_id=tool_call_metadata.tool_call_id,
+                name=tool_call_metadata.function_name,
+            )
+        else:
+            error_msg = result.get('error', result.get('message', 'Unknown error'))
+            logger.error(f"Error in agentic action: action_data={action_data}, error={error_msg}")
+            return ErrorObservation(
+                content=f"Error: {error_msg}",
+                command=str(action_data),
+                error_id=tool_call_metadata.tool_call_id,
+                name=tool_call_metadata.function_name,
+            )
     
     def _handle_get_screenshot(self) -> 'Observation':
         """Handle get_screenshot - returns screenshot as base64."""
@@ -876,21 +998,14 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         """Handle get_accessibility_tree."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         
-        try:
-            response = httpx.get(
-                f'{self.osworld_vm_url}/accessibility',
-                timeout=10.0
+        at = self.get_vm_accessibility_tree()
+        if at:
+            return CmdOutputObservation(
+                content=at,
+                command='get_accessibility_tree',
+                exit_code=0,
             )
-            if response.status_code == 200:
-                at = response.json().get('AT', '')
-                return CmdOutputObservation(
-                    content=at,
-                    command='get_accessibility_tree',
-                    exit_code=0,
-                )
-            return ErrorObservation(f'Failed to get accessibility tree: {response.status_code}')
-        except Exception as e:
-            return ErrorObservation(f'Failed to get accessibility tree: {e}')
+        return ErrorObservation('Failed to get accessibility tree')
     
     def _handle_get_terminal_output(self) -> 'Observation':
         """Handle get_terminal_output."""
@@ -1172,18 +1287,23 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         
         try:
-            response = httpx.post(
-                f'{self.osworld_vm_url}/screen_size',
-                timeout=10.0
-            )
-            if response.status_code == 200:
-                size = response.json()
-                content = f"Width: {size.get('width', 'unknown')}, Height: {size.get('height', 'unknown')}"
-                return CmdOutputObservation(
-                    content=content,
-                    command='get_vm_screen_size',
-                    exit_code=0,
+            if hasattr(self, 'screen_size'):
+                width, height = self.screen_size
+            else:
+                response = httpx.post(
+                    f'{self.osworld_vm_url}/screen_size',
+                    timeout=10.0
                 )
+                if response.status_code == 200:
+                    size = response.json()
+                    width, height = size.get('width', 1920), size.get('height', 1080)
+                    self.screen_size = (width, height)
+            content = f"Width: {width}, Height: {height}"
+            return CmdOutputObservation(
+                content=content,
+                command='get_vm_screen_size',
+                exit_code=0,
+            )
             return ErrorObservation(f'Failed to get screen size: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to get screen size: {e}')
@@ -1289,3 +1409,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         except Exception as e:
             return ErrorObservation(f'Failed to get directory tree: {e}')
 
+    def get_microagents_from_selected_repo(
+        self, selected_repository: str | None
+    ):
+        return []
