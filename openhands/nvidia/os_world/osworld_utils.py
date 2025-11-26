@@ -13,7 +13,6 @@ from evaluation.utils.shared import (  # type: ignore
 )
 from pathlib import Path
 
-from openhands.agenthub.gui_agent.osworld_agent import OSWorldAgent
 from openhands.core.config.llm_config import LLMConfig
 from openhands.runtime.base import Runtime
 from openhands.core.config.condenser_config import NoOpCondenserConfig
@@ -280,7 +279,7 @@ async def evaluate_agent(run_results: dict, instance: dict, runtime: Runtime):
         return {'resolved': False, 'reward': 0}
 
 def process_messages_from_agent_state(
-    agent: OSWorldAgent,
+    agent,
     state: State,
     job_details: JobDetails | None = None,
 ) -> dict:

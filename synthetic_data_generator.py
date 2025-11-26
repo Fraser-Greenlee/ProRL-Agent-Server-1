@@ -40,9 +40,36 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import (
 )
 from openhands.storage import get_file_store
 from openhands.utils.ast_process import simplify_accessibility_tree
-from openhands.agenthub.codeact_agent.tools.osworld import get_osworld_tool_vllm
+from openhands.agenthub.gui_agent.tools import OSWORLD_TOOLS
 import time
+from openhands.nvidia.os_world.controllers.setup import SetupController
 
+
+TOOL_NAME_TO_ACTION_TYPE = {
+    'click': 'CLICK',
+    'rightClick': 'RIGHT_CLICK',
+    'middleClick': 'MIDDLE_CLICK',
+    'doubleClick': 'DOUBLE_CLICK',
+    'tripleClick': 'TRIPLE_CLICK',
+    'moveTo': 'MOVE_TO',
+    'dragTo': 'DRAG_TO',
+    'scroll': 'SCROLL',
+    'hscroll': 'SCROLL',
+    'write': 'TYPING',
+    'press': 'PRESS',
+    'hotkey': 'HOTKEY',
+}
+
+def fix_tool_schema(tool: dict) -> dict:
+    # Create new clean tool
+    new_tool = {
+        "type": "function",
+        "name": tool["function"]["name"],
+        "description": tool["function"].get("description", ""),
+        "parameters": tool["function"].get("parameters", {}),
+    }
+
+    return new_tool
 
 class TrajectoryJobDetails:
     """Details for a single trajectory collection job."""
@@ -69,6 +96,7 @@ class SyntheticDataGenerator:
         max_steps_per_trajectory: int = 20,
         max_trajectories: int = 10,
         persona_dataset_path: Optional[str] = '/work/Projects/data/nemotron_data/data',
+        osworld_setup_dataset_path: Optional[str] = '/root/OSWorld/osworld_test_nogdrive.json',
         max_parallel: int = 3,
     ):
         """
@@ -95,14 +123,18 @@ class SyntheticDataGenerator:
         self.max_trajectories = max_trajectories
         self.max_parallel = max_parallel
         
-        # Initialize LLM client
+
         self.llm_client = OpenAI(
             base_url=llm_base_url,
             api_key='EMPTY',  # vLLM ignores this by default
         )
         
         # Get OSWorld tool definition for vLLM
-        self.osworld_tool = get_osworld_tool_vllm()
+        # Convert to unified new schema
+        self.osworld_tool = []
+        # remove finish, wait, and fail tools
+        for tool in OSWORLD_TOOLS[:-3]:
+            self.osworld_tool.append(fix_tool_schema(tool))
         
         # Queue-based architecture (following async_server.py pattern)
         self.init_queue: queue.Queue[str] = queue.Queue()
@@ -131,6 +163,13 @@ class SyntheticDataGenerator:
         else:
             logger.warning(f"Persona dataset path not found: {persona_dataset_path}")
             logger.warning("  Continuing without persona-based goal generation")
+
+        self.osworld_setup_dataset_path = osworld_setup_dataset_path
+        if osworld_setup_dataset_path and os.path.exists(osworld_setup_dataset_path):
+            self._load_osworld_setup_dataset()
+        else:
+            logger.warning(f"OSWorld setup dataset path not found: {osworld_setup_dataset_path}")
+            logger.warning("  Continuing without OSWorld setup")
         
         logger.info(f"Initialized SyntheticDataGenerator")
         logger.info(f"  Output directory: {self.output_dir}")
@@ -176,6 +215,22 @@ class SyntheticDataGenerator:
             logger.error(f"Error loading persona dataset: {e}")
             self.persona_dfs = []
             self.persona_df_weights = []
+
+    def _load_osworld_setup_dataset(self):
+        """Load the osworld setup dataset from json files. Always have None entry indicating no setup."""
+        logger.info(f"Loading osworld setup dataset from {self.osworld_setup_dataset_path}...")
+        
+        try:
+            import json
+            self.osworld_setup_dataset = [None]
+            with open(self.osworld_setup_dataset_path, 'r') as f:
+                for line in f.readlines():
+                    self.osworld_setup_dataset.append(json.loads(line))
+            logger.info(f"  ✓ Loaded {len(self.osworld_setup_dataset)} total osworld setup records")
+            
+        except Exception as e:
+            logger.error(f"Error loading osworld setup dataset: {e}")
+            self.osworld_setup_dataset = [None]
     
     def sample_persona(self) -> Optional[Dict[str, Any]]:
         """
@@ -342,6 +397,21 @@ class SyntheticDataGenerator:
                 await runtime.connect()
                 logger.info(f"[init-worker-{worker_id}] ✓ Runtime initialized and connected for {job_id}")
                 logger.info(f"[init-worker-{worker_id}]   VM URL: {runtime.osworld_vm_url if hasattr(runtime, 'osworld_vm_url') else 'N/A'}")
+
+                if job_details.osworld_setup:
+                    logger.info(f"[init-worker-{worker_id}] Setting up OSWorld...")
+                    setup_controller = SetupController(
+                        vm_ip="127.0.0.1",
+                        server_port=runtime._vm_server_port,
+                        chromium_port=runtime._chromium_port,
+                        cache_dir="/tmp/osworld_example", # might need to be changed to a unique directory for each job
+                        client_password="password",
+                        runtime=runtime  
+                    )
+                    await setup_controller.setup(job_details.osworld_setup['config'])
+                    logger.info(f"[init-worker-{worker_id}] ✓ OSWorld setup completed")
+                else:
+                    logger.info(f"[init-worker-{worker_id}] No OSWorld setup provided")
                 
                 # Store runtime in job details
                 with self._job_details_lock:
@@ -781,18 +851,13 @@ What specific sub-goal would you like to achieve next based on the visible eleme
         instructions = f"""You are an AI agent controlling a Ubuntu desktop environment.
 
 Available actions:
-1. Type text: execute_action with TYPING action_type
-2. Click elements: execute_action with CLICK action_type  
-3. Press keys: execute_action with PRESS action_type
+1. Type text: execute_action with ```write``` action_type
+2. Click elements: execute_action with ```click``` action_type  
+3. Hotkey keys: execute_action with ```hotkey``` action_type
+4. You also have access to other GUI tools.
 
 Use the osworld tool to interact. Look at the screen state and cursor position, select the appropriate action.
-Use exact coordinates from the simplified AST.
-
-Example for typing:
-  osworld(method="execute_action", params={{"action": {{"action_type": "TYPING", "parameters": {{"text": "ubuntu.com"}}}}}})
-
-Example for clicking:
-  osworld(method="execute_action", params={{"action": {{"action_type": "CLICK", "parameters": {{"x": 100, "y": 200, "button": "left"}}}}}})"""
+Use exact coordinates from the simplified AST."""
 
         user_content = f"""{cursor_text}Current Screen State:
 {state['simplified_ast']}
@@ -807,7 +872,7 @@ Select the appropriate action using the osworld tool."""
                 model=self.llm_model,
                 instructions=instructions,
                 input=[{"role": "user", "content": user_content}],
-                tools=[self.osworld_tool],
+                tools=self.osworld_tool,
             )
             
             all_actions = []
@@ -830,34 +895,27 @@ Select the appropriate action using the osworld tool."""
                 next_inputs = []
                 
                 for call in tool_calls:
-                    # vLLM tool format has name at top level
-                    if call.name != self.osworld_tool['name']:
-                        logger.warning(f"Ignoring unknown tool: {call.name}")
-                        next_inputs.append({
-                            "type": "function_call_output",
-                            "call_id": call.call_id,
-                            "output": json.dumps({
-                                "success": False,
-                                "content": f"Unknown tool: {call.name}",
-                                "exit_code": -1
-                            })
-                        })
-                        continue
-                    
+                    # Removed method name checking
                     func_args = json.loads(call.arguments or "{}")
                     logger.info(f"Tool call: {call.name}({func_args})")
+
+                    # Some LLMs don't have reasoning content...
+                    try:
+                        reasoning_content = reasoning[0].content
+                    except:
+                        reasoning_content = f"Achieving goal: {goal}"
                     
                     # Store the action
                     action_info = {
                         'goal': goal,
                         'tool_name': call.name,
                         'method': func_args.get('method', ''),
-                        'params': func_args.get('params', {}),
-                        'reasoning': reasoning[0].content if reasoning else f"Achieving goal: {goal}",
+                        'params': func_args,
+                        'reasoning': reasoning_content,
                         'tool_call_id': call.call_id
                     }
                     all_actions.append(action_info)
-                    
+
                     # Execute the action and get result
                     observation = self.execute_action(action_info, runtime)
                     observations.append(observation)
@@ -915,7 +973,7 @@ Select the appropriate action using the osworld tool."""
                         model=self.llm_model,
                         previous_response_id=response.id,
                         input=next_inputs,
-                        tools=[self.osworld_tool],
+                        tools=self.osworld_tool,
                         reasoning={"effort": "high"},
                     )
                 except Exception as e:
@@ -945,6 +1003,7 @@ Select the appropriate action using the osworld tool."""
     def execute_action(self, action_info: Dict[str, Any], runtime: OSWorldSingularityRuntime) -> Dict[str, Any]:
         """
         Execute the action selected by LLM.
+        Updated for new schema.
         
         Args:
             action_info: Action information from LLM
@@ -953,56 +1012,41 @@ Select the appropriate action using the osworld tool."""
         Returns:
             Observation from executing the action
         """
-        logger.info(f"Executing action: {action_info['method']}")
+        logger.info(f"Executing action: {action_info['tool_name']}")
         
         # Map shorthand methods to execute_action format
-        method = action_info['method']
+        method = action_info['tool_name']
         params = action_info['params'].copy()
-        
-        # Handle shorthand action methods
-        if method in ['click', 'type', 'press', 'move']:
-            # Convert to execute_action format
-            action_type_map = {
-                'click': 'CLICK',
-                'type': 'TYPING',
-                'press': 'PRESS',
-                'move': 'MOVE_TO'
-            }
-            
-            params = {
-                'action': {
-                    'action_type': action_type_map[method],
-                    'parameters': params
-                }
-            }
-            method = 'execute_action'
-        
-        # Create OSWorldInteractiveAction
-        action = OSWorldInteractiveAction(
-            method=method,
-            params=params,
-            thought=action_info['goal']
-        )
-        
-        # Execute action
+
+        width, height = 1920, 1080
+        if 'x' in params:
+            params['x'] = int(params['x'] * width)
+        if 'y' in params:
+            params['y'] = int(params['y'] * height)
+        logger.info(f"Converted normalized coordinates to pixel coordinates: {params}. Screen size: {width}x{height}.")
+
         try:
-            observation = runtime.run_action(action)
+            assert method in TOOL_NAME_TO_ACTION_TYPE, f"Unknown tool name: {method}"
             
-            # Check if it's an ErrorObservation
-            if isinstance(observation, ErrorObservation):
-                result = {
-                    'success': False,
-                    'content': observation.content[:500] if observation.content else '',
-                    'exit_code': -1
+            action_type = TOOL_NAME_TO_ACTION_TYPE[method]
+            action_data = {
+            'action_type': action_type,
+            'parameters': params
+        }
+            result = runtime.execute_vm_action(action_data)
+            if result.get('status') == 'success':
+                result =  {
+                    'success': True,
+                    'content': result.get('output', 'Action executed successfully'),
+                    'exit_code': 0
                 }
             else:
-                # Format observation
-                result = {
-                    'success': getattr(observation, 'exit_code', 0) == 0,
-                    'content': observation.content[:500] if observation.content else '',
-                    'exit_code': getattr(observation, 'exit_code', 0)
+                error_msg = result.get('error', result.get('message', 'Unknown error'))
+                result =  {
+                    'success': False,
+                    'content': error_msg,
+                    'exit_code': -1
                 }
-            
             logger.info(f"Action result: success={result['success']}")
             return result
         
@@ -1146,12 +1190,16 @@ Select the appropriate action using the osworld tool."""
         
         # Sample persona for this trajectory
         persona = self.sample_persona()
-        
+        # Sample osworld setup for this trajectory
+        # First entry is None so you can skip setup if needed
+        osworld_setup = random.choice(self.osworld_setup_dataset)
+
         # Create job details
         job_details = TrajectoryJobDetails()
         job_details.job_id = job_id
         job_details.trajectory_id = trajectory_id
         job_details.persona = persona
+        job_details.osworld_setup = osworld_setup
         job_details.event = threading.Event()
         
         # Store job details
@@ -1285,6 +1333,12 @@ async def main():
         default='/work/Projects/data/nemotron_data/data',
         help='Path to nemotron persona dataset directory'
     )
+    parser.add_argument(
+        '--setup-osworld-dataset',
+        type=str,
+        default='/root/OSWorld/osworld_test_nogdrive.json',
+        help='Path to osworld setup dataset directory'
+    )
     
     args = parser.parse_args()
     
@@ -1303,6 +1357,7 @@ async def main():
         max_steps_per_trajectory=args.max_steps,
         max_trajectories=args.max_trajectories,
         persona_dataset_path=args.persona_dataset,
+        osworld_setup_dataset_path=args.setup_osworld_dataset,
         max_parallel=args.max_parallel,
     )
     
