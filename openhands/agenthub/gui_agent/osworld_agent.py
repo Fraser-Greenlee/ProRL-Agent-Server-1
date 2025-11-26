@@ -53,7 +53,7 @@ def convert_action_to_message(action: OSWorldInteractiveAction) -> Message:
 
     return Message(
         role=getattr(assistant_msg, 'role', 'assistant'),
-        content=[TextContent(text=assistant_msg.content)],
+        content=[TextContent(text=text_content)],
         tool_calls=assistant_msg.tool_calls,
         input_ids=input_ids,
         output_ids=output_ids,
@@ -321,9 +321,7 @@ class OSWorldAgent(Agent):
         }
         params['tools'] = self.tools
         params['extra_body'] = {'metadata': state.to_llm_metadata(agent_name=self.name)}
-        import pdb; pdb.set_trace()
         response = self.llm.completion(**params)
-        import pdb; pdb.set_trace()
         logger.debug(f'Response from LLM: {response}')
         action = codeact_function_calling.response_to_actions(response, timeout=self.config.action_timeout)
         if self.pause_time > 0.5:
