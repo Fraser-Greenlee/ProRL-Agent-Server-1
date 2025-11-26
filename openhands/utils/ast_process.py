@@ -191,7 +191,9 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
         filter_occlusion: If True, filters out occluded elements behind other windows
         
     Returns:
-        Simplified XML string with only visible, actionable elements
+        Simplified XML string with only visible, actionable elements.
+        The "box" ([left, top, width, height]) and "center" ([x, y]) are
+        normalized to [0,1] using the screen size.
     """
     _register_namespaces()
 
@@ -216,6 +218,14 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
                 print(f"[AST] Foreground: {foreground_window['app']} - {foreground_window['name']} "
                       f"(role={foreground_window['role']}, active={foreground_window['active']}, "
                       f"focused={foreground_window['focused']}, modal={foreground_window['modal']})")
+
+    # Determine screen size for normalization (prefer desktop-frame size, else derive from max bounds)
+    screen_w, screen_h = 1920, 1080
+
+    def _clamp01(v: float) -> float:
+        if v < 0.0: return 0.0
+        if v > 1.0: return 1.0
+        return v
 
     def simplify_node(node, parent_in_foreground=True, parent_app=None):
         # 1. VISIBILITY CHECK - Filter out invisible or occluded elements
@@ -310,12 +320,18 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
             if tag in ['frame', 'window', 'dialog', 'alert'] and current_app:
                 new_elem.set("app", current_app)
             
-            # Add bounding box [left, top, width, height]
-            new_elem.set("box", f"[{x},{y},{w},{h}]")
-            # Add center coordinates [center_x, center_y]
-            center_x = x + w // 2
-            center_y = y + h // 2
-            new_elem.set("center", f"[{center_x},{center_y}]")
+            # Add normalized bounding box [left, top, width, height] in [0,1]
+            n_left = _clamp01(x / screen_w)
+            n_top = _clamp01(y / screen_h)
+            n_width = _clamp01(w / screen_w)
+            n_height = _clamp01(h / screen_h)
+            new_elem.set("box", f"[{n_left:.3f},{n_top:.3f},{n_width:.3f},{n_height:.3f}]")
+            # Add normalized center coordinates [x, y] in [0,1]
+            center_x = x + (w / 2.0)
+            center_y = y + (h / 2.0)
+            n_center_x = _clamp01(center_x / screen_w)
+            n_center_y = _clamp01(center_y / screen_h)
+            new_elem.set("center", f"[{n_center_x:.3f},{n_center_y:.3f}]")
             
             if actions: new_elem.set("act", ",".join(actions))
             if is_selected: new_elem.set("selected", "true")
