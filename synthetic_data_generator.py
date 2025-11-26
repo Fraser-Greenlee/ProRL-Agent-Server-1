@@ -85,6 +85,7 @@ class SyntheticDataGenerator:
             max_parallel: Maximum number of parallel trajectory collectors (default: 3)
         """
         self.vm_image_path = vm_image_path
+        self.os_type = 'linux' if 'Ubuntu' in vm_image_path else 'windows'
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -330,7 +331,7 @@ class SyntheticDataGenerator:
                     config=config,
                     event_stream=event_stream,
                     sid=job_id,
-                    os_type='linux',
+                    os_type=self.os_type,
                     vm_image_path=self.vm_image_path,
                     attach_to_existing=False,
                 )
@@ -522,7 +523,10 @@ class SyntheticDataGenerator:
         
         # Simplify AST for LLM using ast_process simplifier
         # This returns clean XML with center coordinates and bounding boxes
-        simplified_ast = simplify_accessibility_tree(ast_xml)
+        if self.os_type == 'windows':
+            simplified_ast = ast_xml
+        else:
+            simplified_ast = simplify_accessibility_tree(ast_xml)
         
         return {
             'screenshot': screenshot_b64,

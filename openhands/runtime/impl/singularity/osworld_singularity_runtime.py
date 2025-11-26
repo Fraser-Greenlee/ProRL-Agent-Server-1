@@ -611,7 +611,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         try:
             # Wrap the command with necessary imports
             command = f"import pyautogui; import time; pyautogui.FAILSAFE = False; {pyautogui_command}"
-            command_list = ["python3", "-c", command]
+            command_list = ["python", "-c", command]
             payload = {"command": command_list, "shell": False}
             
             response = httpx.post(
