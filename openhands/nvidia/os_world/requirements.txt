@@ -1,0 +1,15 @@
+pydrive
+formulas
+lxml
+cssselect
+xmltodict
+tldextract
+pymupdf
+borb
+imagehash
+easyocr
+odfpy
+pdfplumber
+mutagen
+pyacoustid
+fastdtw
