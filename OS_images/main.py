@@ -1534,33 +1534,52 @@ def get_accessibility_tree_nested():
             return None
         
         role = (node.getRoleName() or "").strip().lower()
+        is_showing = _is_showing_minimal(node)
         
-        # Application nodes are containers - don't check _is_showing for them
-        # They often report as not showing even when their children are visible
-        if role != "application" and not _is_showing_minimal(node):
-            return None
-        
-        # Check if this is a top-level window that should be filtered
+        # Check if this is a top-level window that should be filtered due to occlusion
         if filter_occluded and role in ("frame", "dialog", "window", "alert") and depth > 0:
             if node not in visible_windows:
-                return None
+                # Window is occluded - check if it's an overlay app (gnome-shell, gjs)
+                # Overlay apps contain dock/panel UI and should always be included
+                app_name = ""
+                try:
+                    parent = node.parent
+                    if parent and (parent.getRoleName() or "").strip().lower() == "application":
+                        app_name = (parent.name or "").strip().lower()
+                except Exception:
+                    pass
+                
+                if app_name in OVERLAY_APPS:
+                    # Overlay app window - include it (dock/panel UI)
+                    pass
+                else:
+                    # Regular app window that's occluded - skip it
+                    return None
         
+        # First, try to build children - this allows us to include parent nodes
+        # that aren't "showing" themselves but have visible children
+        children = []
+        try:
+            for i in range(node.childCount):
+                child = node.getChildAtIndex(i)
+                if child:
+                    child_tree = build_tree(child, depth + 1)
+                    if child_tree:
+                        children.append(child_tree)
+        except Exception:
+            pass
+        
+        # Now decide whether to include this node
         bounds = _get_bounds_minimal(node)
+        
+        # If node is not showing and has no visible children, skip it
+        # Exception: application nodes are containers and should be included if they have children
+        if not is_showing and role != "application" and not children:
+            return None
+        
         if bounds is None:
-            # Still try to process children even if this node has no bounds
-            children = []
-            try:
-                for i in range(node.childCount):
-                    child = node.getChildAtIndex(i)
-                    if child:
-                        child_tree = build_tree(child, depth + 1)
-                        if child_tree:
-                            children.append(child_tree)
-            except Exception:
-                pass
-            
+            # No bounds - only include if we have children
             if children:
-                # Return a container node without bounds
                 return {
                     "role": role,
                     "name": (node.name or "").strip(),
@@ -1568,6 +1587,7 @@ def get_accessibility_tree_nested():
                 }
             return None
         
+        # Node has bounds - build full element
         x, y, w, h = bounds
         text = _get_text_minimal(node)
         name = (node.name or "").strip()
@@ -1603,18 +1623,7 @@ def get_accessibility_tree_nested():
             except Exception:
                 pass
         
-        # Recursively build children
-        children = []
-        try:
-            for i in range(node.childCount):
-                child = node.getChildAtIndex(i)
-                if child:
-                    child_tree = build_tree(child, depth + 1)
-                    if child_tree:
-                        children.append(child_tree)
-        except Exception:
-            pass
-        
+        # Add children (already built above)
         if children:
             elem["children"] = children
         
