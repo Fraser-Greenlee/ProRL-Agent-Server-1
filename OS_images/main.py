@@ -1400,13 +1400,72 @@ def get_accessibility_tree_nested():
     except Exception:
         pass
     
-    # Sort windows by stacking order (if available)
-    # Windows not in stacking order go to the bottom
+    # Build a map from window class/name to X11 stacking index
+    x11_stacking_map = {}  # Maps (class_name, window_name) to stacking index
+    try:
+        d = display.Display()
+        stacking_atom = d.intern_atom('_NET_CLIENT_LIST_STACKING')
+        stacking_prop = d.screen().root.get_full_property(stacking_atom, X.AnyPropertyType)
+        if stacking_prop:
+            for idx, wid in enumerate(stacking_prop.value):
+                try:
+                    win = d.create_resource_object('window', wid)
+                    wm_name = win.get_wm_name() or ""
+                    wm_class = win.get_wm_class()
+                    class_name = wm_class[1].lower() if wm_class else ""
+                    # Store both class and name for matching
+                    x11_stacking_map[(class_name, wm_name.lower()[:50])] = idx
+                    x11_stacking_map[(class_name, "")] = idx  # Also store by class only
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    
+    # Sort windows by X11 stacking order
+    def normalize_name(name):
+        """Normalize app/window names for comparison."""
+        return name.lower().replace(" ", "").replace("-", "").replace("_", "")
+    
     def get_stacking_index(window_info):
-        _, frame_node, bounds, _ = window_info
-        # Try to match by bounds/position (AT-SPI doesn't give us X11 window IDs directly)
-        # Windows higher in stacking order should be rendered last (on top)
-        # For now, we'll use a heuristic: active window is on top
+        app_node, frame_node, bounds, win_name = window_info
+        app_name = (app_node.name or "").strip()
+        app_name_norm = normalize_name(app_name)
+        win_name_lower = (win_name or "").lower()[:50]
+        role = (frame_node.getRoleName() or "").strip().lower()
+        
+        # Try to find matching X11 window
+        best_match_idx = -1
+        
+        for (cls, name), idx in x11_stacking_map.items():
+            cls_norm = normalize_name(cls)
+            
+            # Check if app names match (normalized)
+            if cls_norm and app_name_norm and (cls_norm in app_name_norm or app_name_norm in cls_norm):
+                # If we have a window name match too, this is a strong match
+                if name and win_name_lower and (name in win_name_lower or win_name_lower in name):
+                    return idx
+                # Otherwise, remember this as a potential match
+                if idx > best_match_idx:
+                    best_match_idx = idx
+        
+        if best_match_idx >= 0:
+            return best_match_idx
+        
+        # Dialogs that are ACTIVE should be on top of their parent app
+        # but not necessarily above other apps
+        if role == "dialog":
+            try:
+                state = frame_node.getState()
+                if state.contains(pyatspi.STATE_ACTIVE):
+                    # Find parent app's stacking index and add a small offset
+                    for (cls, _), idx in x11_stacking_map.items():
+                        cls_norm = normalize_name(cls)
+                        if cls_norm and app_name_norm and (cls_norm in app_name_norm or app_name_norm in cls_norm):
+                            return idx + 0.5  # Dialog is above its parent but below next app
+            except Exception:
+                pass
+        
+        # Fallback: use AT-SPI state for windows we couldn't match
         try:
             state = frame_node.getState()
             if state.contains(pyatspi.STATE_ACTIVE):
@@ -1415,7 +1474,7 @@ def get_accessibility_tree_nested():
                 return 999998  # Focused window is near top
         except Exception:
             pass
-        return 0
+        return -1  # Unknown windows go to bottom
     
     top_level_windows.sort(key=get_stacking_index)
     
