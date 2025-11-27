@@ -191,16 +191,14 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
         filter_occlusion: If True, filters out occluded elements behind other windows
         
     Returns:
-        Simplified XML string with only visible, actionable elements.
-        The "box" ([left, top, width, height]) and "center" ([x, y]) are
-        normalized to [0,1] using the screen size.
+        Tuple[str, Tuple[int, int]]: Simplified XML string and (width, height) of the screen.
     """
     _register_namespaces()
 
     try:
         root = ET.fromstring(xml_string)
     except ET.ParseError as e:
-        return f"Error parsing XML: {e}"
+        return f"Error parsing XML: {e}", (None, None)
 
     # Build parent map for traversal
     parent_map = {child: parent for parent in root.iter() for child in parent}
@@ -219,8 +217,22 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
                       f"(role={foreground_window['role']}, active={foreground_window['active']}, "
                       f"focused={foreground_window['focused']}, modal={foreground_window['modal']})")
 
-    # Determine screen size for normalization (prefer desktop-frame size, else derive from max bounds)
-    screen_w, screen_h = 1920, 1080
+    # Determine screen size for normalization
+    screen_w, screen_h = None, None # Default
+    
+    # Try to find screen size from desktop frame
+    for elem in root.iter():
+        tag = elem.tag.split('}')[-1]
+        # Look for frame with window-type="desktop" or explicit desktop-frame tag
+        is_desktop = (tag == 'desktop-frame') or \
+                     (tag == 'frame' and _get_attr(elem, 'window-type') == 'desktop')
+        
+        if is_desktop:
+            size_str = _get_attr(elem, 'size')
+            w, h = _parse_coords(size_str)
+            if w > 0 and h > 0:
+                screen_w, screen_h = w, h
+                break
 
     def _clamp01(v: float) -> float:
         if v < 0.0: return 0.0
@@ -374,9 +386,9 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
 
     simplified_root = simplify_node(root)
     if simplified_root is None:
-        return "<error>No visible content found</error>"
+        return "<error>No visible content found</error>", (screen_w, screen_h)
 
-    return ET.tostring(simplified_root, encoding='unicode')
+    return ET.tostring(simplified_root, encoding='unicode'), (screen_w, screen_h)
 
 def get_actionable_centers(xml_string):
     """

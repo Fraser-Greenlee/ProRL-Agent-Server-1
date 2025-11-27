@@ -40,6 +40,7 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import (
 )
 from openhands.storage import get_file_store
 from openhands.utils.ast_process import simplify_accessibility_tree
+from openhands.utils.ast_process_win import simplify_windows_accessibility_tree
 from openhands.agenthub.gui_agent.tools import OSWORLD_TOOLS
 import time
 from openhands.nvidia.os_world.controllers.setup import SetupController
@@ -151,8 +152,8 @@ class SyntheticDataGenerator:
         self._active_runtime_count = 0
         self._active_runtime_lock = threading.Lock()
         
-        self.screen_width = 1920
-        self.screen_height = 1080
+        self.screen_width = None
+        self.screen_height = None
         
         # Load persona dataset
         self.persona_dfs = []  # List of memory-mapped dataframes
@@ -398,7 +399,7 @@ class SyntheticDataGenerator:
                 logger.info(f"[init-worker-{worker_id}] ✓ Runtime initialized and connected for {job_id}")
                 logger.info(f"[init-worker-{worker_id}]   VM URL: {runtime.osworld_vm_url if hasattr(runtime, 'osworld_vm_url') else 'N/A'}")
 
-                if job_details.osworld_setup:
+                if job_details.osworld_setup and self.os_type == 'linux':
                     logger.info(f"[init-worker-{worker_id}] Setting up OSWorld...")
                     setup_controller = SetupController(
                         vm_ip="127.0.0.1",
@@ -594,9 +595,9 @@ class SyntheticDataGenerator:
         # Simplify AST for LLM using ast_process simplifier
         # This returns clean XML with center coordinates and bounding boxes
         if self.os_type == 'windows':
-            simplified_ast = ast_xml
+            simplified_ast, (self.screen_width, self.screen_height) = simplify_windows_accessibility_tree(ast_xml)
         else:
-            simplified_ast = simplify_accessibility_tree(ast_xml)
+            simplified_ast, (self.screen_width, self.screen_height) = simplify_accessibility_tree(ast_xml)
         
         return {
             'screenshot': screenshot_b64,
@@ -1018,7 +1019,7 @@ Select the appropriate action using the osworld tool."""
         method = action_info['tool_name']
         params = action_info['params'].copy()
 
-        width, height = 1920, 1080
+        width, height = self.screen_width, self.screen_height
         if 'x' in params:
             params['x'] = int(params['x'] * width)
         if 'y' in params:

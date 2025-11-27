@@ -10,10 +10,7 @@ import os
 import subprocess
 import signal
 import time
-import json
 import threading
-from pathlib import Path
-from turtle import window_width
 from typing import TYPE_CHECKING, Callable
 
 import httpx
@@ -437,7 +434,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 # Try to connect to OSWorld server
                 response = httpx.get(
                     #f'http://localhost:{self._vm_server_port}/screenshot',
-                    f'{self.osworld_vm_url}/terminal',
+                    f'{self.osworld_vm_url}/screenshot',
                     timeout=5.0
                 )
                 if response.status_code == 200:
