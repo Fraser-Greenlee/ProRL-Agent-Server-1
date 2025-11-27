@@ -905,17 +905,7 @@ def get_accessibility_tree():
 
     # AT-SPI works for KDE as well
     if os_name == "Linux":
-        global libreoffice_version_tuple
-        libreoffice_version_tuple = _get_libreoffice_version()
-
-        desktop: Accessible = pyatspi.Registry.getDesktop(0)
-        xml_node = lxml.etree.Element("desktop-frame", nsmap=_accessibility_ns_map_ubuntu)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(_create_atspi_node, app_node, 1) for app_node in desktop]
-            for future in concurrent.futures.as_completed(futures):
-                xml_tree = future.result()
-                xml_node.append(xml_tree)
-        return jsonify({"AT": lxml.etree.tostring(xml_node, encoding="unicode")})
+        return get_accessibility_tree_nested()
 
     elif os_name == "Windows":
         # Attention: Windows a11y tree is implemented to be read through `pywinauto` module, however,
