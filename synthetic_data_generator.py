@@ -186,6 +186,8 @@ class SyntheticDataGenerator:
         logger.info(f"  Max parallel workers: {max_parallel}")
         if self.persona_dfs:
             logger.info(f"  Personas loaded: {sum(self.persona_df_weights):,} records")
+
+        os.makedirs('/tmp/osworld_example', exist_ok=True)
     
     def _load_persona_dataset(self):
         """Load the nemotron persona dataset from parquet files."""
