@@ -1243,6 +1243,137 @@ def get_accessibility_minimal():
     return jsonify(payload)
 
 
+@app.route("/accessibility_tree", methods=["GET"])
+def get_accessibility_tree_nested():
+    """
+    Return a nested DOM-like tree structure of all visible AT-SPI elements.
+    
+    This endpoint returns the accessibility tree in a hierarchical structure
+    where each element contains its children, similar to a DOM tree.
+    
+    Query parameters:
+    - max_depth: Maximum depth to traverse (default: 40)
+    """
+    os_name: str = platform.system()
+    
+    if os_name != "Linux":
+        return jsonify({"error": "accessibility_tree is only implemented for Linux"}), 500
+    
+    max_depth = int(request.args.get('max_depth', '40'))
+    
+    try:
+        desktop: Accessible = pyatspi.Registry.getDesktop(0)
+    except Exception as e:
+        return jsonify({"error": f"Failed to get desktop: {e}"}), 500
+
+    # Screen size from desktop component extents
+    try:
+        desktop_comp: Component = desktop.queryComponent()
+        dx, dy, dw, dh = desktop_comp.getExtents(0)
+    except Exception:
+        dx = dy = 0
+        dw = dh = 1920  # Default fallback
+    
+    def build_tree(node: Accessible, depth: int = 0) -> dict | None:
+        """Recursively build a nested tree structure from an AT-SPI node."""
+        if depth > max_depth:
+            return None
+        
+        if not _is_showing_minimal(node):
+            return None
+        
+        bounds = _get_bounds_minimal(node)
+        if bounds is None:
+            # Still try to process children even if this node has no bounds
+            children = []
+            try:
+                for i in range(node.childCount):
+                    child = node.getChildAtIndex(i)
+                    if child:
+                        child_tree = build_tree(child, depth + 1)
+                        if child_tree:
+                            children.append(child_tree)
+            except Exception:
+                pass
+            
+            if children:
+                # Return a container node without bounds
+                return {
+                    "role": (node.getRoleName() or "").strip().lower(),
+                    "name": (node.name or "").strip(),
+                    "children": children
+                }
+            return None
+        
+        x, y, w, h = bounds
+        text = _get_text_minimal(node)
+        name = (node.name or "").strip()
+        role = (node.getRoleName() or "").strip().lower()
+        actions = _get_actions_minimal(node)
+        app_name, window_title = _get_window_context_minimal(node)
+        
+        # Build element data
+        elem = {
+            "role": role,
+            "name": name,
+            "bounds": {"x": x, "y": y, "w": w, "h": h},
+            "center": {"x": x + w // 2, "y": y + h // 2},
+        }
+        
+        # Only include optional fields if they have values
+        if text:
+            elem["text"] = text
+        if actions:
+            elem["actions"] = actions
+        if app_name:
+            elem["app"] = app_name
+        if window_title:
+            elem["window"] = window_title
+        
+        # Recursively build children
+        children = []
+        try:
+            for i in range(node.childCount):
+                child = node.getChildAtIndex(i)
+                if child:
+                    child_tree = build_tree(child, depth + 1)
+                    if child_tree:
+                        children.append(child_tree)
+        except Exception:
+            pass
+        
+        if children:
+            elem["children"] = children
+        
+        return elem
+    
+    # Build tree for each application under the desktop
+    apps = []
+    try:
+        for app_node in desktop:
+            app_tree = build_tree(app_node)
+            if app_tree:
+                apps.append(app_tree)
+    except Exception as e:
+        logger.error(f"Error during AT-SPI traversal: {e}")
+
+    payload = {
+        "screen": {
+            "x": dx,
+            "y": dy,
+            "width": dw,
+            "height": dh,
+        },
+        "desktop": {
+            "role": "desktop",
+            "name": "Desktop",
+            "children": apps
+        }
+    }
+
+    return jsonify(payload)
+
+
 @app.route('/screen_size', methods=['POST'])
 def get_screen_size():
     if platform_name == "Linux":
