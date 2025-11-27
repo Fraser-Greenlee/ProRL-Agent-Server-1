@@ -155,6 +155,12 @@ class SyntheticDataGenerator:
         self.screen_width = None
         self.screen_height = None
         
+        # Default screen dimensions based on OS type
+        if self.os_type == 'windows':
+            self.default_screen_width, self.default_screen_height = 1280, 800
+        else:
+            self.default_screen_width, self.default_screen_height = 1920, 1080
+        
         # Load persona dataset
         self.persona_dfs = []  # List of memory-mapped dataframes
         self.persona_df_weights = []  # Weights for sampling
@@ -599,11 +605,18 @@ class SyntheticDataGenerator:
         else:
             simplified_ast, (self.screen_width, self.screen_height) = simplify_accessibility_tree(ast_xml)
         
+        # Normalize cursor position to [0, 1] range like other coordinates
+        width = self.screen_width if self.screen_width is not None else self.default_screen_width
+        height = self.screen_height if self.screen_height is not None else self.default_screen_height
+        
+        normalized_cursor_x = cursor_x / width if width > 0 else 0
+        normalized_cursor_y = cursor_y / height if height > 0 else 0
+        
         return {
             'screenshot': screenshot_b64,
             'ast_xml': ast_xml,
             'simplified_ast': simplified_ast,
-            'cursor_position': {'x': cursor_x, 'y': cursor_y},
+            'cursor_position': {'x': round(normalized_cursor_x, 3), 'y': round(normalized_cursor_y, 3)},
             'timestamp': time.time()
         }
     
@@ -1019,7 +1032,9 @@ Select the appropriate action using the osworld tool."""
         method = action_info['tool_name']
         params = action_info['params'].copy()
 
-        width, height = self.screen_width, self.screen_height
+        # Use screen dimensions with fallback defaults
+        width = self.screen_width if self.screen_width is not None else self.default_screen_width
+        height = self.screen_height if self.screen_height is not None else self.default_screen_height
         if 'x' in params:
             params['x'] = int(params['x'] * width)
         if 'y' in params:
@@ -1138,6 +1153,11 @@ Select the appropriate action using the osworld tool."""
             
             # Step 2: Generate action for the goal
             state = self.generate_action(state, goal, trajectory['steps'], trajectory_id, runtime)
+            
+            # Check if generate_action failed (returned None)
+            if state is None:
+                logger.warning("generate_action returned None, stopping trajectory collection")
+                break
            
             # Save trajectory incrementally after each step
             trajectory['end_time'] = datetime.now().isoformat()
