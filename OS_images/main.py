@@ -1375,8 +1375,20 @@ def get_accessibility_tree_nested():
     # We'll use this to determine occlusion
     top_level_windows = []  # List of (app_node, frame_node, bounds, window_name)
     
+    # System/compositor apps that should be excluded from occlusion calculation
+    # These are typically overlay windows that don't actually occlude user content
+    SYSTEM_APPS = {'gnome-shell', 'gjs', 'gnome-software', 'ibus-x11', 'ibus-extension-gtk3',
+                   'gsd-color', 'gsd-keyboard', 'gsd-media-keys', 'gsd-wacom', 'gsd-power',
+                   'gsd-xsettings', 'evolution-alarm-notify', 'xdg-desktop-portal-gtk'}
+    
     def collect_top_level_windows(app_node):
         """Collect all frame/dialog windows from an application."""
+        app_name = (app_node.name or "").strip().lower()
+        
+        # Skip system/compositor apps
+        if app_name in SYSTEM_APPS:
+            return []
+        
         windows = []
         try:
             for i in range(app_node.childCount):
@@ -1603,6 +1615,11 @@ def get_accessibility_tree_nested():
     apps = []
     try:
         for app_node in desktop:
+            # Skip system apps in tree building too
+            app_name = (app_node.name or "").strip().lower()
+            if app_name in SYSTEM_APPS:
+                continue
+            
             app_tree = build_tree(app_node)
             if app_tree:
                 # Only include apps that have visible children
