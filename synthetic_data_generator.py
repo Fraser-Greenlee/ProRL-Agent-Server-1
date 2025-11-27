@@ -961,7 +961,7 @@ Select the appropriate action using the osworld tool."""
                         'goal': action_info['goal'],
                         'reasoning': action_info['reasoning'],
                         'action': {
-                            'method': action_info['method'],
+                            'tool_name': action_info['tool_name'],
                             'params': action_info['params']
                         },
                         'observation': observation
