@@ -1375,18 +1375,27 @@ def get_accessibility_tree_nested():
     # We'll use this to determine occlusion
     top_level_windows = []  # List of (app_node, frame_node, bounds, window_name)
     
-    # System/compositor apps that should be excluded from occlusion calculation
-    # These are typically overlay windows that don't actually occlude user content
-    SYSTEM_APPS = {'gnome-shell', 'gjs', 'gnome-software', 'ibus-x11', 'ibus-extension-gtk3',
-                   'gsd-color', 'gsd-keyboard', 'gsd-media-keys', 'gsd-wacom', 'gsd-power',
-                   'gsd-xsettings', 'evolution-alarm-notify', 'xdg-desktop-portal-gtk'}
+    # Background service apps that should be completely excluded
+    # These don't have visible UI that users interact with
+    BACKGROUND_APPS = {'ibus-x11', 'ibus-extension-gtk3', 'gsd-color', 'gsd-keyboard', 
+                       'gsd-media-keys', 'gsd-wacom', 'gsd-power', 'gsd-xsettings', 
+                       'evolution-alarm-notify', 'xdg-desktop-portal-gtk', 'gnome-calendar',
+                       'gnome-software'}
+    
+    # Apps whose windows should not be counted for occlusion (they're overlays/compositors)
+    # but their UI elements (dock, panel) should still be included in the tree
+    OVERLAY_APPS = {'gnome-shell', 'gjs'}
     
     def collect_top_level_windows(app_node):
-        """Collect all frame/dialog windows from an application."""
+        """Collect all frame/dialog windows from an application for occlusion calculation."""
         app_name = (app_node.name or "").strip().lower()
         
-        # Skip system/compositor apps
-        if app_name in SYSTEM_APPS:
+        # Skip background service apps entirely
+        if app_name in BACKGROUND_APPS:
+            return []
+        
+        # Skip overlay apps from occlusion calculation (but they'll still be in the tree)
+        if app_name in OVERLAY_APPS:
             return []
         
         windows = []
@@ -1615,9 +1624,9 @@ def get_accessibility_tree_nested():
     apps = []
     try:
         for app_node in desktop:
-            # Skip system apps in tree building too
+            # Skip background service apps (no visible UI)
             app_name = (app_node.name or "").strip().lower()
-            if app_name in SYSTEM_APPS:
+            if app_name in BACKGROUND_APPS:
                 continue
             
             app_tree = build_tree(app_node)
