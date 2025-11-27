@@ -1243,6 +1243,88 @@ def get_accessibility_minimal():
     return jsonify(payload)
 
 
+def _get_window_stacking_order():
+    """
+    Get the stacking order of windows using X11's _NET_CLIENT_LIST_STACKING.
+    Returns a list of window IDs from bottom to top (higher index = more on top).
+    """
+    try:
+        d = display.Display()
+        root = d.screen().root
+        # _NET_CLIENT_LIST_STACKING gives windows in stacking order (bottom to top)
+        stacking_atom = d.intern_atom('_NET_CLIENT_LIST_STACKING')
+        stacking_prop = root.get_full_property(stacking_atom, X.AnyPropertyType)
+        if stacking_prop:
+            return list(stacking_prop.value)
+    except Exception:
+        pass
+    return []
+
+
+def _get_active_window_id():
+    """Get the currently active/focused window ID using X11."""
+    try:
+        d = display.Display()
+        root = d.screen().root
+        active_atom = d.intern_atom('_NET_ACTIVE_WINDOW')
+        active_prop = root.get_full_property(active_atom, X.AnyPropertyType)
+        if active_prop and active_prop.value:
+            return active_prop.value[0]
+    except Exception:
+        pass
+    return None
+
+
+def _rect_intersection_area(r1, r2):
+    """Calculate intersection area between two rectangles (x, y, w, h)."""
+    x1, y1, w1, h1 = r1
+    x2, y2, w2, h2 = r2
+    
+    # Calculate intersection
+    ix1 = max(x1, x2)
+    iy1 = max(y1, y2)
+    ix2 = min(x1 + w1, x2 + w2)
+    iy2 = min(y1 + h1, y2 + h2)
+    
+    if ix1 < ix2 and iy1 < iy2:
+        return (ix2 - ix1) * (iy2 - iy1)
+    return 0
+
+
+def _is_window_occluded(window_bounds, windows_above, threshold: float = 0.0):
+    """
+    Check if a window is significantly occluded by windows above it.
+    
+    Args:
+        window_bounds: (x, y, w, h) of the window to check
+        windows_above: List of (x, y, w, h) bounds of windows above this one
+        threshold: Occlusion threshold (0.0 = center-based, 0.9 = 90% area covered)
+    
+    Returns True if the window should be considered occluded.
+    """
+    x, y, w, h = window_bounds
+    window_area = w * h
+    
+    if threshold <= 0:
+        # Center-based occlusion: check if center is covered
+        cx, cy = x + w // 2, y + h // 2
+        for ax, ay, aw, ah in windows_above:
+            if ax <= cx < ax + aw and ay <= cy < ay + ah:
+                return True
+        return False
+    else:
+        # Area-based occlusion: check if enough area is covered
+        total_occluded = 0
+        for above_bounds in windows_above:
+            intersection = _rect_intersection_area(window_bounds, above_bounds)
+            total_occluded += intersection
+        
+        if window_area > 0:
+            occlusion_ratio = total_occluded / window_area
+            return occlusion_ratio >= threshold
+        return False
+
+
 @app.route("/accessibility_tree", methods=["GET"])
 def get_accessibility_tree_nested():
     """
@@ -1251,8 +1333,17 @@ def get_accessibility_tree_nested():
     This endpoint returns the accessibility tree in a hierarchical structure
     where each element contains its children, similar to a DOM tree.
     
+    Window occlusion is handled by:
+    1. Determining window stacking order (active window on top)
+    2. Filtering out windows based on occlusion mode
+    
     Query parameters:
     - max_depth: Maximum depth to traverse (default: 40)
+    - filter_occluded: Whether to filter occluded windows (default: true)
+    - occlusion_mode: How to detect occlusion (default: "center")
+        - "center": Filter if window center is covered (strict)
+        - "area": Filter if 90% of window area is covered (relaxed)
+        - "active_only": Only show the active/focused window
     """
     os_name: str = platform.system()
     
@@ -1260,6 +1351,8 @@ def get_accessibility_tree_nested():
         return jsonify({"error": "accessibility_tree is only implemented for Linux"}), 500
     
     max_depth = int(request.args.get('max_depth', '40'))
+    filter_occluded = request.args.get('filter_occluded', 'true').lower() == 'true'
+    occlusion_mode = request.args.get('occlusion_mode', 'center').lower()
     
     try:
         desktop: Accessible = pyatspi.Registry.getDesktop(0)
@@ -1274,13 +1367,100 @@ def get_accessibility_tree_nested():
         dx = dy = 0
         dw = dh = 1920  # Default fallback
     
-    def build_tree(node: Accessible, depth: int = 0) -> dict | None:
+    # Get window stacking order and active window for occlusion filtering
+    stacking_order = _get_window_stacking_order() if filter_occluded else []
+    active_window_id = _get_active_window_id() if filter_occluded else None
+    
+    # Collect all top-level windows (frames/dialogs) with their bounds and app info
+    # We'll use this to determine occlusion
+    top_level_windows = []  # List of (app_node, frame_node, bounds, window_name)
+    
+    def collect_top_level_windows(app_node):
+        """Collect all frame/dialog windows from an application."""
+        windows = []
+        try:
+            for i in range(app_node.childCount):
+                child = app_node.getChildAtIndex(i)
+                if child:
+                    role = (child.getRoleName() or "").strip().lower()
+                    if role in ("frame", "dialog", "window", "alert"):
+                        bounds = _get_bounds_minimal(child)
+                        if bounds:
+                            name = (child.name or "").strip()
+                            windows.append((app_node, child, bounds, name))
+        except Exception:
+            pass
+        return windows
+    
+    # First pass: collect all top-level windows
+    try:
+        for app_node in desktop:
+            windows = collect_top_level_windows(app_node)
+            top_level_windows.extend(windows)
+    except Exception:
+        pass
+    
+    # Sort windows by stacking order (if available)
+    # Windows not in stacking order go to the bottom
+    def get_stacking_index(window_info):
+        _, frame_node, bounds, _ = window_info
+        # Try to match by bounds/position (AT-SPI doesn't give us X11 window IDs directly)
+        # Windows higher in stacking order should be rendered last (on top)
+        # For now, we'll use a heuristic: active window is on top
+        try:
+            state = frame_node.getState()
+            if state.contains(pyatspi.STATE_ACTIVE):
+                return 999999  # Active window is on top
+            if state.contains(pyatspi.STATE_FOCUSED):
+                return 999998  # Focused window is near top
+        except Exception:
+            pass
+        return 0
+    
+    top_level_windows.sort(key=get_stacking_index)
+    
+    # Determine which windows are occluded based on mode
+    visible_windows = set()  # Set of frame_node objects that are visible
+    windows_above = []  # Accumulated bounds of windows processed (higher in stack)
+    
+    # Set occlusion threshold based on mode
+    if occlusion_mode == "area":
+        occlusion_threshold = 0.9  # 90% coverage to be considered occluded
+    else:
+        occlusion_threshold = 0.0  # Center-based (default)
+    
+    # Process from top to bottom (reverse order)
+    for app_node, frame_node, bounds, name in reversed(top_level_windows):
+        if filter_occluded:
+            if occlusion_mode == "active_only":
+                # Only show active/focused windows
+                try:
+                    state = frame_node.getState()
+                    is_active = state.contains(pyatspi.STATE_ACTIVE)
+                    is_focused = state.contains(pyatspi.STATE_FOCUSED)
+                    if not (is_active or is_focused):
+                        continue
+                except Exception:
+                    continue
+            elif _is_window_occluded(bounds, windows_above, occlusion_threshold):
+                # This window is occluded by windows above
+                continue
+        visible_windows.add(frame_node)
+        windows_above.append(bounds)
+    
+    def build_tree(node: Accessible, depth: int = 0, is_top_level: bool = False) -> dict | None:
         """Recursively build a nested tree structure from an AT-SPI node."""
         if depth > max_depth:
             return None
         
         if not _is_showing_minimal(node):
             return None
+        
+        # Check if this is a top-level window that should be filtered
+        role = (node.getRoleName() or "").strip().lower()
+        if filter_occluded and role in ("frame", "dialog", "window", "alert") and depth > 0:
+            if node not in visible_windows:
+                return None
         
         bounds = _get_bounds_minimal(node)
         if bounds is None:
@@ -1299,7 +1479,7 @@ def get_accessibility_tree_nested():
             if children:
                 # Return a container node without bounds
                 return {
-                    "role": (node.getRoleName() or "").strip().lower(),
+                    "role": role,
                     "name": (node.name or "").strip(),
                     "children": children
                 }
@@ -1308,7 +1488,6 @@ def get_accessibility_tree_nested():
         x, y, w, h = bounds
         text = _get_text_minimal(node)
         name = (node.name or "").strip()
-        role = (node.getRoleName() or "").strip().lower()
         actions = _get_actions_minimal(node)
         app_name, window_title = _get_window_context_minimal(node)
         
@@ -1329,6 +1508,17 @@ def get_accessibility_tree_nested():
             elem["app"] = app_name
         if window_title:
             elem["window"] = window_title
+        
+        # Mark active/focused state for top-level windows
+        if role in ("frame", "dialog", "window"):
+            try:
+                state = node.getState()
+                if state.contains(pyatspi.STATE_ACTIVE):
+                    elem["active"] = True
+                if state.contains(pyatspi.STATE_FOCUSED):
+                    elem["focused"] = True
+            except Exception:
+                pass
         
         # Recursively build children
         children = []
@@ -1353,7 +1543,9 @@ def get_accessibility_tree_nested():
         for app_node in desktop:
             app_tree = build_tree(app_node)
             if app_tree:
-                apps.append(app_tree)
+                # Only include apps that have visible children
+                if app_tree.get("children"):
+                    apps.append(app_tree)
     except Exception as e:
         logger.error(f"Error during AT-SPI traversal: {e}")
 
@@ -1368,7 +1560,11 @@ def get_accessibility_tree_nested():
             "role": "desktop",
             "name": "Desktop",
             "children": apps
-        }
+        },
+        "filter_occluded": filter_occluded,
+        "occlusion_mode": occlusion_mode,
+        "total_windows": len(top_level_windows),
+        "visible_windows": len(visible_windows),
     }
 
     return jsonify(payload)
