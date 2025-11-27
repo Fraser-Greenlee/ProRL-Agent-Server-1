@@ -964,6 +964,272 @@ def get_accessibility_tree():
         return "Currently not implemented for platform {:}.".format(platform.platform()), 500
 
 
+# ---------- Minimal/Clean Accessibility API (Linux only) ----------
+
+def _is_showing_minimal(node: Accessible) -> bool:
+    """True if node is visible and showing on screen according to AT-SPI state."""
+    try:
+        st = node.getState()
+    except Exception:
+        return False
+    return (st.contains(pyatspi.STATE_VISIBLE)
+            and st.contains(pyatspi.STATE_SHOWING))
+
+
+def _get_bounds_minimal(node: Accessible):
+    """Get absolute screen-space bounds (x, y, w, h) of the node, or None."""
+    try:
+        comp: Component = node.queryComponent()
+    except NotImplementedError:
+        return None
+    except Exception:
+        return None
+
+    try:
+        x, y, w, h = comp.getExtents(0)  # 0 == screen coordinates
+    except Exception:
+        return None
+
+    if w <= 0 or h <= 0:
+        return None
+
+    return x, y, w, h
+
+
+def _get_actions_minimal(node: Accessible):
+    """Return list of action names, or empty list if none."""
+    try:
+        act: ATAction = node.queryAction()
+    except NotImplementedError:
+        return []
+    except Exception:
+        return []
+
+    names = []
+    for i in range(act.nActions):
+        try:
+            names.append(act.getName(i))
+        except Exception:
+            pass
+    return names
+
+
+def _get_text_minimal(node: Accessible) -> str:
+    """Get textual content if any, stripped."""
+    try:
+        txt: ATText = node.queryText()
+    except NotImplementedError:
+        return ""
+    except Exception:
+        return ""
+
+    try:
+        s = txt.getText(0, txt.characterCount)
+        s = s.replace("\ufffc", "").replace("\ufffd", "")
+        return s.strip()
+    except Exception:
+        return ""
+
+
+def _get_window_context_minimal(node: Accessible):
+    """Walk up ancestors to find the application name and window title."""
+    app_name = None
+    window_title = None
+    cur = node
+    while cur is not None:
+        try:
+            role = cur.getRoleName() or ""
+        except Exception:
+            role = ""
+        name = getattr(cur, "name", None)
+
+        if role == "application" and name:
+            app_name = name
+        if role in ("frame", "dialog", "window") and name:
+            window_title = name
+
+        try:
+            cur = cur.parent
+        except Exception:
+            cur = None
+
+    return app_name, window_title
+
+
+def _collect_all_visible_elements_minimal(root: Accessible, max_depth: int = 40):
+    """
+    Traverse accessibility tree and collect *all* visible elements that have
+    geometry (Component), including static labels and text.
+    """
+    elements = []
+
+    def walk(node: Accessible, depth: int = 0):
+        if depth > max_depth:
+            return
+
+        if not _is_showing_minimal(node):
+            return
+
+        bounds = _get_bounds_minimal(node)
+        if bounds is not None:
+            text = _get_text_minimal(node)
+            name = (node.name or "").strip()
+            role = (node.getRoleName() or "").strip().lower()
+            actions = _get_actions_minimal(node)
+            x, y, w, h = bounds
+            cx = x + w // 2
+            cy = y + h // 2
+            app_name, window_title = _get_window_context_minimal(node)
+
+            elements.append({
+                "acc": node,  # keep for occlusion check
+                "app": app_name,
+                "window": window_title,
+                "role": role,
+                "name": name,
+                "text": text,
+                "bounds": {"x": x, "y": y, "w": w, "h": h},
+                "center": {"x": cx, "y": cy},
+                "actions": actions,
+            })
+
+        # Recurse into children
+        try:
+            for i in range(node.childCount):
+                child = node.getChildAtIndex(i)
+                if child:
+                    walk(child, depth + 1)
+        except Exception:
+            return
+
+    walk(root)
+    return elements
+
+
+def _element_visible_at_center_minimal(desktop_comp: Component, elem: dict) -> bool:
+    """
+    Use GetAccessibleAtPoint to decide whether elem is really visible/topmost
+    at its intended click/anchor point (center).
+    """
+    cx = elem["center"]["x"]
+    cy = elem["center"]["y"]
+
+    try:
+        hit = desktop_comp.getAccessibleAtPoint(cx, cy, pyatspi.DESKTOP_COORDS)
+    except Exception:
+        return False
+
+    if hit is None:
+        return False
+
+    target = elem["acc"]
+
+    # Walk up from 'hit' to see if 'target' is an ancestor
+    cur = hit
+    while cur is not None:
+        if cur == target:
+            return True
+        try:
+            cur = cur.parent
+        except Exception:
+            cur = None
+
+    # Walk down from 'target' to see if 'hit' is a descendant
+    stack = [target]
+    while stack:
+        n = stack.pop()
+        if n == hit:
+            return True
+        try:
+            for i in range(n.childCount):
+                ch = n.getChildAtIndex(i)
+                if ch:
+                    stack.append(ch)
+        except Exception:
+            pass
+
+    return False
+
+
+def _filter_visible_elements_minimal(desktop: Accessible, elements: list):
+    """Keep only elements that are not occluded at their center point."""
+    try:
+        desktop_comp: Component = desktop.queryComponent()
+    except NotImplementedError:
+        return []
+    except Exception:
+        return []
+
+    visible = []
+    for elem in elements:
+        if _element_visible_at_center_minimal(desktop_comp, elem):
+            cleaned = {k: v for k, v in elem.items() if k != "acc"}
+            visible.append(cleaned)
+    return visible
+
+
+@app.route("/accessibility_minimal", methods=["GET"])
+def get_accessibility_minimal():
+    """
+    Return a JSON snapshot of all visible AT-SPI elements on the current
+    desktop, including nested labels and text, with absolute screen
+    coordinates and occlusion handled via hit-testing.
+    
+    This is a cleaner, less noisy alternative to /accessibility that:
+    - Returns flat JSON instead of verbose XML
+    - Properly handles occlusion using GetAccessibleAtPoint
+    - Only includes elements that are actually visible on screen
+    """
+    os_name: str = platform.system()
+    
+    if os_name != "Linux":
+        return jsonify({"error": "accessibility_minimal is only implemented for Linux"}), 500
+    
+    try:
+        desktop: Accessible = pyatspi.Registry.getDesktop(0)
+    except Exception as e:
+        return jsonify({"error": f"Failed to get desktop: {e}"}), 500
+
+    # Screen size from desktop component extents
+    try:
+        desktop_comp: Component = desktop.queryComponent()
+        dx, dy, dw, dh = desktop_comp.getExtents(0)
+    except Exception:
+        dx = dy = 0
+        dw = dh = 0
+
+    # Collect candidates from all apps under the desktop
+    candidates = []
+    try:
+        for app_node in desktop:
+            candidates.extend(_collect_all_visible_elements_minimal(app_node))
+    except Exception as e:
+        logger.error(f"Error during AT-SPI traversal: {e}")
+
+    visible = _filter_visible_elements_minimal(desktop, candidates)
+
+    # If we don't have valid screen width/height, compute bounds from elements
+    if dw <= 0 or dh <= 0 and visible:
+        min_x = min(e["bounds"]["x"] for e in visible)
+        min_y = min(e["bounds"]["y"] for e in visible)
+        max_x = max(e["bounds"]["x"] + e["bounds"]["w"] for e in visible)
+        max_y = max(e["bounds"]["y"] + e["bounds"]["h"] for e in visible)
+        dx, dy = min_x, min_y
+        dw, dh = max_x - min_x, max_y - min_y
+
+    payload = {
+        "screen": {
+            "x": dx,
+            "y": dy,
+            "width": dw,
+            "height": dh,
+        },
+        "elements": visible,
+    }
+
+    return jsonify(payload)
+
+
 @app.route('/screen_size', methods=['POST'])
 def get_screen_size():
     if platform_name == "Linux":

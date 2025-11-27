@@ -11,6 +11,13 @@ NAMESPACES = {
     'val': "https://accessibility.ubuntu.example.org/ns/value"
 }
 
+# UI element types that are typically stacked vertically in application windows
+# When these siblings share the same Y coordinate, they should be stacked
+STACKABLE_CONTAINER_TYPES = {
+    'menu-bar', 'tool-bar', 'panel', 'toolbar', 'menubar', 
+    'status-bar', 'statusbar', 'filler', 'scroll-pane'
+}
+
 def _register_namespaces():
     """Registers namespaces to prevent parsing errors."""
     for prefix, uri in NAMESPACES.items():
@@ -32,6 +39,138 @@ def _parse_coords(coord_str):
         return int(float(parts[0])), int(float(parts[1]))
     except:
         return 0, 0
+
+
+def _compute_coordinate_corrections(root: ET.Element, parent_map: Dict[ET.Element, ET.Element]) -> Dict[ET.Element, int]:
+    """
+    Computes Y-coordinate corrections for elements with inconsistent coordinates.
+    
+    Some accessibility trees (especially LibreOffice) have coordinate inconsistencies where:
+    1. A child element's Y coordinate is less than its parent's Y coordinate
+    2. Sibling containers share the same Y coordinate but should be stacked
+    
+    This function detects such cases and computes the offset needed to correct them.
+    
+    Args:
+        root: Root element of the accessibility tree
+        parent_map: Dictionary mapping child elements to their parents
+        
+    Returns:
+        Dictionary mapping elements to their Y offset correction
+    """
+    offsets: Dict[ET.Element, int] = {}
+    
+    # Pass 1: Detect parent-child coordinate inconsistencies
+    # When a child's Y is less than parent's Y, the child's coordinates are likely
+    # relative to some ancestor, not absolute screen coordinates
+    for elem in root.iter():
+        pos_str = _get_attr(elem, 'screencoord')
+        if not pos_str:
+            continue
+            
+        x, y = _parse_coords(pos_str)
+        
+        # Check if parent has coordinates
+        parent = parent_map.get(elem)
+        if parent is None:
+            continue
+            
+        parent_pos_str = _get_attr(parent, 'screencoord')
+        if not parent_pos_str:
+            continue
+            
+        parent_x, parent_y = _parse_coords(parent_pos_str)
+        
+        # If child's Y is less than parent's Y, there's a coordinate inconsistency
+        # The child's coordinates might be relative to a different ancestor
+        if y < parent_y:
+            # Calculate the offset needed to correct this
+            # The offset is the difference between parent's Y and child's reported Y
+            offset = parent_y - y
+            offsets[elem] = offset
+    
+    # Pass 2: Propagate offsets to descendants
+    # When a container has an offset, all its children need the same offset
+    elements_with_offsets = list(offsets.keys())
+    for elem in elements_with_offsets:
+        offset = offsets[elem]
+        for descendant in elem.iter():
+            if descendant != elem:
+                # Add offset (don't overwrite if already has one from pass 1)
+                if descendant not in offsets:
+                    offsets[descendant] = offset
+                # If descendant already has an offset from pass 1, we need to be careful
+                # The descendant's offset is relative to its own parent, so we add them
+                else:
+                    offsets[descendant] += offset
+    
+    # Pass 3: Detect sibling stacking issues
+    # When siblings share the same Y coordinate but should be stacked vertically
+    for parent_elem in root.iter():
+        # Get all visible children with coordinates
+        children_with_coords = []
+        for child in parent_elem:
+            tag = child.tag.split('}')[-1]
+            pos_str = _get_attr(child, 'screencoord')
+            size_str = _get_attr(child, 'size')
+            
+            if pos_str and size_str:
+                x, y = _parse_coords(pos_str)
+                w, h = _parse_coords(size_str)
+                
+                # Apply any existing offset
+                y += offsets.get(child, 0)
+                
+                # Only consider visible elements with height
+                visible = _get_attr(child, 'visible')
+                showing = _get_attr(child, 'showing')
+                if visible != 'false' and showing != 'false' and h > 0:
+                    children_with_coords.append({
+                        'elem': child,
+                        'tag': tag,
+                        'x': x,
+                        'y': y,
+                        'w': w,
+                        'h': h
+                    })
+        
+        if len(children_with_coords) < 2:
+            continue
+        
+        # Group children by their starting Y coordinate
+        y_groups = {}
+        for child_info in children_with_coords:
+            y = child_info['y']
+            if y not in y_groups:
+                y_groups[y] = []
+            y_groups[y].append(child_info)
+        
+        # For each group with multiple elements at the same Y, check if they should be stacked
+        for y_coord, group in y_groups.items():
+            if len(group) < 2:
+                continue
+            
+            # Check if these are stackable container types (menu-bar, tool-bar, etc.)
+            stackable_count = sum(1 for c in group if c['tag'] in STACKABLE_CONTAINER_TYPES)
+            
+            # If at least 2 stackable containers share the same Y, apply stacking correction
+            if stackable_count >= 2:
+                # Apply cumulative offset based on heights of preceding siblings
+                cumulative_offset = 0
+                for child_info in group:
+                    if child_info['tag'] in STACKABLE_CONTAINER_TYPES:
+                        if cumulative_offset > 0:
+                            # Add to existing offset
+                            current = offsets.get(child_info['elem'], 0)
+                            offsets[child_info['elem']] = current + cumulative_offset
+                            # Propagate to descendants
+                            for descendant in child_info['elem'].iter():
+                                if descendant != child_info['elem']:
+                                    desc_offset = offsets.get(descendant, 0)
+                                    offsets[descendant] = desc_offset + cumulative_offset
+                        cumulative_offset += child_info['h']
+    
+    return offsets
 
 
 def get_foreground_window(root: ET.Element) -> Optional[Dict[str, any]]:
@@ -234,6 +373,12 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
                 screen_w, screen_h = w, h
                 break
 
+    # Compute Y-offset corrections for coordinate inconsistencies
+    # This handles cases where:
+    # 1. A child's Y is less than parent's Y (coordinates relative to wrong ancestor)
+    # 2. Siblings share the same Y coordinate but should be stacked
+    y_offset_map = _compute_coordinate_corrections(root, parent_map)
+
     def _clamp01(v: float) -> float:
         if v < 0.0: return 0.0
         if v > 1.0: return 1.0
@@ -276,6 +421,12 @@ def simplify_accessibility_tree(xml_string, filter_occlusion: bool = True):
         size_str = _get_attr(node, 'size')
         x, y = _parse_coords(pos_str)
         w, h = _parse_coords(size_str)
+        
+        # Apply Y-offset correction for sibling stacking issues
+        # (e.g., menu-bar and tool-bar sharing the same Y coordinate)
+        y_offset = y_offset_map.get(node, 0)
+        if y_offset > 0:
+            y += y_offset
         
         # 4. ACTION & STATE
         actions = []
@@ -404,6 +555,12 @@ def get_actionable_centers(xml_string):
     except ET.ParseError:
         return []
 
+    # Build parent map for coordinate corrections
+    parent_map = {child: parent for parent in root.iter() for child in parent}
+    
+    # Compute Y-offset corrections for coordinate inconsistencies
+    y_offset_map = _compute_coordinate_corrections(root, parent_map)
+
     actionable_items = []
 
     def traverse(node):
@@ -428,6 +585,11 @@ def get_actionable_centers(xml_string):
         size_str = _get_attr(node, 'size')
         x, y = _parse_coords(pos_str)
         w, h = _parse_coords(size_str)
+        
+        # Apply Y-offset correction for sibling stacking issues
+        y_offset = y_offset_map.get(node, 0)
+        if y_offset > 0:
+            y += y_offset
 
         # Identify actionable items:
         # 1. Explicit actions (click/edit/select)
