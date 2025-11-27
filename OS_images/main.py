@@ -1177,13 +1177,19 @@ def get_accessibility_minimal():
     
     This is a cleaner, less noisy alternative to /accessibility that:
     - Returns flat JSON instead of verbose XML
-    - Properly handles occlusion using GetAccessibleAtPoint
+    - Properly handles occlusion using GetAccessibleAtPoint (optional)
     - Only includes elements that are actually visible on screen
+    
+    Query parameters:
+    - filter_occlusion: "true" (default) or "false" - whether to filter occluded elements
     """
     os_name: str = platform.system()
     
     if os_name != "Linux":
         return jsonify({"error": "accessibility_minimal is only implemented for Linux"}), 500
+    
+    # Check if occlusion filtering is requested (default: false for now since it's unreliable)
+    filter_occlusion = request.args.get('filter_occlusion', 'false').lower() == 'true'
     
     try:
         desktop: Accessible = pyatspi.Registry.getDesktop(0)
@@ -1206,10 +1212,15 @@ def get_accessibility_minimal():
     except Exception as e:
         logger.error(f"Error during AT-SPI traversal: {e}")
 
-    visible = _filter_visible_elements_minimal(desktop, candidates)
+    # Apply occlusion filtering if requested
+    if filter_occlusion:
+        visible = _filter_visible_elements_minimal(desktop, candidates)
+    else:
+        # Just remove the 'acc' key from all elements
+        visible = [{k: v for k, v in elem.items() if k != "acc"} for elem in candidates]
 
     # If we don't have valid screen width/height, compute bounds from elements
-    if dw <= 0 or dh <= 0 and visible:
+    if (dw <= 0 or dh <= 0) and visible:
         min_x = min(e["bounds"]["x"] for e in visible)
         min_y = min(e["bounds"]["y"] for e in visible)
         max_x = max(e["bounds"]["x"] + e["bounds"]["w"] for e in visible)
@@ -1225,6 +1236,8 @@ def get_accessibility_minimal():
             "height": dh,
         },
         "elements": visible,
+        "filter_occlusion": filter_occlusion,
+        "total_candidates": len(candidates),
     }
 
     return jsonify(payload)
