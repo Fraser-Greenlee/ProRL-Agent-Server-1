@@ -1507,16 +1507,19 @@ def get_accessibility_tree_nested():
         visible_windows.add(frame_node)
         windows_above.append(bounds)
     
-    def build_tree(node: Accessible, depth: int = 0, is_top_level: bool = False) -> dict | None:
+    def build_tree(node: Accessible, depth: int = 0) -> dict | None:
         """Recursively build a nested tree structure from an AT-SPI node."""
         if depth > max_depth:
             return None
         
-        if not _is_showing_minimal(node):
+        role = (node.getRoleName() or "").strip().lower()
+        
+        # Application nodes are containers - don't check _is_showing for them
+        # They often report as not showing even when their children are visible
+        if role != "application" and not _is_showing_minimal(node):
             return None
         
         # Check if this is a top-level window that should be filtered
-        role = (node.getRoleName() or "").strip().lower()
         if filter_occluded and role in ("frame", "dialog", "window", "alert") and depth > 0:
             if node not in visible_windows:
                 return None
