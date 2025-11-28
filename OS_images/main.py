@@ -2055,7 +2055,7 @@ def get_accessibility_tree_nested():
                     elem["selected"] = True
             
             # For text/entry fields, mark if editable
-            if role in ('text', 'entry', 'combo box', 'spin button', 'password text'):
+            if role in ('text', 'entry', 'combo box', 'spin button', 'password text', 'paragraph'):
                 if state.contains(pyatspi.STATE_EDITABLE):
                     elem["editable"] = True
         except Exception:
@@ -2193,6 +2193,39 @@ def get_accessibility_tree_nested():
                     return False
             return True
         
+        # Pre-collect cell editing panels (panels named "Cell X#" with editable paragraphs)
+        # These are overlay panels that appear when editing a spreadsheet cell
+        cell_editing_panels = {}  # Maps cell name (e.g., "A1") to editing content
+        
+        def collect_cell_editing_panels(node):
+            """Recursively collect cell editing panels from the tree."""
+            role = node.get('role', '')
+            name = node.get('name', '')
+            
+            # Check if this is a cell editing panel (pattern: "Cell A1", "Cell B2", etc.)
+            if role == 'panel' and name and name.startswith('Cell '):
+                cell_name = name[5:]  # Extract "A1" from "Cell A1"
+                # Look for editable paragraph inside
+                for child in node.get('children', []):
+                    if child.get('role') == 'paragraph':
+                        para_text = child.get('text', '')
+                        para_bounds = child.get('bounds')
+                        if para_text or child.get('editable'):
+                            cell_editing_panels[cell_name] = {
+                                'text': para_text,
+                                'bounds': para_bounds,
+                                'editable': child.get('editable', False),
+                                'name': child.get('name', ''),
+                            }
+                            break
+            
+            for child in node.get('children', []):
+                collect_cell_editing_panels(child)
+        
+        # Collect editing panels from all apps
+        for app in apps:
+            collect_cell_editing_panels(app)
+        
         def extract_actionable(node, results=None, parent_is_container=False):
             if results is None:
                 results = []
@@ -2308,6 +2341,14 @@ def get_accessibility_tree_nested():
                             # Include text selection info
                             if child.get('selection'):
                                 item['selection'] = child['selection']
+                            
+                            # For table cells, check if there's an associated editing panel
+                            if child_role == 'table cell' and child_name in cell_editing_panels:
+                                editing = cell_editing_panels[child_name]
+                                if editing.get('text'):
+                                    item['editing'] = editing['text']
+                                    item['editable'] = True
+                            
                             items.append(item)
                     elif child_role in CONTAINER_WITH_ITEMS and is_valid_bounds(child_bounds):
                         # Nested container (e.g., table inside scroll pane, or submenu inside menu)
@@ -2527,8 +2568,10 @@ def get_accessibility_tree_nested():
                 if node.get('max_value') is not None:
                     elem['max_value'] = node['max_value']
                 results.append(elem)
-            # Include content roles if they have substantial text (>20 chars)
-            elif role in CONTENT_ROLES and text and len(text) > 20:
+            # Include content roles if they have text content
+            # Previously filtered by len(text) > 20 but this was too arbitrary
+            # Now include all text content - the agent can decide what's relevant
+            elif role in CONTENT_ROLES and text:
                 elem = {
                     'role': role,
                     'name': name,
@@ -2642,6 +2685,10 @@ def get_accessibility_tree_nested():
                         # Add editable attribute for text fields
                         if elem.get('editable'):
                             attrs.append('editable="true"')
+                        # Add editing content for cells being edited
+                        if elem.get('editing'):
+                            editing_text = escape_xml(elem['editing'])
+                            attrs.append(f'editing="{editing_text}"')
                         # Add value for scroll bars/sliders
                         if elem.get('value') is not None:
                             attrs.append(f'value="{elem["value"]}"')

@@ -864,6 +864,7 @@ What specific sub-goal would you like to achieve next based on the visible eleme
             List of action dictionaries, or None if failed
         """
         logger.info(f"Generating action for goal: {goal}")
+        final_message = ""
         
         # Add cursor position info
         cursor_info = state.get('cursor_position', {})
@@ -911,6 +912,7 @@ Select the appropriate action using the osworld tool."""
                 if not tool_calls:
                     # No more tool calls - final answer reached
                     logger.info(f"=== FINAL ANSWER === {response.output_text}")
+                    final_message = f"     >>> final message for this goal: {response.output_text}"
                     break
                 
                 logger.info(f"=== TOOL LOOP {loop} === {len(tool_calls)} tool calls")
@@ -989,6 +991,7 @@ Select the appropriate action using the osworld tool."""
                     })
                 
                 if not next_inputs:
+                    final_message = f"     >>> final message for this goal: tried many times to achieve the goal, but failed"
                     break
                 
                 # Continue conversation with previous_response_id
@@ -1013,10 +1016,10 @@ Select the appropriate action using the osworld tool."""
                     break
             
             if all_actions:
-                return state
+                return state, final_message
             else:
                 logger.warning("No actions generated")
-                return state
+                return state, final_message
         
         except Exception as e:
             logger.error(f"Error generating action: {e}")
@@ -1158,11 +1161,11 @@ Select the appropriate action using the osworld tool."""
                 logger.info("Agent decided to stop or failed to generate goal")
                 break
             
-            # Add goal to history
-            historical_goals.append(goal)
-            
             # Step 2: Generate action for the goal
-            state = self.generate_action(state, goal, trajectory['steps'], trajectory_id, runtime)
+            state, final_message = self.generate_action(state, goal, trajectory['steps'], trajectory_id, runtime)
+
+            # Add goal to history
+            historical_goals.append(f"{goal}\n{final_message}")
             
             # Check if generate_action failed (returned None)
             if state is None:
