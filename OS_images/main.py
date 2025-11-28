@@ -1095,9 +1095,9 @@ def _collect_all_visible_elements_minimal(root: Accessible, max_depth: int = 40)
             })
 
         # Recurse into children
+        # Use Python iterator instead of getChildAtIndex for better AT-SPI cache handling
         try:
-            for i in range(node.childCount):
-                child = node.getChildAtIndex(i)
+            for child in node:
                 if child:
                     walk(child, depth + 1)
         except Exception:
@@ -1141,9 +1141,9 @@ def _element_visible_at_center_minimal(desktop_comp: Component, elem: dict) -> b
         n = stack.pop()
         if n == hit:
             return True
+        # Use Python iterator instead of getChildAtIndex for better AT-SPI cache handling
         try:
-            for i in range(n.childCount):
-                ch = n.getChildAtIndex(i)
+            for ch in n:
                 if ch:
                     stack.append(ch)
         except Exception:
@@ -1402,9 +1402,9 @@ def get_accessibility_tree_nested():
             return []
         
         windows = []
+        # Use Python iterator instead of getChildAtIndex for better AT-SPI cache handling
         try:
-            for i in range(app_node.childCount):
-                child = app_node.getChildAtIndex(i)
+            for child in app_node:
                 if child:
                     role = (child.getRoleName() or "").strip().lower()
                     if role in ("frame", "dialog", "window", "alert"):
@@ -1455,6 +1455,7 @@ def get_accessibility_tree_nested():
         app_name = (app_node.name or "").strip()
         app_name_norm = normalize_name(app_name)
         win_name_lower = (win_name or "").lower()[:50]
+        win_name_norm = normalize_name(win_name or "")
         role = (frame_node.getRoleName() or "").strip().lower()
         
         # Try to find matching X11 window
@@ -1469,6 +1470,16 @@ def get_accessibility_tree_nested():
                 if name and win_name_lower and (name in win_name_lower or win_name_lower in name):
                     return idx
                 # Otherwise, remember this as a potential match
+                if idx > best_match_idx:
+                    best_match_idx = idx
+            
+            # Also try matching by window title (for apps like soffice -> libreoffice-calc)
+            # Match if X11 window name matches AT-SPI window title
+            elif name and win_name_lower and (name in win_name_lower or win_name_lower in name):
+                if idx > best_match_idx:
+                    best_match_idx = idx
+            # Or if X11 class name appears in AT-SPI window title (e.g., "LibreOffice Calc" in title)
+            elif cls_norm and win_name_norm and (cls_norm in win_name_norm or win_name_norm in cls_norm):
                 if idx > best_match_idx:
                     best_match_idx = idx
         
@@ -1702,8 +1713,9 @@ def get_accessibility_tree_nested():
             children = build_calc_table_children(node, current_app, current_window)
         else:
             try:
-                for i in range(node.childCount):
-                    child = node.getChildAtIndex(i)
+                # Use Python iterator (enumerate) instead of getChildAtIndex
+                # The iterator triggers AT-SPI cache population which is needed for some apps like Chrome
+                for child in node:
                     if child:
                         child_tree = build_tree(child, depth + 1, in_calc, current_app, current_window)
                         if child_tree:
@@ -1908,7 +1920,8 @@ def get_accessibility_tree_nested():
             'link', 'menu item', 'check menu item', 'radio menu item',
             'entry', 'text', 'password text', 'spin button', 'combo box',
             'slider', 'scroll bar', 'list item', 'tree item', 'tab', 'page tab',
-            'menu', 'menu bar', 'tool bar', 'table cell', 'icon'
+            'menu', 'menu bar', 'tool bar', 'table cell', 'icon',
+            'frame', 'dialog', 'window'  # Include top-level windows so apps are visible even without children
         }
         # Roles that contain important content/context
         CONTENT_ROLES = {
