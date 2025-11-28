@@ -1518,13 +1518,75 @@ def get_accessibility_tree_nested():
         visible_windows.add(frame_node)
         windows_above.append(bounds)
     
-    def build_tree(node: Accessible, depth: int = 0) -> dict | None:
+    # LibreOffice Calc optimization constants
+    # Maximum column: 1024 if ver<=7.3 else 16384
+    # Maximum row: 1048576
+    CALC_MAX_COLUMN = 16384  # Use newer LibreOffice limit
+    CALC_MAX_ROW = 1048576
+    
+    def build_calc_table_children(table_node: Accessible) -> list:
+        """
+        Optimized traversal for LibreOffice Calc tables.
+        Only traverses visible cells instead of all 16384 columns × 1048576 rows.
+        """
+        children = []
+        index_base = 0
+        first_showing = False
+        column_base = None
+        
+        for r in range(CALC_MAX_ROW):
+            for clm in range(column_base or 0, CALC_MAX_COLUMN):
+                try:
+                    child_node = table_node[index_base + clm]
+                    if child_node is None:
+                        continue
+                    showing = child_node.getState().contains(pyatspi.STATE_SHOWING)
+                    if showing:
+                        # Build a minimal representation of the cell
+                        bounds = _get_bounds_minimal(child_node)
+                        if bounds:
+                            x, y, w, h = bounds
+                            cell_name = (child_node.name or "").strip()
+                            cell_text = _get_text_minimal(child_node)
+                            cell_role = (child_node.getRoleName() or "").strip().lower()
+                            
+                            cell_elem = {
+                                "role": cell_role,
+                                "name": cell_name,
+                                "bounds": {"x": x, "y": y, "w": w, "h": h},
+                                "center": {"x": x + w // 2, "y": y + h // 2},
+                            }
+                            if cell_text:
+                                cell_elem["text"] = cell_text
+                            children.append(cell_elem)
+                        
+                        if not first_showing:
+                            column_base = clm
+                            first_showing = True
+                    elif first_showing and column_base is not None or clm >= 500:
+                        # Stop after finding end of visible columns or safety limit
+                        break
+                except Exception:
+                    break
+            
+            if first_showing and clm == column_base or not first_showing and r >= 500:
+                # Stop after finding end of visible rows or safety limit
+                break
+            index_base += CALC_MAX_COLUMN
+        
+        return children
+    
+    def build_tree(node: Accessible, depth: int = 0, in_calc: bool = False) -> dict | None:
         """Recursively build a nested tree structure from an AT-SPI node."""
         if depth > max_depth:
             return None
         
         role = (node.getRoleName() or "").strip().lower()
         is_showing = _is_showing_minimal(node)
+        
+        # Detect LibreOffice Calc document
+        if role == "document spreadsheet":
+            in_calc = True
         
         # Check if this is a top-level window that should be filtered due to occlusion
         if filter_occluded and role in ("frame", "dialog", "window", "alert") and depth > 0:
@@ -1549,15 +1611,20 @@ def get_accessibility_tree_nested():
         # First, try to build children - this allows us to include parent nodes
         # that aren't "showing" themselves but have visible children
         children = []
-        try:
-            for i in range(node.childCount):
-                child = node.getChildAtIndex(i)
-                if child:
-                    child_tree = build_tree(child, depth + 1)
-                    if child_tree:
-                        children.append(child_tree)
-        except Exception:
-            pass
+        
+        # Special handling for LibreOffice Calc tables - use optimized traversal
+        if in_calc and role == "table":
+            children = build_calc_table_children(node)
+        else:
+            try:
+                for i in range(node.childCount):
+                    child = node.getChildAtIndex(i)
+                    if child:
+                        child_tree = build_tree(child, depth + 1, in_calc)
+                        if child_tree:
+                            children.append(child_tree)
+            except Exception:
+                pass
         
         # Now decide whether to include this node
         bounds = _get_bounds_minimal(node)
