@@ -1890,6 +1890,12 @@ def get_accessibility_tree_nested():
                     elem["checked"] = True
                 else:
                     elem["checked"] = False
+            
+            # For selectable items (list items, tree items), mark selected state
+            selectable_roles = {'list item', 'tree item', 'table cell', 'table row', 'menu item'}
+            if role in selectable_roles:
+                if state.contains(pyatspi.STATE_SELECTED):
+                    elem["selected"] = True
         except Exception:
             pass
         
@@ -1985,7 +1991,11 @@ def get_accessibility_tree_nested():
             'check box', 'slider', 'spin button'
         }
         
-        def extract_actionable(node, results=None):
+        # Container roles that should include their children (lists, tables, trees, etc.)
+        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane'}
+        ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon'}
+        
+        def extract_actionable(node, results=None, parent_is_container=False):
             if results is None:
                 results = []
             
@@ -1993,9 +2003,60 @@ def get_accessibility_tree_nested():
             name = node.get('name', '')
             text = node.get('text', '')
             bounds = node.get('bounds')
+            children = node.get('children', [])
+            
+            # Handle container elements (lists, tables, trees) - extract with their items nested
+            if role in CONTAINER_WITH_ITEMS and bounds:
+                # Collect items from this container
+                items = []
+                for child in children:
+                    child_role = child.get('role', '')
+                    if child_role in ITEM_ROLES:
+                        child_name = child.get('name', '')
+                        child_text = child.get('text', '')
+                        child_bounds = child.get('bounds')
+                        if child_bounds and (child_name or child_text):
+                            item = {
+                                'role': child_role,
+                                'name': child_name,
+                                'bounds': child_bounds,
+                                'center': child.get('center'),
+                            }
+                            if child_text and child_text != child_name:
+                                item['text'] = child_text
+                            if child.get('disabled'):
+                                item['disabled'] = True
+                            if 'checked' in child:
+                                item['checked'] = child['checked']
+                            # Check for selected state
+                            if child.get('selected'):
+                                item['selected'] = True
+                            items.append(item)
+                    else:
+                        # Recurse into non-item children
+                        extract_actionable(child, results, parent_is_container=True)
+                
+                # Only add the container if it has items
+                if items:
+                    container_elem = {
+                        'role': role,
+                        'name': name,
+                        'bounds': bounds,
+                        'center': node.get('center'),
+                        'items': items,
+                    }
+                    if node.get('app'):
+                        container_elem['app'] = node.get('app')
+                    results.append(container_elem)
+                return results
+            
+            # Skip individual list/tree items if they'll be handled by their parent container
+            # (but only if we're not already inside a container that's collecting them)
+            if role in ITEM_ROLES and not parent_is_container:
+                # Check if this item has a parent container - if not, include it individually
+                pass  # Fall through to normal handling
             
             # Include if it's an actionable role with name or text
-            if role in ACTIONABLE_ROLES and (name or text):
                 elem = {
                     'role': role,
                     'name': name,
@@ -2049,8 +2110,8 @@ def get_accessibility_tree_nested():
                     elem['disabled'] = True
                 results.append(elem)
             
-            for child in node.get('children', []):
-                extract_actionable(child, results)
+            for child in children:
+                extract_actionable(child, results, parent_is_container=False)
             
             return results
         
@@ -2097,51 +2158,66 @@ def get_accessibility_tree_nested():
             for app_name, elements in by_app.items():
                 xml_parts.append(f'  <app name="{escape_xml(app_name)}">')
                 for elem in elements:
-                    role = escape_xml(elem.get('role', ''))
-                    name = escape_xml(elem.get('name', ''))
-                    text = escape_xml(elem.get('text', ''))
-                    bounds = elem.get('bounds', {})
-                    center = elem.get('center', {})
+                    def format_element_xml(elem, indent='    '):
+                        """Format a single element as XML, with nested items if present."""
+                        role = escape_xml(elem.get('role', ''))
+                        name = escape_xml(elem.get('name', ''))
+                        text = escape_xml(elem.get('text', ''))
+                        bounds = elem.get('bounds', {})
+                        center = elem.get('center', {})
+                        items = elem.get('items', [])
+                        
+                        # Format bounds as box attribute [x,y,w,h] normalized to 0-1
+                        if bounds and dw > 0 and dh > 0:
+                            bx = bounds.get('x', 0) / dw
+                            by = bounds.get('y', 0) / dh
+                            bw = bounds.get('w', 0) / dw
+                            bh = bounds.get('h', 0) / dh
+                            box_attr = f'box="[{bx:.3f},{by:.3f},{bw:.3f},{bh:.3f}]"'
+                        else:
+                            box_attr = ''
+                        
+                        # Format center as normalized coordinates
+                        if center and dw > 0 and dh > 0:
+                            cx = center.get('x', 0) / dw
+                            cy = center.get('y', 0) / dh
+                            center_attr = f'center="[{cx:.3f},{cy:.3f}]"'
+                        else:
+                            center_attr = ''
+                        
+                        # Build element tag
+                        attrs = []
+                        if name:
+                            attrs.append(f'name="{name}"')
+                        if box_attr:
+                            attrs.append(box_attr)
+                        if center_attr:
+                            attrs.append(center_attr)
+                        # Add disabled attribute if element is disabled
+                        if elem.get('disabled'):
+                            attrs.append('disabled="true"')
+                        # Add checked attribute for checkboxes/radio buttons
+                        if 'checked' in elem:
+                            attrs.append(f'checked="{str(elem["checked"]).lower()}"')
+                        # Add selected attribute for list items
+                        if elem.get('selected'):
+                            attrs.append('selected="true"')
+                        
+                        attr_str = ' '.join(attrs)
+                        
+                        # If this element has nested items (list, table, tree)
+                        if items:
+                            lines = [f'{indent}<{role} {attr_str}>']
+                            for item in items:
+                                lines.append(format_element_xml(item, indent + '  '))
+                            lines.append(f'{indent}</{role}>')
+                            return '\n'.join(lines)
+                        elif text and text != name:
+                            return f'{indent}<{role} {attr_str}>{text}</{role}>'
+                        else:
+                            return f'{indent}<{role} {attr_str} />'
                     
-                    # Format bounds as box attribute [x,y,w,h] normalized to 0-1
-                    if bounds and dw > 0 and dh > 0:
-                        bx = bounds.get('x', 0) / dw
-                        by = bounds.get('y', 0) / dh
-                        bw = bounds.get('w', 0) / dw
-                        bh = bounds.get('h', 0) / dh
-                        box_attr = f'box="[{bx:.3f},{by:.3f},{bw:.3f},{bh:.3f}]"'
-                    else:
-                        box_attr = ''
-                    
-                    # Format center as normalized coordinates
-                    if center and dw > 0 and dh > 0:
-                        cx = center.get('x', 0) / dw
-                        cy = center.get('y', 0) / dh
-                        center_attr = f'center="[{cx:.3f},{cy:.3f}]"'
-                    else:
-                        center_attr = ''
-                    
-                    # Build element tag
-                    attrs = []
-                    if name:
-                        attrs.append(f'name="{name}"')
-                    if box_attr:
-                        attrs.append(box_attr)
-                    if center_attr:
-                        attrs.append(center_attr)
-                    # Add disabled attribute if element is disabled
-                    if elem.get('disabled'):
-                        attrs.append('disabled="true"')
-                    # Add checked attribute for checkboxes/radio buttons
-                    if 'checked' in elem:
-                        attrs.append(f'checked="{str(elem["checked"]).lower()}"')
-                    
-                    attr_str = ' '.join(attrs)
-                    
-                    if text and text != name:
-                        xml_parts.append(f'    <{role} {attr_str}>{text}</{role}>')
-                    else:
-                        xml_parts.append(f'    <{role} {attr_str} />')
+                    xml_parts.append(format_element_xml(elem))
                 
                 xml_parts.append('  </app>')
             xml_parts.append('</desktop>')
