@@ -1527,52 +1527,86 @@ def get_accessibility_tree_nested():
     def build_calc_table_children(table_node: Accessible) -> list:
         """
         Optimized traversal for LibreOffice Calc tables.
-        Only traverses visible cells instead of all 16384 columns × 1048576 rows.
+        Uses the table interface to correctly access cells by row/column coordinates.
+        Only traverses visible cells instead of all columns × rows.
         """
         children = []
-        index_base = 0
-        first_showing = False
-        column_base = None
         
-        for r in range(CALC_MAX_ROW):
-            for clm in range(column_base or 0, CALC_MAX_COLUMN):
+        try:
+            table_iface = table_node.queryTable()
+            n_rows = min(table_iface.nRows, CALC_MAX_ROW)
+            n_cols = min(table_iface.nColumns, CALC_MAX_COLUMN)
+        except Exception:
+            # Fall back to old method if table interface not available
+            return children
+        
+        first_showing_row = None
+        last_showing_row = None
+        first_showing_col = None
+        last_showing_col = None
+        
+        # First pass: find the visible range by checking edges
+        # Check first 100 rows to find visible range
+        for row in range(min(100, n_rows)):
+            for col in range(min(50, n_cols)):
                 try:
-                    child_node = table_node[index_base + clm]
-                    if child_node is None:
-                        continue
-                    showing = child_node.getState().contains(pyatspi.STATE_SHOWING)
-                    if showing:
-                        # Build a minimal representation of the cell
-                        bounds = _get_bounds_minimal(child_node)
-                        if bounds:
-                            x, y, w, h = bounds
-                            cell_name = (child_node.name or "").strip()
-                            cell_text = _get_text_minimal(child_node)
-                            cell_role = (child_node.getRoleName() or "").strip().lower()
-                            
-                            cell_elem = {
-                                "role": cell_role,
-                                "name": cell_name,
-                                "bounds": {"x": x, "y": y, "w": w, "h": h},
-                                "center": {"x": x + w // 2, "y": y + h // 2},
-                            }
-                            if cell_text:
-                                cell_elem["text"] = cell_text
-                            children.append(cell_elem)
-                        
-                        if not first_showing:
-                            column_base = clm
-                            first_showing = True
-                    elif first_showing and column_base is not None or clm >= 500:
-                        # Stop after finding end of visible columns or safety limit
-                        break
+                    cell = table_iface.getAccessibleAt(row, col)
+                    if cell and cell.getState().contains(pyatspi.STATE_SHOWING):
+                        if first_showing_row is None:
+                            first_showing_row = row
+                        last_showing_row = row
+                        if first_showing_col is None or col < first_showing_col:
+                            first_showing_col = col
+                        if last_showing_col is None or col > last_showing_col:
+                            last_showing_col = col
                 except Exception:
-                    break
+                    pass
+        
+        # If no visible cells found, return empty
+        if first_showing_row is None:
+            return children
+        
+        # Second pass: collect all visible cells in the detected range
+        # Add some buffer to catch all visible cells
+        start_row = max(0, first_showing_row)
+        end_row = min(n_rows, last_showing_row + 50)  # Buffer for scrolling
+        start_col = max(0, first_showing_col)
+        end_col = min(n_cols, last_showing_col + 10)  # Buffer for columns
+        
+        for row in range(start_row, end_row):
+            row_has_visible = False
+            for col in range(start_col, end_col):
+                try:
+                    cell = table_iface.getAccessibleAt(row, col)
+                    if cell is None:
+                        continue
+                    
+                    if not cell.getState().contains(pyatspi.STATE_SHOWING):
+                        continue
+                    
+                    row_has_visible = True
+                    bounds = _get_bounds_minimal(cell)
+                    if bounds:
+                        x, y, w, h = bounds
+                        cell_name = (cell.name or "").strip()
+                        cell_text = _get_text_minimal(cell)
+                        cell_role = (cell.getRoleName() or "").strip().lower()
+                        
+                        cell_elem = {
+                            "role": cell_role,
+                            "name": cell_name,
+                            "bounds": {"x": x, "y": y, "w": w, "h": h},
+                            "center": {"x": x + w // 2, "y": y + h // 2},
+                        }
+                        if cell_text:
+                            cell_elem["text"] = cell_text
+                        children.append(cell_elem)
+                except Exception:
+                    pass
             
-            if first_showing and clm == column_base or not first_showing and r >= 500:
-                # Stop after finding end of visible rows or safety limit
+            # If we've found visible rows and this row has none, we might be past the visible area
+            if last_showing_row is not None and row > last_showing_row + 5 and not row_has_visible:
                 break
-            index_base += CALC_MAX_COLUMN
         
         return children
     
