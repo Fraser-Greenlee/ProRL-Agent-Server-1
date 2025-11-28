@@ -608,10 +608,10 @@ class SyntheticDataGenerator:
             raw_ast = ast_xml
         else:
             # Use JSON simplifier for Linux (new format)
-            simplified_ast_dict, (self.screen_width, self.screen_height) = simplify_json_accessibility_tree(ast_xml)
-            # Convert to XML string for consistency with existing code
-            simplified_ast, _ = simplify_json_to_xml(simplified_ast_dict)
-            raw_ast = json.dumps(ast_xml)  # Store JSON as string for raw_ast
+            simplified_ast = ast_xml
+            raw_ast = ast_xml
+            self.screen_width = None
+            self.screen_height = None
         
         # Normalize cursor position to [0, 1] range like other coordinates
         width = self.screen_width if self.screen_width is not None else self.default_screen_width

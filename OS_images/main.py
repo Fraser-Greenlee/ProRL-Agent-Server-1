@@ -905,7 +905,8 @@ def get_accessibility_tree():
 
     # AT-SPI works for KDE as well
     if os_name == "Linux":
-        return get_accessibility_tree_nested()
+        output = get_accessibility_tree_nested()
+        return jsonify({"AT": output})
         # global libreoffice_version_tuple
         # libreoffice_version_tuple = _get_libreoffice_version()
 

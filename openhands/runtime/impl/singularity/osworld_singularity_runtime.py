@@ -614,11 +614,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             )
             if response.status_code == 200:
                 result = response.json()
-                if 'AT' in result:
-                    at = result['AT']
-                    return at
-                else:
-                    return result
+                return result['AT']
         except Exception as e:
             self.log('error', f'Failed to get VM accessibility tree: {e}')
             return None
