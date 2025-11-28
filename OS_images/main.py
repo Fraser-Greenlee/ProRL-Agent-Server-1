@@ -1777,9 +1777,19 @@ def get_accessibility_tree_nested():
                 if parent:
                     parent_role = (parent.getRoleName() or "").strip().lower()
                     if parent_role == "menu":
-                        # Check if this parent menu is expanded
-                        if not _is_menu_expanded(parent):
-                            return None
+                        # Check the grandparent to determine the context
+                        grandparent = parent.parent
+                        grandparent_role = (grandparent.getRoleName() or "").strip().lower() if grandparent else ""
+                        
+                        if grandparent_role == "combo box":
+                            # Combo box dropdown - include if the menu has STATE_SHOWING
+                            parent_state = parent.getState()
+                            if not parent_state.contains(pyatspi.STATE_SHOWING):
+                                return None
+                        elif grandparent_role in ("menu bar", "menu"):
+                            # Menu bar or submenu - use selection-based check
+                            if not _is_menu_expanded(parent):
+                                return None
             except Exception:
                 pass
         
@@ -1792,6 +1802,11 @@ def get_accessibility_tree_nested():
                     if parent_role == "menu":
                         # This is a submenu - only include if parent is expanded
                         if not _is_menu_expanded(parent):
+                            return None
+                    elif parent_role == "combo box":
+                        # Combo box dropdown menu - include if it has STATE_SHOWING
+                        state = node.getState()
+                        if not state.contains(pyatspi.STATE_SHOWING):
                             return None
             except Exception:
                 pass
@@ -2156,7 +2171,7 @@ def get_accessibility_tree_nested():
         }
         
         # Container roles that should include their children (lists, tables, trees, menus, etc.)
-        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane', 'document text', 'document frame', 'document', 'scroll pane', 'document presentation', 'menu', 'menu bar'}
+        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane', 'document text', 'document frame', 'document', 'scroll pane', 'document presentation', 'menu', 'menu bar', 'combo box', 'dialog', 'alert', 'file chooser'}
         ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon', 'paragraph', 'shape', 'panel', 'menu item', 'check menu item', 'radio menu item'}
         # Menu roles that can be both containers AND items (submenus)
         MENU_ROLES = {'menu', 'menu item', 'check menu item', 'radio menu item'}
@@ -2213,8 +2228,9 @@ def get_accessibility_tree_nested():
                         if child.get('value') is not None:
                             scrollbar['value'] = child['value']
                         sibling_elements.append(scrollbar)
-                    # Handle menus inside menu bar or other menus (submenus)
-                    elif child_role == 'menu' and is_valid_bounds(child_bounds) and child_name:
+                    # Handle menus inside menu bar, other menus (submenus), or combo boxes (dropdowns)
+                    # Note: combo box dropdown menus often have empty names, so we don't require child_name for combo boxes
+                    elif child_role == 'menu' and is_valid_bounds(child_bounds) and (child_name or role == 'combo box'):
                         # Extract menu items from this menu
                         menu_items = []
                         for gc in child.get('children', []):
@@ -2363,6 +2379,64 @@ def get_accessibility_tree_nested():
                                 'items': nested_items,
                             }
                             nested_containers.append(nested_container)
+                    # For dialogs, recursively collect ALL actionable elements from descendants
+                    elif role in ('dialog', 'alert', 'file chooser'):
+                        # Recursively collect actionable elements from this child
+                        def collect_dialog_items(node, collected, in_combo=False):
+                            n_role = node.get('role', '')
+                            n_name = node.get('name', '')
+                            n_text = node.get('text', '')
+                            n_bounds = node.get('bounds')
+                            
+                            # Skip menu items inside combo boxes (they're already nested)
+                            if in_combo and n_role in ('menu', 'menu item'):
+                                return
+                            
+                            if n_role in ACTIONABLE_ROLES and is_valid_bounds(n_bounds) and (n_name or n_text or n_role in INTERACTIVE_ROLES):
+                                display_name = n_name or n_text or f'[{n_role}]'
+                                item = {
+                                    'role': n_role,
+                                    'name': display_name,
+                                    'bounds': n_bounds,
+                                    'center': node.get('center'),
+                                }
+                                if n_text and n_text != display_name:
+                                    item['text'] = n_text
+                                if node.get('disabled'):
+                                    item['disabled'] = True
+                                if 'checked' in node:
+                                    item['checked'] = node['checked']
+                                if node.get('editable'):
+                                    item['editable'] = True
+                                # For combo boxes with dropdown, include their children
+                                if n_role == 'combo box' and node.get('children'):
+                                    combo_items = []
+                                    for gc in node.get('children', []):
+                                        if gc.get('role') == 'menu':
+                                            for mi in gc.get('children', []):
+                                                mi_name = mi.get('name', '')
+                                                mi_bounds = mi.get('bounds')
+                                                if mi_name and is_valid_bounds(mi_bounds):
+                                                    combo_items.append({
+                                                        'role': mi.get('role', 'menu item'),
+                                                        'name': mi_name,
+                                                        'bounds': mi_bounds,
+                                                        'center': mi.get('center'),
+                                                    })
+                                    if combo_items:
+                                        item['items'] = combo_items
+                                collected.append(item)
+                                
+                                # If this is a combo box, don't recurse into its children
+                                # (menu items are already extracted above)
+                                if n_role == 'combo box':
+                                    return
+                            
+                            # Recurse into children
+                            for gc in node.get('children', []):
+                                collect_dialog_items(gc, collected, in_combo=(n_role == 'combo box'))
+                        
+                        collect_dialog_items(child, items)
                     else:
                         # Recurse into non-item children
                         extract_actionable(child, results, parent_is_container=True)
