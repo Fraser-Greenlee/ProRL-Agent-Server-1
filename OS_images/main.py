@@ -1032,6 +1032,25 @@ def _get_text_minimal(node: Accessible) -> str:
         return ""
 
 
+def _get_text_selection(node: Accessible) -> dict:
+    """Get text selection info if any."""
+    try:
+        txt: ATText = node.queryText()
+        n_selections = txt.getNSelections()
+        if n_selections > 0:
+            start, end = txt.getSelection(0)
+            if start >= 0 and end > start:
+                selected_text = txt.getText(start, end)
+                return {
+                    "start": start,
+                    "end": end,
+                    "text": selected_text.strip()
+                }
+    except Exception:
+        pass
+    return None
+
+
 def _get_window_context_minimal(node: Accessible):
     """Walk up ancestors to find the application name and window title."""
     app_name = None
@@ -1767,8 +1786,13 @@ def get_accessibility_tree_nested():
                     description = description.split('\n')[0].strip()
             except Exception:
                 pass
+        text = _get_text_minimal(node)
+        
         # If still no name/description, try parent's description (e.g., LibreOffice sidebar buttons)
-        if not name and not description:
+        # BUT: Don't use parent description for content roles (paragraph, section, etc.)
+        # because for documents, we want to show the actual text content, not parent's description
+        content_roles = {'paragraph', 'section', 'heading', 'block quote', 'article', 'document text', 'document frame'}
+        if not name and not description and role not in content_roles:
             try:
                 parent = node.parent
                 if parent:
@@ -1777,8 +1801,12 @@ def get_accessibility_tree_nested():
                         description = parent_desc
             except Exception:
                 pass
-        text = _get_text_minimal(node)
         actions = _get_actions_minimal(node)
+        
+        # Get text selection for content roles
+        selection = None
+        if role in content_roles:
+            selection = _get_text_selection(node)
         
         # Check if this is a "useless" container node:
         # - It's a container role (panel, filler, section)
@@ -1796,7 +1824,17 @@ def get_accessibility_tree_nested():
                 # Flatten: return the single child directly
                 return children[0]
             # Multiple children - filter out empty containers from children
-            non_empty_children = [c for c in children if c.get('children') or c.get('name') or c.get('text') or c.get('actions')]
+            # Keep children that have: children, name, text, actions, OR valid bounds (like scroll bars)
+            def is_meaningful_child(c):
+                if c.get('children') or c.get('name') or c.get('text') or c.get('actions'):
+                    return True
+                # Also keep children with valid bounds that are interactive (scroll bars, sliders, etc.)
+                c_role = c.get('role', '')
+                c_bounds = c.get('bounds', {})
+                if c_role in ('scroll bar', 'slider', 'spin button') and c_bounds.get('w', 0) > 0:
+                    return True
+                return False
+            non_empty_children = [c for c in children if is_meaningful_child(c)]
             if len(non_empty_children) == 0:
                 return None
             elif len(non_empty_children) == 1:
@@ -1896,8 +1934,28 @@ def get_accessibility_tree_nested():
             if role in selectable_roles:
                 if state.contains(pyatspi.STATE_SELECTED):
                     elem["selected"] = True
+            
+            # For text/entry fields, mark if editable
+            if role in ('text', 'entry', 'combo box', 'spin button', 'password text'):
+                if state.contains(pyatspi.STATE_EDITABLE):
+                    elem["editable"] = True
         except Exception:
             pass
+        
+        # For scroll bars and sliders, get the current value
+        if role in ('scroll bar', 'slider', 'spin button'):
+            try:
+                vi = node.queryValue()
+                if vi:
+                    elem["value"] = round(vi.currentValue, 2)
+                    elem["min_value"] = round(vi.minimumValue, 2)
+                    elem["max_value"] = round(vi.maximumValue, 2)
+            except Exception:
+                pass
+        
+        # Add text selection info for content roles
+        if selection:
+            elem["selection"] = selection
         
         # Add children (already built above)
         if children:
@@ -1988,12 +2046,27 @@ def get_accessibility_tree_nested():
         # Roles that are interactive even without names (media controls, etc.)
         INTERACTIVE_ROLES = {
             'push button', 'button', 'toggle button', 'check button', 'radio button',
-            'check box', 'slider', 'spin button'
+            'check box', 'slider', 'spin button', 'combo box', 'entry', 'text',
+            'scroll bar'
         }
         
         # Container roles that should include their children (lists, tables, trees, etc.)
-        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane'}
-        ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon'}
+        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane', 'document text', 'document frame', 'document'}
+        ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon', 'paragraph', 'section'}
+        
+        def is_valid_bounds(b):
+            """Check if bounds are valid (on-screen, positive coordinates)."""
+            if not b:
+                return False
+            x, y, w, h = b.get('x', 0), b.get('y', 0), b.get('w', 0), b.get('h', 0)
+            # Filter out invalid bounds (negative coords, zero size, or obviously offscreen)
+            if x < -1000 or y < -1000 or w <= 0 or h <= 0:
+                return False
+            # Filter out bounds that are way outside screen (normalized > 2.0 would be way off)
+            if dw > 0 and dh > 0:
+                if x / dw > 2.0 or y / dh > 2.0:
+                    return False
+            return True
         
         def extract_actionable(node, results=None, parent_is_container=False):
             if results is None:
@@ -2009,20 +2082,28 @@ def get_accessibility_tree_nested():
             if role in CONTAINER_WITH_ITEMS and bounds:
                 # Collect items from this container
                 items = []
+                
                 for child in children:
                     child_role = child.get('role', '')
                     if child_role in ITEM_ROLES:
                         child_name = child.get('name', '')
                         child_text = child.get('text', '')
                         child_bounds = child.get('bounds')
-                        if child_bounds and (child_name or child_text):
+                        # For paragraph/section, use text as the display content
+                        # Include if there's any text content (not just name) and valid bounds
+                        if is_valid_bounds(child_bounds) and (child_name or child_text):
+                            # For document content roles, prefer text over name
+                            display_name = child_name
+                            if child_role in ('paragraph', 'section') and child_text:
+                                display_name = child_text[:100]  # Truncate very long text
                             item = {
                                 'role': child_role,
-                                'name': child_name,
+                                'name': display_name,
                                 'bounds': child_bounds,
                                 'center': child.get('center'),
                             }
-                            if child_text and child_text != child_name:
+                            # Include full text if different from display name
+                            if child_text and child_text != display_name:
                                 item['text'] = child_text
                             if child.get('disabled'):
                                 item['disabled'] = True
@@ -2031,6 +2112,9 @@ def get_accessibility_tree_nested():
                             # Check for selected state
                             if child.get('selected'):
                                 item['selected'] = True
+                            # Include text selection info
+                            if child.get('selection'):
+                                item['selection'] = child['selection']
                             items.append(item)
                     else:
                         # Recurse into non-item children
@@ -2075,16 +2159,21 @@ def get_accessibility_tree_nested():
             # Include interactive controls even without names (e.g., VLC media buttons)
             # but only if they have valid bounds
             # Note: name may already include description from build_tree
-            elif role in INTERACTIVE_ROLES and bounds and bounds.get('w', 0) > 0 and bounds.get('h', 0) > 0:
-                # Use name (which may be from description), or role as last resort
-                display_name = name if name else f'[{role}]'
+            elif role in INTERACTIVE_ROLES and is_valid_bounds(bounds):
+                # For text/entry/combo box fields, use text content as display name if no name
+                # This makes dropdown values like "12 pt" show as the name
+                if role in ('text', 'entry', 'combo box') and text and not name:
+                    display_name = text[:50]  # Truncate long text
+                else:
+                    display_name = name if name else f'[{role}]'
                 elem = {
                     'role': role,
                     'name': display_name,
                     'bounds': bounds,
                     'center': node.get('center'),
                 }
-                if text:
+                # Include text only if different from display name
+                if text and text != display_name:
                     elem['text'] = text
                 if node.get('description') and node.get('description') != name:
                     elem['description'] = node.get('description')
@@ -2094,6 +2183,16 @@ def get_accessibility_tree_nested():
                     elem['disabled'] = True
                 if 'checked' in node:
                     elem['checked'] = node['checked']
+                # Mark editable fields
+                if node.get('editable'):
+                    elem['editable'] = True
+                # Include value for scroll bars/sliders
+                if node.get('value') is not None:
+                    elem['value'] = node['value']
+                if node.get('min_value') is not None:
+                    elem['min_value'] = node['min_value']
+                if node.get('max_value') is not None:
+                    elem['max_value'] = node['max_value']
                 results.append(elem)
             # Include content roles if they have substantial text (>20 chars)
             elif role in CONTENT_ROLES and text and len(text) > 20:
@@ -2202,6 +2301,17 @@ def get_accessibility_tree_nested():
                         # Add selected attribute for list items
                         if elem.get('selected'):
                             attrs.append('selected="true"')
+                        # Add selection info for text content
+                        if elem.get('selection'):
+                            sel = elem['selection']
+                            sel_text = escape_xml(sel.get('text', ''))
+                            attrs.append(f'selection="{sel_text}"')
+                        # Add editable attribute for text fields
+                        if elem.get('editable'):
+                            attrs.append('editable="true"')
+                        # Add value for scroll bars/sliders
+                        if elem.get('value') is not None:
+                            attrs.append(f'value="{elem["value"]}"')
                         
                         attr_str = ' '.join(attrs)
                         
