@@ -905,7 +905,18 @@ def get_accessibility_tree():
 
     # AT-SPI works for KDE as well
     if os_name == "Linux":
-        return get_accessibility_tree_nested()
+        # return get_accessibility_tree_nested()
+        global libreoffice_version_tuple
+        libreoffice_version_tuple = _get_libreoffice_version()
+
+        desktop: Accessible = pyatspi.Registry.getDesktop(0)
+        xml_node = lxml.etree.Element("desktop-frame", nsmap=_accessibility_ns_map_ubuntu)
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(_create_atspi_node, app_node, 2) for app_node in desktop]
+            for future in concurrent.futures.as_completed(futures):
+                xml_tree = future.result()
+                xml_node.append(xml_tree)
+        return jsonify({"AT": lxml.etree.tostring(xml_node, encoding="unicode")})
 
     elif os_name == "Windows":
         # Attention: Windows a11y tree is implemented to be read through `pywinauto` module, however,
@@ -1334,6 +1345,7 @@ def get_accessibility_tree_nested():
         - "center": Filter if window center is covered (strict)
         - "area": Filter if 90% of window area is covered (relaxed)
         - "active_only": Only show the active/focused window
+    - flat: If "true", return only actionable elements in a flat list (default: false)
     """
     os_name: str = platform.system()
     
@@ -1343,6 +1355,7 @@ def get_accessibility_tree_nested():
     max_depth = int(request.args.get('max_depth', '40'))
     filter_occluded = request.args.get('filter_occluded', 'true').lower() == 'true'
     occlusion_mode = request.args.get('occlusion_mode', 'center').lower()
+    flat_mode = request.args.get('flat', 'false').lower() == 'true'
     
     try:
         desktop: Accessible = pyatspi.Registry.getDesktop(0)
@@ -1610,6 +1623,19 @@ def get_accessibility_tree_nested():
         
         return children
     
+    # Roles that are pure containers with no semantic value - skip if unnamed
+    CONTAINER_ROLES = {'panel', 'filler', 'section', 'redundant object', 'unknown', 'scroll pane'}
+    # Roles that should always be skipped (decorative/structural only)
+    SKIP_ROLES = {'separator'}
+    # Generic actions that don't indicate meaningful interactivity
+    GENERIC_ACTIONS = {'doDefault', 'showContextMenu', 'click', 'press', 'release'}
+    
+    def has_meaningful_actions(actions: list) -> bool:
+        """Check if actions list contains non-generic actions."""
+        if not actions:
+            return False
+        return any(a not in GENERIC_ACTIONS for a in actions)
+    
     def build_tree(node: Accessible, depth: int = 0, in_calc: bool = False) -> dict | None:
         """Recursively build a nested tree structure from an AT-SPI node."""
         if depth > max_depth:
@@ -1618,12 +1644,18 @@ def get_accessibility_tree_nested():
         role = (node.getRoleName() or "").strip().lower()
         is_showing = _is_showing_minimal(node)
         
+        # Skip decorative/structural roles entirely
+        if role in SKIP_ROLES:
+            return None
+        
         # Detect LibreOffice Calc document
         if role == "document spreadsheet":
             in_calc = True
         
         # Check if this is a top-level window that should be filtered due to occlusion
-        if filter_occluded and role in ("frame", "dialog", "window", "alert") and depth > 0:
+        # Only apply to actual top-level windows (depth == 1, direct children of application)
+        # Not to internal frames used for layout (like Qt frames in VLC)
+        if filter_occluded and role in ("frame", "dialog", "window", "alert") and depth == 1:
             if node not in visible_windows:
                 # Window is occluded - check if it's an overlay app (gnome-shell, gjs)
                 # Overlay apps contain dock/panel UI and should always be included
@@ -1662,6 +1694,52 @@ def get_accessibility_tree_nested():
         
         # Now decide whether to include this node
         bounds = _get_bounds_minimal(node)
+        name = (node.name or "").strip()
+        # Use description as fallback for name (e.g., VLC media buttons have descriptions but no names)
+        description = ""
+        if not name:
+            try:
+                description = (node.description or "").strip()
+                # Take first line of description if multiline
+                if description and '\n' in description:
+                    description = description.split('\n')[0].strip()
+            except Exception:
+                pass
+        # If still no name/description, try parent's description (e.g., LibreOffice sidebar buttons)
+        if not name and not description:
+            try:
+                parent = node.parent
+                if parent:
+                    parent_desc = (parent.description or "").strip()
+                    if parent_desc:
+                        description = parent_desc
+            except Exception:
+                pass
+        text = _get_text_minimal(node)
+        actions = _get_actions_minimal(node)
+        
+        # Check if this is a "useless" container node:
+        # - It's a container role (panel, filler, section)
+        # - It has no name, no text, no description, and only generic actions
+        # - If it has exactly 1 child, just return that child (flatten)
+        # - If it has 0 children, skip it
+        # - If multiple children, keep as container
+        is_container = role in CONTAINER_ROLES
+        has_content = bool(name or description or text or has_meaningful_actions(actions))
+        
+        if is_container and not has_content:
+            if len(children) == 0:
+                return None
+            elif len(children) == 1:
+                # Flatten: return the single child directly
+                return children[0]
+            # Multiple children - filter out empty containers from children
+            non_empty_children = [c for c in children if c.get('children') or c.get('name') or c.get('text') or c.get('actions')]
+            if len(non_empty_children) == 0:
+                return None
+            elif len(non_empty_children) == 1:
+                return non_empty_children[0]
+            children = non_empty_children
         
         # If node is not showing and has no visible children, skip it
         # Exception: application nodes are containers and should be included if they have children
@@ -1671,24 +1749,29 @@ def get_accessibility_tree_nested():
         if bounds is None:
             # No bounds - only include if we have children
             if children:
+                # Skip unnamed containers with no bounds
+                if is_container and not has_content:
+                    # Just return children wrapped minimally
+                    if len(children) == 1:
+                        return children[0]
                 return {
                     "role": role,
-                    "name": (node.name or "").strip(),
+                    "name": name,
                     "children": children
                 }
             return None
         
         # Node has bounds - build full element
         x, y, w, h = bounds
-        text = _get_text_minimal(node)
-        name = (node.name or "").strip()
-        actions = _get_actions_minimal(node)
         app_name, window_title = _get_window_context_minimal(node)
+        
+        # Use name, or description as fallback
+        display_name = name or description
         
         # Build element data
         elem = {
             "role": role,
-            "name": name,
+            "name": display_name,
             "bounds": {"x": x, "y": y, "w": w, "h": h},
             "center": {"x": x + w // 2, "y": y + h // 2},
         }
@@ -1696,8 +1779,13 @@ def get_accessibility_tree_nested():
         # Only include optional fields if they have values
         if text:
             elem["text"] = text
-        if actions:
-            elem["actions"] = actions
+        # Include description separately if we have both name and description
+        if name and description and description != name:
+            elem["description"] = description
+        # Filter out generic actions to reduce noise
+        meaningful_actions = [a for a in actions if a not in GENERIC_ACTIONS]
+        if meaningful_actions:
+            elem["actions"] = meaningful_actions
         if app_name:
             elem["app"] = app_name
         if window_title:
@@ -1720,6 +1808,50 @@ def get_accessibility_tree_nested():
         
         return elem
     
+    def flatten_tree(node):
+        """Post-process to flatten chains of single-child containers."""
+        if not isinstance(node, dict):
+            return node
+        
+        children = node.get('children', [])
+        # Recursively flatten children first
+        children = [flatten_tree(c) for c in children if c is not None]
+        children = [c for c in children if c is not None]
+        
+        role = node.get('role', '')
+        name = node.get('name', '')
+        text = node.get('text', '')
+        actions = node.get('actions', [])
+        
+        # Check if this is a pure container with no semantic content
+        has_content = bool(name or text or actions)
+        
+        # For container roles (panel, section, filler, etc.), flatten aggressively
+        if role in CONTAINER_ROLES and not has_content:
+            # Filter out children that are empty containers
+            non_empty = []
+            for c in children:
+                c_role = c.get('role', '')
+                c_has_content = bool(c.get('name') or c.get('text') or c.get('actions'))
+                c_has_children = bool(c.get('children'))
+                if c_has_content or c_has_children or c_role not in CONTAINER_ROLES:
+                    non_empty.append(c)
+            
+            if len(non_empty) == 0:
+                return None
+            elif len(non_empty) == 1:
+                # Flatten: return the single meaningful child
+                return non_empty[0]
+            children = non_empty
+        
+        # Update children
+        if children:
+            node['children'] = children
+        elif 'children' in node:
+            del node['children']
+        
+        return node
+    
     # Build tree for each application under the desktop
     apps = []
     try:
@@ -1731,12 +1863,198 @@ def get_accessibility_tree_nested():
             
             app_tree = build_tree(app_node)
             if app_tree:
+                # Post-process to flatten chains
+                app_tree = flatten_tree(app_tree)
                 # Only include apps that have visible children
-                if app_tree.get("children"):
+                if app_tree and app_tree.get("children"):
                     apps.append(app_tree)
     except Exception as e:
         logger.error(f"Error during AT-SPI traversal: {e}")
 
+    # If flat mode is requested, extract actionable elements and important content
+    if flat_mode:
+        # Roles that can be interacted with
+        ACTIONABLE_ROLES = {
+            'push button', 'button', 'toggle button', 'check button', 'radio button',
+            'link', 'menu item', 'check menu item', 'radio menu item',
+            'entry', 'text', 'password text', 'spin button', 'combo box',
+            'slider', 'scroll bar', 'list item', 'tree item', 'tab', 'page tab',
+            'menu', 'menu bar', 'tool bar', 'table cell', 'icon'
+        }
+        # Roles that contain important content/context
+        CONTENT_ROLES = {
+            'static', 'label', 'heading', 'paragraph', 'block quote',
+            'article', 'caption', 'description', 'alert'
+        }
+        
+        # Roles that are interactive even without names (media controls, etc.)
+        INTERACTIVE_ROLES = {
+            'push button', 'button', 'toggle button', 'check button', 'radio button',
+            'check box', 'slider', 'spin button'
+        }
+        
+        def extract_actionable(node, results=None):
+            if results is None:
+                results = []
+            
+            role = node.get('role', '')
+            name = node.get('name', '')
+            text = node.get('text', '')
+            bounds = node.get('bounds')
+            
+            # Include if it's an actionable role with name or text
+            if role in ACTIONABLE_ROLES and (name or text):
+                elem = {
+                    'role': role,
+                    'name': name,
+                    'bounds': bounds,
+                    'center': node.get('center'),
+                }
+                if text and text != name:
+                    elem['text'] = text
+                if node.get('app'):
+                    elem['app'] = node.get('app')
+                results.append(elem)
+            # Include interactive controls even without names (e.g., VLC media buttons)
+            # but only if they have valid bounds
+            # Note: name may already include description from build_tree
+            elif role in INTERACTIVE_ROLES and bounds and bounds.get('w', 0) > 0 and bounds.get('h', 0) > 0:
+                # Use name (which may be from description), or role as last resort
+                display_name = name if name else f'[{role}]'
+                elem = {
+                    'role': role,
+                    'name': display_name,
+                    'bounds': bounds,
+                    'center': node.get('center'),
+                }
+                if text:
+                    elem['text'] = text
+                if node.get('description') and node.get('description') != name:
+                    elem['description'] = node.get('description')
+                if node.get('app'):
+                    elem['app'] = node.get('app')
+                results.append(elem)
+            # Include content roles if they have substantial text (>20 chars)
+            elif role in CONTENT_ROLES and text and len(text) > 20:
+                elem = {
+                    'role': role,
+                    'name': name,
+                    'text': text,
+                    'bounds': bounds,
+                    'center': node.get('center'),
+                }
+                if node.get('app'):
+                    elem['app'] = node.get('app')
+                results.append(elem)
+            
+            for child in node.get('children', []):
+                extract_actionable(child, results)
+            
+            return results
+        
+        actionable = []
+        for app in apps:
+            extract_actionable(app, actionable)
+        
+        # Get actual screen dimensions from X11 display
+        try:
+            d = display.Display()
+            screen_w = d.screen().width_in_pixels
+            screen_h = d.screen().height_in_pixels
+            if screen_w > 0 and screen_h > 0:
+                dw = screen_w
+                dh = screen_h
+        except Exception:
+            pass
+        
+        # Fallback to common screen sizes if still invalid
+        if dw <= 0:
+            dw = 1920
+        if dh <= 0:
+            dh = 1080
+        
+        # Group elements by app
+        by_app = {}
+        for elem in actionable:
+            app_name = elem.pop('app', 'unknown')
+            if app_name not in by_app:
+                by_app[app_name] = []
+            by_app[app_name].append(elem)
+        
+        # Check if XML format is requested
+        output_format = request.args.get('format', 'json').lower()
+        
+        if output_format == 'xml':
+            # Build XML output
+            def escape_xml(s):
+                if s is None:
+                    return ''
+                return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+            
+            xml_parts = [f'<desktop screen_w="{dw}" screen_h="{dh}">']
+            for app_name, elements in by_app.items():
+                xml_parts.append(f'  <app name="{escape_xml(app_name)}">')
+                for elem in elements:
+                    role = escape_xml(elem.get('role', ''))
+                    name = escape_xml(elem.get('name', ''))
+                    text = escape_xml(elem.get('text', ''))
+                    bounds = elem.get('bounds', {})
+                    center = elem.get('center', {})
+                    
+                    # Format bounds as box attribute [x,y,w,h] normalized to 0-1
+                    if bounds and dw > 0 and dh > 0:
+                        bx = bounds.get('x', 0) / dw
+                        by = bounds.get('y', 0) / dh
+                        bw = bounds.get('w', 0) / dw
+                        bh = bounds.get('h', 0) / dh
+                        box_attr = f'box="[{bx:.3f},{by:.3f},{bw:.3f},{bh:.3f}]"'
+                    else:
+                        box_attr = ''
+                    
+                    # Format center as normalized coordinates
+                    if center and dw > 0 and dh > 0:
+                        cx = center.get('x', 0) / dw
+                        cy = center.get('y', 0) / dh
+                        center_attr = f'center="[{cx:.3f},{cy:.3f}]"'
+                    else:
+                        center_attr = ''
+                    
+                    # Build element tag
+                    attrs = []
+                    if name:
+                        attrs.append(f'name="{name}"')
+                    if box_attr:
+                        attrs.append(box_attr)
+                    if center_attr:
+                        attrs.append(center_attr)
+                    
+                    attr_str = ' '.join(attrs)
+                    
+                    if text and text != name:
+                        xml_parts.append(f'    <{role} {attr_str}>{text}</{role}>')
+                    else:
+                        xml_parts.append(f'    <{role} {attr_str} />')
+                
+                xml_parts.append('  </app>')
+            xml_parts.append('</desktop>')
+            
+            return '\n'.join(xml_parts), 200, {'Content-Type': 'application/xml'}
+        
+        # JSON format (default) - grouped by app
+        payload = {
+            "screen": {
+                "x": dx,
+                "y": dy,
+                "width": dw,
+                "height": dh,
+            },
+            "apps": by_app,
+            "total_elements": len(actionable),
+            "filter_occluded": filter_occluded,
+            "occlusion_mode": occlusion_mode,
+        }
+        return jsonify(payload)
+    
     payload = {
         "screen": {
             "x": dx,
