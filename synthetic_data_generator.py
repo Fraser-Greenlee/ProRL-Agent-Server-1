@@ -955,6 +955,8 @@ Select the appropriate action using the osworld tool."""
                         trajectory_id,
                         step
                     )
+                    # log the reasonings of the action
+                    logger.info(f"Reasonings of the action: {action_info['reasoning']}")
 
                     # Save step data
                     step_data = {

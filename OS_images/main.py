@@ -978,6 +978,24 @@ def _is_showing_minimal(node: Accessible) -> bool:
             and st.contains(pyatspi.STATE_SHOWING))
 
 
+def _is_menu_expanded(menu_node: Accessible) -> bool:
+    """Check if a menu is expanded by checking if it's selected in its parent's selection."""
+    try:
+        parent = menu_node.parent
+        if parent:
+            parent_role = (parent.getRoleName() or "").strip().lower()
+            if parent_role in ("menu bar", "menu"):
+                sel = parent.querySelection()
+                if sel and sel.nSelectedChildren > 0:
+                    for i in range(sel.nSelectedChildren):
+                        selected = sel.getSelectedChild(i)
+                        if selected and selected == menu_node:
+                            return True
+    except Exception:
+        pass
+    return False
+
+
 def _get_bounds_minimal(node: Accessible):
     """Get absolute screen-space bounds (x, y, w, h) of the node, or None."""
     try:
@@ -1750,6 +1768,34 @@ def get_accessibility_tree_nested():
         if role in SKIP_ROLES:
             return None
         
+        # Special handling for menu items: only include if parent menu is expanded
+        # GTK caches menu item bounds even when menus are closed, causing stale data
+        if role in ("menu item", "check menu item", "radio menu item"):
+            # Check if parent menu is expanded (selected in its parent's selection)
+            try:
+                parent = node.parent
+                if parent:
+                    parent_role = (parent.getRoleName() or "").strip().lower()
+                    if parent_role == "menu":
+                        # Check if this parent menu is expanded
+                        if not _is_menu_expanded(parent):
+                            return None
+            except Exception:
+                pass
+        
+        # For submenus (menu inside menu), only include if parent menu is expanded
+        if role == "menu":
+            try:
+                parent = node.parent
+                if parent:
+                    parent_role = (parent.getRoleName() or "").strip().lower()
+                    if parent_role == "menu":
+                        # This is a submenu - only include if parent is expanded
+                        if not _is_menu_expanded(parent):
+                            return None
+            except Exception:
+                pass
+        
         # Track app name and window title for passing down to children
         current_app = inherited_app
         current_window = inherited_window
@@ -1883,7 +1929,25 @@ def get_accessibility_tree_nested():
         
         # If node is not showing and has no visible children, skip it
         # Exception: application nodes are containers and should be included if they have children
-        if not is_showing and role != "application" and not children:
+        # Exception: menu items in an expanded menu should be included
+        is_menu_item_in_expanded = False
+        if role in ("menu item", "check menu item", "radio menu item", "tearoff menu item"):
+            try:
+                parent = node.parent
+                if parent and (parent.getRoleName() or "").strip().lower() == "menu":
+                    is_menu_item_in_expanded = _is_menu_expanded(parent)
+            except Exception:
+                pass
+        # Also check for submenus in expanded menus
+        if role == "menu":
+            try:
+                parent = node.parent
+                if parent and (parent.getRoleName() or "").strip().lower() == "menu":
+                    is_menu_item_in_expanded = _is_menu_expanded(parent)
+            except Exception:
+                pass
+        
+        if not is_showing and role != "application" and not children and not is_menu_item_in_expanded:
             return None
         
         if bounds is None:
@@ -2091,11 +2155,14 @@ def get_accessibility_tree_nested():
             'scroll bar'
         }
         
-        # Container roles that should include their children (lists, tables, trees, etc.)
-        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane', 'document text', 'document frame', 'document', 'scroll pane', 'document presentation'}
-        ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon', 'paragraph', 'shape', 'panel'}
+        # Container roles that should include their children (lists, tables, trees, menus, etc.)
+        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane', 'document text', 'document frame', 'document', 'scroll pane', 'document presentation', 'menu', 'menu bar'}
+        ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon', 'paragraph', 'shape', 'panel', 'menu item', 'check menu item', 'radio menu item'}
+        # Menu roles that can be both containers AND items (submenus)
+        MENU_ROLES = {'menu', 'menu item', 'check menu item', 'radio menu item'}
         # Note: 'section' removed from ITEM_ROLES - Chrome uses section for layout, not content
         # Note: 'panel' added for LibreOffice Impress presentation placeholders (PresentationTitle, PresentationSubtitle)
+        # Note: 'menu', 'menu bar' added as containers, 'menu item' variants added as items
         
         def is_valid_bounds(b):
             """Check if bounds are valid (on-screen, positive coordinates)."""
@@ -2133,18 +2200,69 @@ def get_accessibility_tree_nested():
                 for child in children:
                     child_role = child.get('role', '')
                     child_bounds = child.get('bounds')
+                    child_name = child.get('name', '')
                     
                     # Include scrollbars as sibling elements within the container
                     if child_role in ('scroll bar', 'slider') and is_valid_bounds(child_bounds):
                         scrollbar = {
                             'role': child_role,
-                            'name': child.get('name', '') or f'[{child_role}]',
+                            'name': child_name or f'[{child_role}]',
                             'bounds': child_bounds,
                             'center': child.get('center'),
                         }
                         if child.get('value') is not None:
                             scrollbar['value'] = child['value']
                         sibling_elements.append(scrollbar)
+                    # Handle menus inside menu bar or other menus (submenus)
+                    elif child_role == 'menu' and is_valid_bounds(child_bounds) and child_name:
+                        # Extract menu items from this menu
+                        menu_items = []
+                        for gc in child.get('children', []):
+                            gc_role = gc.get('role', '')
+                            gc_name = gc.get('name', '')
+                            gc_bounds = gc.get('bounds')
+                            
+                            if gc_role in MENU_ROLES and is_valid_bounds(gc_bounds) and gc_name:
+                                menu_item = {
+                                    'role': gc_role,
+                                    'name': gc_name,
+                                    'bounds': gc_bounds,
+                                    'center': gc.get('center'),
+                                }
+                                if gc.get('disabled'):
+                                    menu_item['disabled'] = True
+                                if 'checked' in gc:
+                                    menu_item['checked'] = gc['checked']
+                                # If this is a submenu, recursively extract its items
+                                if gc_role == 'menu':
+                                    submenu_items = []
+                                    for ggc in gc.get('children', []):
+                                        ggc_role = ggc.get('role', '')
+                                        ggc_name = ggc.get('name', '')
+                                        ggc_bounds = ggc.get('bounds')
+                                        if ggc_role in MENU_ROLES and is_valid_bounds(ggc_bounds) and ggc_name:
+                                            sub_item = {
+                                                'role': ggc_role,
+                                                'name': ggc_name,
+                                                'bounds': ggc_bounds,
+                                                'center': ggc.get('center'),
+                                            }
+                                            if ggc.get('disabled'):
+                                                sub_item['disabled'] = True
+                                            submenu_items.append(sub_item)
+                                    if submenu_items:
+                                        menu_item['items'] = submenu_items
+                                menu_items.append(menu_item)
+                        
+                        menu_elem = {
+                            'role': child_role,
+                            'name': child_name,
+                            'bounds': child_bounds,
+                            'center': child.get('center'),
+                        }
+                        if menu_items:
+                            menu_elem['items'] = menu_items
+                        items.append(menu_elem)
                     elif child_role in ITEM_ROLES:
                         child_name = child.get('name', '')
                         child_text = child.get('text', '')
@@ -2176,7 +2294,7 @@ def get_accessibility_tree_nested():
                                 item['selection'] = child['selection']
                             items.append(item)
                     elif child_role in CONTAINER_WITH_ITEMS and is_valid_bounds(child_bounds):
-                        # Nested container (e.g., table inside scroll pane)
+                        # Nested container (e.g., table inside scroll pane, or submenu inside menu)
                         # Extract its items and include them
                         nested_items = []
                         for grandchild in child.get('children', []):
@@ -2184,7 +2302,37 @@ def get_accessibility_tree_nested():
                             gc_name = grandchild.get('name', '')
                             gc_text = grandchild.get('text', '')
                             gc_bounds = grandchild.get('bounds')
-                            if gc_role in ITEM_ROLES and is_valid_bounds(gc_bounds) and (gc_name or gc_text):
+                            
+                            # Handle nested submenus (menu inside menu)
+                            if gc_role in ('menu',) and is_valid_bounds(gc_bounds) and gc_name:
+                                # This is a submenu - recursively extract its items
+                                submenu_items = []
+                                for ggc in grandchild.get('children', []):
+                                    ggc_role = ggc.get('role', '')
+                                    ggc_name = ggc.get('name', '')
+                                    ggc_bounds = ggc.get('bounds')
+                                    if ggc_role in ITEM_ROLES and is_valid_bounds(ggc_bounds) and ggc_name:
+                                        sub_item = {
+                                            'role': ggc_role,
+                                            'name': ggc_name,
+                                            'bounds': ggc_bounds,
+                                            'center': ggc.get('center'),
+                                        }
+                                        if ggc.get('disabled'):
+                                            sub_item['disabled'] = True
+                                        if 'checked' in ggc:
+                                            sub_item['checked'] = ggc['checked']
+                                        submenu_items.append(sub_item)
+                                submenu = {
+                                    'role': gc_role,
+                                    'name': gc_name,
+                                    'bounds': gc_bounds,
+                                    'center': grandchild.get('center'),
+                                }
+                                if submenu_items:
+                                    submenu['items'] = submenu_items
+                                nested_items.append(submenu)
+                            elif gc_role in ITEM_ROLES and is_valid_bounds(gc_bounds) and (gc_name or gc_text):
                                 display_name = gc_name
                                 if gc_role in ('paragraph', 'section') and gc_text:
                                     display_name = gc_text[:100]
