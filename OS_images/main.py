@@ -1824,14 +1824,18 @@ def get_accessibility_tree_nested():
                 # Flatten: return the single child directly
                 return children[0]
             # Multiple children - filter out empty containers from children
-            # Keep children that have: children, name, text, actions, OR valid bounds (like scroll bars)
+            # Keep children that have: children, name, text, actions, OR valid bounds for interactive roles
+            INTERACTIVE_CHILD_ROLES = {
+                'scroll bar', 'slider', 'spin button', 'toggle button', 'push button', 
+                'button', 'check button', 'radio button', 'check box', 'combo box'
+            }
             def is_meaningful_child(c):
                 if c.get('children') or c.get('name') or c.get('text') or c.get('actions'):
                     return True
-                # Also keep children with valid bounds that are interactive (scroll bars, sliders, etc.)
+                # Also keep children with valid bounds that are interactive
                 c_role = c.get('role', '')
                 c_bounds = c.get('bounds', {})
-                if c_role in ('scroll bar', 'slider', 'spin button') and c_bounds.get('w', 0) > 0:
+                if c_role in INTERACTIVE_CHILD_ROLES and c_bounds.get('w', 0) > 0:
                     return True
                 return False
             non_empty_children = [c for c in children if is_meaningful_child(c)]
@@ -2040,8 +2044,9 @@ def get_accessibility_tree_nested():
         # Roles that contain important content/context
         CONTENT_ROLES = {
             'static', 'label', 'heading', 'paragraph', 'block quote',
-            'article', 'caption', 'description', 'alert'
+            'article', 'caption', 'description', 'alert', 'section'
         }
+        # Note: 'section' added here - only include sections that have substantial text content
         
         # Roles that are interactive even without names (media controls, etc.)
         INTERACTIVE_ROLES = {
@@ -2051,8 +2056,10 @@ def get_accessibility_tree_nested():
         }
         
         # Container roles that should include their children (lists, tables, trees, etc.)
-        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane', 'document text', 'document frame', 'document'}
-        ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon', 'paragraph', 'section'}
+        CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane', 'document text', 'document frame', 'document', 'scroll pane', 'document presentation'}
+        ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon', 'paragraph', 'shape', 'panel'}
+        # Note: 'section' removed from ITEM_ROLES - Chrome uses section for layout, not content
+        # Note: 'panel' added for LibreOffice Impress presentation placeholders (PresentationTitle, PresentationSubtitle)
         
         def is_valid_bounds(b):
             """Check if bounds are valid (on-screen, positive coordinates)."""
@@ -2082,13 +2089,29 @@ def get_accessibility_tree_nested():
             if role in CONTAINER_WITH_ITEMS and bounds:
                 # Collect items from this container
                 items = []
+                # Also collect sibling elements like scrollbars that should be nested
+                sibling_elements = []
+                # Track nested containers (e.g., table inside scroll pane)
+                nested_containers = []
                 
                 for child in children:
                     child_role = child.get('role', '')
-                    if child_role in ITEM_ROLES:
+                    child_bounds = child.get('bounds')
+                    
+                    # Include scrollbars as sibling elements within the container
+                    if child_role in ('scroll bar', 'slider') and is_valid_bounds(child_bounds):
+                        scrollbar = {
+                            'role': child_role,
+                            'name': child.get('name', '') or f'[{child_role}]',
+                            'bounds': child_bounds,
+                            'center': child.get('center'),
+                        }
+                        if child.get('value') is not None:
+                            scrollbar['value'] = child['value']
+                        sibling_elements.append(scrollbar)
+                    elif child_role in ITEM_ROLES:
                         child_name = child.get('name', '')
                         child_text = child.get('text', '')
-                        child_bounds = child.get('bounds')
                         # For paragraph/section, use text as the display content
                         # Include if there's any text content (not just name) and valid bounds
                         if is_valid_bounds(child_bounds) and (child_name or child_text):
@@ -2116,31 +2139,83 @@ def get_accessibility_tree_nested():
                             if child.get('selection'):
                                 item['selection'] = child['selection']
                             items.append(item)
+                    elif child_role in CONTAINER_WITH_ITEMS and is_valid_bounds(child_bounds):
+                        # Nested container (e.g., table inside scroll pane)
+                        # Extract its items and include them
+                        nested_items = []
+                        for grandchild in child.get('children', []):
+                            gc_role = grandchild.get('role', '')
+                            gc_name = grandchild.get('name', '')
+                            gc_text = grandchild.get('text', '')
+                            gc_bounds = grandchild.get('bounds')
+                            if gc_role in ITEM_ROLES and is_valid_bounds(gc_bounds) and (gc_name or gc_text):
+                                display_name = gc_name
+                                if gc_role in ('paragraph', 'section') and gc_text:
+                                    display_name = gc_text[:100]
+                                item = {
+                                    'role': gc_role,
+                                    'name': display_name,
+                                    'bounds': gc_bounds,
+                                    'center': grandchild.get('center'),
+                                }
+                                if gc_text and gc_text != display_name:
+                                    item['text'] = gc_text
+                                if grandchild.get('disabled'):
+                                    item['disabled'] = True
+                                if 'checked' in grandchild:
+                                    item['checked'] = grandchild['checked']
+                                if grandchild.get('selected'):
+                                    item['selected'] = True
+                                if grandchild.get('selection'):
+                                    item['selection'] = grandchild['selection']
+                                nested_items.append(item)
+                        if nested_items:
+                            # Use the nested container's role and bounds, with extracted items
+                            nested_container = {
+                                'role': child_role,
+                                'name': child.get('name', ''),
+                                'bounds': child_bounds,
+                                'center': child.get('center'),
+                                'items': nested_items,
+                            }
+                            nested_containers.append(nested_container)
                     else:
                         # Recurse into non-item children
                         extract_actionable(child, results, parent_is_container=True)
                 
+                # For scroll pane, merge nested containers with scrollbars
+                if role == 'scroll pane' and nested_containers and sibling_elements:
+                    # Add scrollbars to each nested container
+                    for nc in nested_containers:
+                        nc['controls'] = sibling_elements
+                        if node.get('app'):
+                            nc['app'] = node.get('app')
+                        results.append(nc)
+                    return results
+                
                 # Only add the container if it has items
-                if items:
+                if items or sibling_elements or nested_containers:
                     container_elem = {
                         'role': role,
                         'name': name,
                         'bounds': bounds,
                         'center': node.get('center'),
-                        'items': items,
                     }
+                    if items:
+                        container_elem['items'] = items
+                    # Add scrollbars/sliders as nested elements
+                    if sibling_elements:
+                        container_elem['controls'] = sibling_elements
+                    # Add nested containers as children
+                    if nested_containers:
+                        container_elem['nested'] = nested_containers
                     if node.get('app'):
                         container_elem['app'] = node.get('app')
                     results.append(container_elem)
                 return results
             
-            # Skip individual list/tree items if they'll be handled by their parent container
-            # (but only if we're not already inside a container that's collecting them)
-            if role in ITEM_ROLES and not parent_is_container:
-                # Check if this item has a parent container - if not, include it individually
-                pass  # Fall through to normal handling
-            
             # Include if it's an actionable role with name or text
+            if role in ACTIONABLE_ROLES and (name or text) and is_valid_bounds(bounds):
                 elem = {
                     'role': role,
                     'name': name,
@@ -2315,11 +2390,15 @@ def get_accessibility_tree_nested():
                         
                         attr_str = ' '.join(attrs)
                         
-                        # If this element has nested items (list, table, tree)
-                        if items:
+                        # If this element has nested items (list, table, tree) or controls (scrollbars)
+                        controls = elem.get('controls', [])
+                        if items or controls:
                             lines = [f'{indent}<{role} {attr_str}>']
                             for item in items:
                                 lines.append(format_element_xml(item, indent + '  '))
+                            # Add controls (scrollbars, sliders) after items
+                            for ctrl in controls:
+                                lines.append(format_element_xml(ctrl, indent + '  '))
                             lines.append(f'{indent}</{role}>')
                             return '\n'.join(lines)
                         elif text and text != name:
