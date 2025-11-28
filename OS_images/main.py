@@ -1094,6 +1094,14 @@ def _collect_all_visible_elements_minimal(root: Accessible, max_depth: int = 40)
                 "actions": actions,
             })
 
+        # Warmup: Access node attributes to trigger AT-SPI cache population (needed for Chrome)
+        try:
+            node.getState()
+            node.get_attributes()
+            node.queryComponent()
+        except Exception:
+            pass
+        
         # Recurse into children
         # Use Python iterator instead of getChildAtIndex for better AT-SPI cache handling
         try:
@@ -1402,10 +1410,25 @@ def get_accessibility_tree_nested():
             return []
         
         windows = []
+        # Warmup: Access app attributes to trigger AT-SPI cache population (needed for Chrome)
+        try:
+            app_node.getState()
+            app_node.get_attributes()
+        except Exception:
+            pass
+        
         # Use Python iterator instead of getChildAtIndex for better AT-SPI cache handling
         try:
             for child in app_node:
                 if child:
+                    # Warmup child as well
+                    try:
+                        child.getState()
+                        child.get_attributes()
+                        child.queryComponent()
+                    except Exception:
+                        pass
+                    
                     role = (child.getRoleName() or "").strip().lower()
                     if role in ("frame", "dialog", "window", "alert"):
                         bounds = _get_bounds_minimal(child)
@@ -1708,13 +1731,21 @@ def get_accessibility_tree_nested():
         # that aren't "showing" themselves but have visible children
         children = []
         
+        # Warmup: Access node attributes to trigger AT-SPI cache population
+        # This is needed for some apps like Chrome that use lazy initialization
+        try:
+            node.getState()
+            node.get_attributes()
+            node.queryComponent()
+        except Exception:
+            pass
+        
         # Special handling for LibreOffice Calc tables - use optimized traversal
         if in_calc and role == "table":
             children = build_calc_table_children(node, current_app, current_window)
         else:
             try:
-                # Use Python iterator (enumerate) instead of getChildAtIndex
-                # The iterator triggers AT-SPI cache population which is needed for some apps like Chrome
+                # Use Python iterator instead of getChildAtIndex
                 for child in node:
                     if child:
                         child_tree = build_tree(child, depth + 1, in_calc, current_app, current_window)
