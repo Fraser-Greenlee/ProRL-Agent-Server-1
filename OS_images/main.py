@@ -905,18 +905,18 @@ def get_accessibility_tree():
 
     # AT-SPI works for KDE as well
     if os_name == "Linux":
-        # return get_accessibility_tree_nested()
-        global libreoffice_version_tuple
-        libreoffice_version_tuple = _get_libreoffice_version()
+        return get_accessibility_tree_nested()
+        # global libreoffice_version_tuple
+        # libreoffice_version_tuple = _get_libreoffice_version()
 
-        desktop: Accessible = pyatspi.Registry.getDesktop(0)
-        xml_node = lxml.etree.Element("desktop-frame", nsmap=_accessibility_ns_map_ubuntu)
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(_create_atspi_node, app_node, 2) for app_node in desktop]
-            for future in concurrent.futures.as_completed(futures):
-                xml_tree = future.result()
-                xml_node.append(xml_tree)
-        return jsonify({"AT": lxml.etree.tostring(xml_node, encoding="unicode")})
+        # desktop: Accessible = pyatspi.Registry.getDesktop(0)
+        # xml_node = lxml.etree.Element("desktop-frame", nsmap=_accessibility_ns_map_ubuntu)
+        # with concurrent.futures.ThreadPoolExecutor() as executor:
+        #     futures = [executor.submit(_create_atspi_node, app_node, 2) for app_node in desktop]
+        #     for future in concurrent.futures.as_completed(futures):
+        #         xml_tree = future.result()
+        #         xml_node.append(xml_tree)
+        # return jsonify({"AT": lxml.etree.tostring(xml_node, encoding="unicode")})
 
     elif os_name == "Windows":
         # Attention: Windows a11y tree is implemented to be read through `pywinauto` module, however,
@@ -1382,7 +1382,7 @@ def get_accessibility_tree_nested():
     max_depth = int(request.args.get('max_depth', '40'))
     filter_occluded = request.args.get('filter_occluded', 'true').lower() == 'true'
     occlusion_mode = request.args.get('occlusion_mode', 'center').lower()
-    flat_mode = request.args.get('flat', 'false').lower() == 'true'
+    flat_mode = request.args.get('flat', 'true').lower() == 'true'
     
     try:
         desktop: Accessible = pyatspi.Registry.getDesktop(0)
@@ -2319,7 +2319,7 @@ def get_accessibility_tree_nested():
             by_app[app_name].append(elem)
         
         # Check if XML format is requested
-        output_format = request.args.get('format', 'json').lower()
+        output_format = request.args.get('format', 'xml').lower()
         
         if output_format == 'xml':
             # Build XML output
