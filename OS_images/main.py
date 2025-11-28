@@ -1863,16 +1863,35 @@ def get_accessibility_tree_nested():
         if window_title:
             elem["window"] = window_title
         
-        # Mark active/focused state for top-level windows
-        if role in ("frame", "dialog", "window"):
-            try:
-                state = node.getState()
+        # Mark active/focused/disabled state
+        try:
+            state = node.getState()
+            # For top-level windows, mark active/focused
+            if role in ("frame", "dialog", "window"):
                 if state.contains(pyatspi.STATE_ACTIVE):
                     elem["active"] = True
                 if state.contains(pyatspi.STATE_FOCUSED):
                     elem["focused"] = True
-            except Exception:
-                pass
+            # For interactive elements, mark if disabled
+            # An element is disabled if it's NOT enabled or NOT sensitive
+            if not state.contains(pyatspi.STATE_ENABLED) or not state.contains(pyatspi.STATE_SENSITIVE):
+                # Only mark as disabled for interactive roles (buttons, entries, etc.)
+                interactive_roles = {'push button', 'button', 'toggle button', 'check button', 
+                                    'radio button', 'check box', 'entry', 'text', 'combo box',
+                                    'spin button', 'slider', 'link', 'menu item', 'list item'}
+                if role in interactive_roles:
+                    elem["disabled"] = True
+            
+            # For checkable elements (checkboxes, radio buttons, toggle buttons), mark checked state
+            checkable_roles = {'check box', 'check button', 'radio button', 'toggle button', 
+                              'check menu item', 'radio menu item'}
+            if role in checkable_roles:
+                if state.contains(pyatspi.STATE_CHECKED):
+                    elem["checked"] = True
+                else:
+                    elem["checked"] = False
+        except Exception:
+            pass
         
         # Add children (already built above)
         if children:
@@ -1987,6 +2006,10 @@ def get_accessibility_tree_nested():
                     elem['text'] = text
                 if node.get('app'):
                     elem['app'] = node.get('app')
+                if node.get('disabled'):
+                    elem['disabled'] = True
+                if 'checked' in node:
+                    elem['checked'] = node['checked']
                 results.append(elem)
             # Include interactive controls even without names (e.g., VLC media buttons)
             # but only if they have valid bounds
@@ -2006,6 +2029,10 @@ def get_accessibility_tree_nested():
                     elem['description'] = node.get('description')
                 if node.get('app'):
                     elem['app'] = node.get('app')
+                if node.get('disabled'):
+                    elem['disabled'] = True
+                if 'checked' in node:
+                    elem['checked'] = node['checked']
                 results.append(elem)
             # Include content roles if they have substantial text (>20 chars)
             elif role in CONTENT_ROLES and text and len(text) > 20:
@@ -2018,6 +2045,8 @@ def get_accessibility_tree_nested():
                 }
                 if node.get('app'):
                     elem['app'] = node.get('app')
+                if node.get('disabled'):
+                    elem['disabled'] = True
                 results.append(elem)
             
             for child in node.get('children', []):
@@ -2100,6 +2129,12 @@ def get_accessibility_tree_nested():
                         attrs.append(box_attr)
                     if center_attr:
                         attrs.append(center_attr)
+                    # Add disabled attribute if element is disabled
+                    if elem.get('disabled'):
+                        attrs.append('disabled="true"')
+                    # Add checked attribute for checkboxes/radio buttons
+                    if 'checked' in elem:
+                        attrs.append(f'checked="{str(elem["checked"]).lower()}"')
                     
                     attr_str = ' '.join(attrs)
                     
