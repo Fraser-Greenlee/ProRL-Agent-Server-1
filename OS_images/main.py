@@ -2044,9 +2044,9 @@ def get_accessibility_tree_nested():
         # Roles that contain important content/context
         CONTENT_ROLES = {
             'static', 'label', 'heading', 'paragraph', 'block quote',
-            'article', 'caption', 'description', 'alert', 'section'
+            'article', 'caption', 'description', 'alert'
         }
-        # Note: 'section' added here - only include sections that have substantial text content
+        # Note: 'section' removed - Chrome sections duplicate content already in static/heading elements
         
         # Roles that are interactive even without names (media controls, etc.)
         INTERACTIVE_ROLES = {
