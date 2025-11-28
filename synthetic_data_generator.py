@@ -39,7 +39,7 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import (
     OSWorldSingularityRuntime,
 )
 from openhands.storage import get_file_store
-from openhands.utils.ast_process import simplify_accessibility_tree
+from openhands.utils.ast_process import simplify_accessibility_tree, simplify_json_accessibility_tree, simplify_json_to_xml
 from openhands.utils.ast_process_win import simplify_windows_accessibility_tree
 from openhands.agenthub.gui_agent.tools import OSWORLD_TOOLS
 import time
@@ -601,11 +601,17 @@ class SyntheticDataGenerator:
             ast_xml = ast_obs.content
         
         # Simplify AST for LLM using ast_process simplifier
-        # This returns clean XML with center coordinates and bounding boxes
+        # This returns clean representation with center coordinates and bounding boxes
+        raw_ast = None  # Store the raw AST for debugging/logging
         if self.os_type == 'windows':
             simplified_ast, (self.screen_width, self.screen_height) = simplify_windows_accessibility_tree(ast_xml)
+            raw_ast = ast_xml
         else:
-            simplified_ast, (self.screen_width, self.screen_height) = simplify_accessibility_tree(ast_xml)
+            # Use JSON simplifier for Linux (new format)
+            simplified_ast_dict, (self.screen_width, self.screen_height) = simplify_json_accessibility_tree(ast_xml)
+            # Convert to XML string for consistency with existing code
+            simplified_ast, _ = simplify_json_to_xml(simplified_ast_dict)
+            raw_ast = json.dumps(ast_xml)  # Store JSON as string for raw_ast
         
         # Normalize cursor position to [0, 1] range like other coordinates
         width = self.screen_width if self.screen_width is not None else self.default_screen_width
@@ -616,7 +622,7 @@ class SyntheticDataGenerator:
         
         return {
             'screenshot': screenshot_b64,
-            'ast_xml': ast_xml,
+            'ast_xml': raw_ast,  # Raw AST for debugging (XML string or JSON string)
             'simplified_ast': simplified_ast,
             'cursor_position': {'x': round(normalized_cursor_x, 3), 'y': round(normalized_cursor_y, 3)},
             'timestamp': time.time()

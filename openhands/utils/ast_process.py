@@ -620,3 +620,342 @@ def get_actionable_centers(xml_string):
 
 # print(get_actionable_centers(open('file.xml', 'r').read()))
 # kprint(simplify_accessibility_tree(open('file.xml', 'r').read()))
+
+
+# ============================================================================
+# JSON Accessibility Tree Simplification (for Linux accessibility_tree endpoint)
+# ============================================================================
+
+def simplify_json_accessibility_tree(json_data: dict) -> Tuple[dict, Tuple[int, int]]:
+    """
+    Simplifies the JSON accessibility tree returned by the /accessibility_tree endpoint.
+    
+    This function:
+    1. Extracts screen dimensions from the gnome-shell root element
+    2. Normalizes all coordinates (x, y, w, h, center) to [0, 1] range
+    3. Removes noise - only keeps elements with meaningful names or actionable roles
+    4. Flattens deeply nested structures while preserving hierarchy
+    5. Returns a clean, minimal JSON suitable for LLM agents
+    
+    Args:
+        json_data: The raw JSON from /accessibility_tree endpoint
+        
+    Returns:
+        Tuple[dict, Tuple[int, int]]: Simplified JSON and (screen_width, screen_height)
+    """
+    # Extract screen dimensions
+    screen_info = json_data.get('screen', {})
+    screen_w = screen_info.get('width', 1920)
+    screen_h = screen_info.get('height', 1080)
+    
+    # Try to get actual screen size from gnome-shell root element
+    # The first gnome-shell element with bounds usually has the full screen size
+    desktop = json_data.get('desktop', {})
+    for app in desktop.get('children', []):
+        app_name = app.get('name', '').lower()
+        if app_name == 'gnome-shell':
+            # Look for the first child with full screen bounds
+            for child in app.get('children', []):
+                bounds = child.get('bounds', {})
+                w = bounds.get('w', 0)
+                h = bounds.get('h', 0)
+                x = bounds.get('x', 0)
+                y = bounds.get('y', 0)
+                # Full screen element starts at (0,0) and has reasonable dimensions
+                if x == 0 and y == 0 and w >= 1024 and h >= 768:
+                    screen_w = w
+                    screen_h = h
+                    break
+            break
+    
+    def _clamp01(v: float) -> float:
+        """Clamp value to [0, 1] range."""
+        if v < 0.0: return 0.0
+        if v > 1.0: return 1.0
+        return v
+    
+    def _normalize_bounds(bounds: dict) -> dict:
+        """Normalize bounds to [0, 1] range."""
+        if not bounds:
+            return None
+        x = bounds.get('x', 0)
+        y = bounds.get('y', 0)
+        w = bounds.get('w', 0)
+        h = bounds.get('h', 0)
+        
+        # Skip elements with invalid bounds
+        if w <= 0 or h <= 0:
+            return None
+        
+        # Skip elements outside screen (negative coordinates)
+        if x < -10 or y < -10:  # Allow small negative for edge elements
+            return None
+            
+        return {
+            'x': round(_clamp01(x / screen_w), 3),
+            'y': round(_clamp01(y / screen_h), 3),
+            'w': round(_clamp01(w / screen_w), 3),
+            'h': round(_clamp01(h / screen_h), 3)
+        }
+    
+    def _normalize_center(center: dict) -> dict:
+        """Normalize center coordinates to [0, 1] range."""
+        if not center:
+            return None
+        x = center.get('x', 0)
+        y = center.get('y', 0)
+        
+        # Skip elements outside screen
+        if x < 0 or y < 0:
+            return None
+            
+        return {
+            'x': round(_clamp01(x / screen_w), 3),
+            'y': round(_clamp01(y / screen_h), 3)
+        }
+    
+    # Roles that are typically actionable/interactive
+    ACTIONABLE_ROLES = {
+        'push button', 'toggle button', 'button', 'menu', 'menu item', 
+        'menuitem', 'list item', 'check box', 'radio button', 'combo box',
+        'text', 'entry', 'link', 'tab', 'slider', 'spin button', 'icon',
+        'frame', 'dialog', 'window', 'alert'
+    }
+    
+    # Roles to skip entirely (noise)
+    SKIP_ROLES = {'panel', 'filler', 'separator', 'scroll bar'}
+    
+    # Role simplification map
+    ROLE_MAP = {
+        'push button': 'btn',
+        'toggle button': 'toggle',
+        'menu item': 'menuitem',
+        'list item': 'item',
+        'check box': 'checkbox',
+        'radio button': 'radio',
+        'combo box': 'dropdown',
+        'spin button': 'spinner',
+        'scroll pane': 'scroll',
+        'text': 'input',
+        'entry': 'input',
+        'desktop-frame': 'desktop',
+        'application': 'app'
+    }
+    
+    def _is_meaningful(node: dict) -> bool:
+        """Check if a node has meaningful content worth keeping."""
+        name = (node.get('name') or '').strip()
+        text = (node.get('text') or '').strip()
+        role = (node.get('role') or '').lower()
+        actions = node.get('actions', [])
+        
+        # Has a name or text
+        if name or text:
+            return True
+        
+        # Has actions
+        if actions:
+            return True
+        
+        # Is an actionable role
+        if role in ACTIONABLE_ROLES:
+            return True
+        
+        # Is a top-level window/frame
+        if role in ('frame', 'window', 'dialog', 'alert'):
+            return True
+        
+        return False
+    
+    def _simplify_node(node: dict, depth: int = 0) -> Optional[dict]:
+        """Recursively simplify a node and its children."""
+        if depth > 30:  # Prevent infinite recursion
+            return None
+        
+        role = (node.get('role') or '').lower()
+        name = (node.get('name') or '').strip()
+        text = (node.get('text') or '').strip()
+        
+        # Skip noise roles unless they have meaningful content
+        if role in SKIP_ROLES and not name and not text:
+            # But still process children - they might be meaningful
+            children = node.get('children', [])
+            if children:
+                simplified_children = []
+                for child in children:
+                    simplified = _simplify_node(child, depth + 1)
+                    if simplified:
+                        simplified_children.append(simplified)
+                
+                # If only one meaningful child, return it directly (flatten)
+                if len(simplified_children) == 1:
+                    return simplified_children[0]
+                elif len(simplified_children) > 1:
+                    # Return a minimal container
+                    return {'children': simplified_children}
+            return None
+        
+        # Normalize bounds and center
+        bounds = _normalize_bounds(node.get('bounds'))
+        center = _normalize_center(node.get('center'))
+        
+        # Skip elements with no valid bounds (unless they have children)
+        children = node.get('children', [])
+        has_children = bool(children)
+        
+        if not bounds and not has_children:
+            return None
+        
+        # Process children first
+        simplified_children = []
+        for child in children:
+            simplified = _simplify_node(child, depth + 1)
+            if simplified:
+                simplified_children.append(simplified)
+        
+        # Check if this node is meaningful
+        is_meaningful = _is_meaningful(node)
+        
+        # If not meaningful and has no meaningful children, skip
+        if not is_meaningful and not simplified_children:
+            return None
+        
+        # If not meaningful but has children, just return children (flatten)
+        if not is_meaningful and simplified_children:
+            if len(simplified_children) == 1:
+                return simplified_children[0]
+            return {'children': simplified_children}
+        
+        # Build simplified node
+        simple_role = ROLE_MAP.get(role, role)
+        result = {'role': simple_role}
+        
+        if name:
+            result['name'] = name
+        if text and text != name:
+            result['text'] = text
+        
+        # Add normalized coordinates
+        if bounds:
+            result['box'] = f"[{bounds['x']},{bounds['y']},{bounds['w']},{bounds['h']}]"
+        if center:
+            result['center'] = f"[{center['x']},{center['y']}]"
+        
+        # Add actions if present
+        actions = node.get('actions', [])
+        if actions:
+            result['actions'] = actions
+        
+        # Add state flags
+        if node.get('active'):
+            result['active'] = True
+        if node.get('focused'):
+            result['focused'] = True
+        
+        # Add app name for context (only for top-level elements)
+        app = node.get('app')
+        if app and depth <= 2:
+            result['app'] = app
+        
+        # Add window title for context
+        window = node.get('window')
+        if window and role in ('frame', 'window', 'dialog'):
+            result['window'] = window
+        
+        # Add children
+        if simplified_children:
+            result['children'] = simplified_children
+        
+        return result
+    
+    # Process the desktop
+    simplified_desktop = {
+        'role': 'desktop',
+        'screen': f"[{screen_w},{screen_h}]"
+    }
+    
+    apps = []
+    for app_node in desktop.get('children', []):
+        simplified_app = _simplify_node(app_node)
+        if simplified_app:
+            apps.append(simplified_app)
+    
+    if apps:
+        simplified_desktop['children'] = apps
+    
+    return simplified_desktop, (screen_w, screen_h)
+
+
+def simplify_json_to_xml(json_data: dict, screen_size: Tuple[int, int] = None) -> Tuple[str, Tuple[int, int]]:
+    """
+    Converts a simplified JSON accessibility tree to XML format.
+    
+    This can accept either:
+    1. The raw JSON from /accessibility_tree endpoint (will simplify first)
+    2. An already-simplified dict from simplify_json_accessibility_tree()
+    
+    Args:
+        json_data: Either raw JSON or already-simplified dict
+        screen_size: Optional (width, height) tuple if json_data is already simplified
+        
+    Returns:
+        Tuple[str, Tuple[int, int]]: XML string and (screen_width, screen_height)
+    """
+    # Check if this is already simplified (has 'screen' as string like "[1920,1080]")
+    # or raw JSON (has 'desktop' key with nested structure)
+    if 'screen' in json_data and isinstance(json_data.get('screen'), str):
+        # Already simplified
+        simplified = json_data
+        # Parse screen size from string "[width,height]"
+        screen_str = json_data.get('screen', '[1920,1080]')
+        try:
+            parts = screen_str.strip('[]').split(',')
+            screen_w = int(parts[0])
+            screen_h = int(parts[1])
+        except:
+            screen_w, screen_h = screen_size if screen_size else (1920, 1080)
+    elif 'desktop' in json_data:
+        # Raw JSON - need to simplify first
+        simplified, (screen_w, screen_h) = simplify_json_accessibility_tree(json_data)
+    else:
+        # Assume it's already simplified without screen info
+        simplified = json_data
+        screen_w, screen_h = screen_size if screen_size else (1920, 1080)
+    
+    def _dict_to_xml(node: dict, parent: ET.Element = None) -> ET.Element:
+        """Convert a simplified dict node to XML element."""
+        role = node.get('role', 'element')
+        
+        # Create element
+        elem = ET.Element(role)
+        
+        # Add attributes
+        for key in ['name', 'text', 'box', 'center', 'app', 'window']:
+            if key in node:
+                elem.set(key, str(node[key]))
+        
+        # Add actions
+        if 'actions' in node:
+            elem.set('actions', ','.join(node['actions']))
+        
+        # Add state flags
+        if node.get('active'):
+            elem.set('active', 'true')
+        if node.get('focused'):
+            elem.set('focused', 'true')
+        
+        # Add screen size to desktop element
+        if 'screen' in node:
+            elem.set('screen', node['screen'])
+        
+        # Process children
+        for child in node.get('children', []):
+            child_elem = _dict_to_xml(child)
+            elem.append(child_elem)
+        
+        return elem
+    
+    root = _dict_to_xml(simplified)
+    xml_str = ET.tostring(root, encoding='unicode')
+    
+    return xml_str, (screen_w, screen_h)

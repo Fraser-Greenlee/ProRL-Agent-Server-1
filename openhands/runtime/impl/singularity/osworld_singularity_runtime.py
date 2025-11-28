@@ -613,11 +613,14 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 timeout=30.0
             )
             if response.status_code == 200:
-                at = response.json().get('AT', '')
-                return at
-            return None
+                result = response.json()
+                if 'AT' in result:
+                    at = result['AT']
+                    return at
+                else:
+                    return result
         except Exception as e:
-            self.log('error', f'Failed to get VM screenshot: {e}')
+            self.log('error', f'Failed to get VM accessibility tree: {e}')
             return None
     
     def _execute_pyautogui_command(self, pyautogui_command: str) -> dict:

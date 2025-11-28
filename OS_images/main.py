@@ -1537,7 +1537,7 @@ def get_accessibility_tree_nested():
     CALC_MAX_COLUMN = 16384  # Use newer LibreOffice limit
     CALC_MAX_ROW = 1048576
     
-    def build_calc_table_children(table_node: Accessible) -> list:
+    def build_calc_table_children(table_node: Accessible, inherited_app: str = None, inherited_window: str = None) -> list:
         """
         Optimized traversal for LibreOffice Calc tables.
         Uses the table interface to correctly access cells by row/column coordinates.
@@ -1613,6 +1613,11 @@ def get_accessibility_tree_nested():
                         }
                         if cell_text:
                             cell_elem["text"] = cell_text
+                        # Include app/window info inherited from parent
+                        if inherited_app:
+                            cell_elem["app"] = inherited_app
+                        if inherited_window:
+                            cell_elem["window"] = inherited_window
                         children.append(cell_elem)
                 except Exception:
                     pass
@@ -1636,8 +1641,16 @@ def get_accessibility_tree_nested():
             return False
         return any(a not in GENERIC_ACTIONS for a in actions)
     
-    def build_tree(node: Accessible, depth: int = 0, in_calc: bool = False) -> dict | None:
-        """Recursively build a nested tree structure from an AT-SPI node."""
+    def build_tree(node: Accessible, depth: int = 0, in_calc: bool = False, inherited_app: str = None, inherited_window: str = None) -> dict | None:
+        """Recursively build a nested tree structure from an AT-SPI node.
+        
+        Args:
+            node: The AT-SPI accessible node
+            depth: Current depth in the tree
+            in_calc: Whether we're inside a LibreOffice Calc document
+            inherited_app: App name inherited from parent (for broken parent chains)
+            inherited_window: Window title inherited from parent
+        """
         if depth > max_depth:
             return None
         
@@ -1647,6 +1660,18 @@ def get_accessibility_tree_nested():
         # Skip decorative/structural roles entirely
         if role in SKIP_ROLES:
             return None
+        
+        # Track app name and window title for passing down to children
+        current_app = inherited_app
+        current_window = inherited_window
+        
+        # If this is an application node, capture its name
+        if role == "application":
+            current_app = (node.name or "").strip()
+        
+        # If this is a frame/window, capture its title
+        if role in ("frame", "dialog", "window") and node.name:
+            current_window = (node.name or "").strip()
         
         # Detect LibreOffice Calc document
         if role == "document spreadsheet":
@@ -1659,15 +1684,9 @@ def get_accessibility_tree_nested():
             if node not in visible_windows:
                 # Window is occluded - check if it's an overlay app (gnome-shell, gjs)
                 # Overlay apps contain dock/panel UI and should always be included
-                app_name = ""
-                try:
-                    parent = node.parent
-                    if parent and (parent.getRoleName() or "").strip().lower() == "application":
-                        app_name = (parent.name or "").strip().lower()
-                except Exception:
-                    pass
+                app_name_check = (current_app or "").lower()
                 
-                if app_name in OVERLAY_APPS:
+                if app_name_check in OVERLAY_APPS:
                     # Overlay app window - include it (dock/panel UI)
                     pass
                 else:
@@ -1680,13 +1699,13 @@ def get_accessibility_tree_nested():
         
         # Special handling for LibreOffice Calc tables - use optimized traversal
         if in_calc and role == "table":
-            children = build_calc_table_children(node)
+            children = build_calc_table_children(node, current_app, current_window)
         else:
             try:
                 for i in range(node.childCount):
                     child = node.getChildAtIndex(i)
                     if child:
-                        child_tree = build_tree(child, depth + 1, in_calc)
+                        child_tree = build_tree(child, depth + 1, in_calc, current_app, current_window)
                         if child_tree:
                             children.append(child_tree)
             except Exception:
@@ -1763,7 +1782,17 @@ def get_accessibility_tree_nested():
         
         # Node has bounds - build full element
         x, y, w, h = bounds
-        app_name, window_title = _get_window_context_minimal(node)
+        # Use inherited app/window names (passed down during traversal) as they're more reliable
+        # than walking up parent chain (which is broken for some apps like LibreOffice)
+        app_name = inherited_app
+        window_title = inherited_window
+        # Fall back to walking up parent chain if no inherited values
+        if not app_name or not window_title:
+            walked_app, walked_window = _get_window_context_minimal(node)
+            if not app_name:
+                app_name = walked_app
+            if not window_title:
+                window_title = walked_window
         
         # Use name, or description as fallback
         display_name = name or description
