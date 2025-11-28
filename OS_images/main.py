@@ -1450,7 +1450,7 @@ def get_accessibility_tree_nested():
                         pass
                     
                     role = (child.getRoleName() or "").strip().lower()
-                    if role in ("frame", "dialog", "window", "alert"):
+                    if role in ("frame", "dialog", "window", "alert", "file chooser"):
                         bounds = _get_bounds_minimal(child)
                         if bounds:
                             name = (child.name or "").strip()
@@ -1556,34 +1556,69 @@ def get_accessibility_tree_nested():
     
     top_level_windows.sort(key=get_stacking_index)
     
+    # Check for modal dialogs - if a modal dialog is active, only show it
+    # Modal dialogs block interaction with other windows
+    modal_dialog = None
+    modal_dialog_app = None
+    for app_node, frame_node, bounds, name in top_level_windows:
+        try:
+            role = (frame_node.getRoleName() or "").strip().lower()
+            state = frame_node.getState()
+            if state.contains(pyatspi.STATE_MODAL) and state.contains(pyatspi.STATE_SHOWING):
+                modal_dialog = frame_node
+                modal_dialog_app = app_node
+                break
+        except Exception:
+            pass
+    
+    # Also check for file chooser dialogs which are modal
+    if not modal_dialog:
+        for app_node, frame_node, bounds, name in top_level_windows:
+            try:
+                role = (frame_node.getRoleName() or "").strip().lower()
+                if role in ("file chooser", "dialog", "alert"):
+                    state = frame_node.getState()
+                    if state.contains(pyatspi.STATE_ACTIVE) and state.contains(pyatspi.STATE_SHOWING):
+                        # Check if it's a file chooser or has modal-like behavior
+                        if role == "file chooser" or state.contains(pyatspi.STATE_MODAL):
+                            modal_dialog = frame_node
+                            modal_dialog_app = app_node
+                            break
+            except Exception:
+                pass
+    
     # Determine which windows are occluded based on mode
     visible_windows = set()  # Set of frame_node objects that are visible
     windows_above = []  # Accumulated bounds of windows processed (higher in stack)
     
-    # Set occlusion threshold based on mode
-    if occlusion_mode == "area":
-        occlusion_threshold = 0.9  # 90% coverage to be considered occluded
+    # If a modal dialog is active, only show that dialog
+    if modal_dialog and filter_occluded:
+        visible_windows.add(modal_dialog)
     else:
-        occlusion_threshold = 0.0  # Center-based (default)
-    
-    # Process from top to bottom (reverse order)
-    for app_node, frame_node, bounds, name in reversed(top_level_windows):
-        if filter_occluded:
-            if occlusion_mode == "active_only":
-                # Only show active/focused windows
-                try:
-                    state = frame_node.getState()
-                    is_active = state.contains(pyatspi.STATE_ACTIVE)
-                    is_focused = state.contains(pyatspi.STATE_FOCUSED)
-                    if not (is_active or is_focused):
+        # Set occlusion threshold based on mode
+        if occlusion_mode == "area":
+            occlusion_threshold = 0.9  # 90% coverage to be considered occluded
+        else:
+            occlusion_threshold = 0.0  # Center-based (default)
+        
+        # Process from top to bottom (reverse order)
+        for app_node, frame_node, bounds, name in reversed(top_level_windows):
+            if filter_occluded:
+                if occlusion_mode == "active_only":
+                    # Only show active/focused windows
+                    try:
+                        state = frame_node.getState()
+                        is_active = state.contains(pyatspi.STATE_ACTIVE)
+                        is_focused = state.contains(pyatspi.STATE_FOCUSED)
+                        if not (is_active or is_focused):
+                            continue
+                    except Exception:
                         continue
-                except Exception:
+                elif _is_window_occluded(bounds, windows_above, occlusion_threshold):
+                    # This window is occluded by windows above
                     continue
-            elif _is_window_occluded(bounds, windows_above, occlusion_threshold):
-                # This window is occluded by windows above
-                continue
-        visible_windows.add(frame_node)
-        windows_above.append(bounds)
+            visible_windows.add(frame_node)
+            windows_above.append(bounds)
     
     # LibreOffice Calc optimization constants
     # Maximum column: 1024 if ver<=7.3 else 16384
@@ -1734,7 +1769,7 @@ def get_accessibility_tree_nested():
         # Check if this is a top-level window that should be filtered due to occlusion
         # Only apply to actual top-level windows (depth == 1, direct children of application)
         # Not to internal frames used for layout (like Qt frames in VLC)
-        if filter_occluded and role in ("frame", "dialog", "window", "alert") and depth == 1:
+        if filter_occluded and role in ("frame", "dialog", "window", "alert", "file chooser") and depth == 1:
             if node not in visible_windows:
                 # Window is occluded - check if it's an overlay app (gnome-shell, gjs)
                 # Overlay apps contain dock/panel UI and should always be included

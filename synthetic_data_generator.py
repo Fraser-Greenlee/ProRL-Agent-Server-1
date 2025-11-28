@@ -608,8 +608,8 @@ class SyntheticDataGenerator:
             raw_ast = ast_xml
         else:
             # Use JSON simplifier for Linux (new format)
-            simplified_ast = ast_xml
-            raw_ast = ast_xml
+            simplified_ast = ast_xml[0]
+            raw_ast = ast_xml[0]
             self.screen_width = None
             self.screen_height = None
         
