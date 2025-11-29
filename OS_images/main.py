@@ -11,7 +11,7 @@ from typing import List, Dict, Tuple, Literal
 import concurrent.futures
 
 # Server version - increment this to verify server reload
-SERVER_VERSION = "2025.11.29.12"
+SERVER_VERSION = "2025.11.29.13"
 
 # Debug flag for panel text extraction (set to False for production)
 DEBUG_PANEL_TEXT = False
@@ -2814,15 +2814,7 @@ def get_accessibility_tree_nested():
                         # Add focused attribute for focused elements
                         if elem.get('focused'):
                             attrs.append('focused="true"')
-                        # Add caret position for text input (normalized to 0-1)
-                        if elem.get('caret') and dw > 0 and dh > 0:
-                            caret = elem['caret']
-                            cx = caret.get('x', 0) / dw
-                            cy = caret.get('y', 0) / dh
-                            attrs.append(f'caret="[{cx:.3f},{cy:.3f}]"')
-                        # Add caret offset (character position)
-                        if elem.get('caret_offset') is not None:
-                            attrs.append(f'caret_offset="{elem["caret_offset"]}"')
+                        # Note: caret position is now shown inline in text as <caret/>
                         # Add editing content for cells being edited
                         if elem.get('editing'):
                             editing_text = escape_xml(elem['editing'])
@@ -2832,6 +2824,27 @@ def get_accessibility_tree_nested():
                             attrs.append(f'value="{elem["value"]}"')
                         
                         attr_str = ' '.join(attrs)
+                        
+                        # Helper to insert <caret/> into text at the correct position
+                        def insert_caret_marker(txt, caret_offset):
+                            """Insert <caret/> marker at the specified character offset."""
+                            if caret_offset is None or caret_offset < 0:
+                                return txt
+                            # Ensure offset is within bounds
+                            offset = min(caret_offset, len(txt))
+                            return txt[:offset] + '<caret/>' + txt[offset:]
+                        
+                        # Get display text with caret marker if applicable
+                        display_text = text
+                        caret_offset = elem.get('caret_offset')
+                        if caret_offset is not None and elem.get('focused'):
+                            # Insert caret marker into text
+                            # Note: we need to use the unescaped text for offset calculation
+                            raw_text = elem.get('text', '')
+                            if raw_text:
+                                marked_text = insert_caret_marker(raw_text, caret_offset)
+                                # Escape XML but preserve <caret/>
+                                display_text = escape_xml(marked_text).replace('&lt;caret/&gt;', '<caret/>')
                         
                         # If this element has nested items (list, table, tree) or controls (scrollbars)
                         controls = elem.get('controls', [])
@@ -2844,8 +2857,8 @@ def get_accessibility_tree_nested():
                                 lines.append(format_element_xml(ctrl, indent + '  '))
                             lines.append(f'{indent}</{role}>')
                             return '\n'.join(lines)
-                        elif text and text != name:
-                            return f'{indent}<{role} {attr_str}>{text}</{role}>'
+                        elif display_text and display_text != name:
+                            return f'{indent}<{role} {attr_str}>{display_text}</{role}>'
                         else:
                             return f'{indent}<{role} {attr_str} />'
                     
