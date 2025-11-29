@@ -11,7 +11,7 @@ from typing import List, Dict, Tuple, Literal
 import concurrent.futures
 
 # Server version - increment this to verify server reload
-SERVER_VERSION = "2025.11.29.9"
+SERVER_VERSION = "2025.11.29.12"
 
 # Debug flag for panel text extraction (set to False for production)
 DEBUG_PANEL_TEXT = False
@@ -2081,6 +2081,29 @@ def get_accessibility_tree_nested():
             if role in ('text', 'entry', 'combo box', 'spin button', 'password text', 'paragraph'):
                 if state.contains(pyatspi.STATE_EDITABLE):
                     elem["editable"] = True
+            
+            # For focused elements with text, get caret position
+            # Note: Some apps (LibreOffice) report multiple elements as focused
+            # We only mark as truly focused if there's a valid caret position
+            try:
+                text_iface = node.queryText()
+                if text_iface:
+                    caret_offset = text_iface.caretOffset
+                    if caret_offset >= 0:
+                        elem["focused"] = True
+                        elem["caret_offset"] = caret_offset
+                        # Get caret position in screen coordinates
+                        try:
+                            rect = text_iface.getCharacterExtents(caret_offset, 0)  # 0 = screen coords
+                            if rect and len(rect) >= 2:
+                                elem["caret"] = {"x": rect[0], "y": rect[1]}
+                                if len(rect) >= 4:
+                                    elem["caret"]["w"] = rect[2]
+                                    elem["caret"]["h"] = rect[3]
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         except Exception:
             pass
         
@@ -2437,6 +2460,11 @@ def get_accessibility_tree_nested():
                                 nested_items.append(submenu)
                             elif gc_role in ITEM_ROLES and is_valid_bounds(gc_bounds):
                                 # For panels (like presentation placeholders), look for text in child paragraphs
+                                # Also extract caret info from the focused paragraph
+                                gc_caret = None
+                                gc_caret_offset = None
+                                gc_focused = False
+                                gc_editable = False
                                 if gc_role == 'panel' and not gc_text:
                                     debug_log(f"[NESTED PANEL] '{gc_name}' has {len(grandchild.get('children', []))} children")
                                     for ggc in grandchild.get('children', []):
@@ -2445,7 +2473,16 @@ def get_accessibility_tree_nested():
                                         debug_log(f"  ggc: [{ggc_role}] text={ggc_text!r}")
                                         if ggc_role == 'paragraph' and ggc_text:
                                             gc_text = ggc_text
-                                            debug_log(f"  -> Extracted: {gc_text!r}")
+                                            # Copy caret info from the paragraph
+                                            # Only mark as focused if there's a valid caret position
+                                            if ggc.get('editable'):
+                                                gc_editable = True
+                                            if ggc.get('caret'):
+                                                gc_caret = ggc['caret']
+                                                gc_focused = True  # Only focused if has caret
+                                            if ggc.get('caret_offset') is not None:
+                                                gc_caret_offset = ggc['caret_offset']
+                                            debug_log(f"  -> Extracted: {gc_text!r} focused={gc_focused} caret={gc_caret}")
                                             break
                                 
                                 # Only include if has name or text
@@ -2473,6 +2510,15 @@ def get_accessibility_tree_nested():
                                         item['selected'] = True
                                     if grandchild.get('selection'):
                                         item['selection'] = grandchild['selection']
+                                    # Add caret info from child paragraph
+                                    if gc_focused:
+                                        item['focused'] = True
+                                    if gc_editable:
+                                        item['editable'] = True
+                                    if gc_caret:
+                                        item['caret'] = gc_caret
+                                    if gc_caret_offset is not None:
+                                        item['caret_offset'] = gc_caret_offset
                                     nested_items.append(item)
                         if nested_items:
                             # Use the nested container's role and bounds, with extracted items
@@ -2624,6 +2670,13 @@ def get_accessibility_tree_nested():
                 # Mark editable fields
                 if node.get('editable'):
                     elem['editable'] = True
+                # Include focused state and caret position
+                if node.get('focused'):
+                    elem['focused'] = True
+                if node.get('caret'):
+                    elem['caret'] = node['caret']
+                if node.get('caret_offset') is not None:
+                    elem['caret_offset'] = node['caret_offset']
                 # Include value for scroll bars/sliders
                 if node.get('value') is not None:
                     elem['value'] = node['value']
@@ -2647,6 +2700,15 @@ def get_accessibility_tree_nested():
                     elem['app'] = node.get('app')
                 if node.get('disabled'):
                     elem['disabled'] = True
+                # Include focused state and caret position for editable content
+                if node.get('focused'):
+                    elem['focused'] = True
+                if node.get('editable'):
+                    elem['editable'] = True
+                if node.get('caret'):
+                    elem['caret'] = node['caret']
+                if node.get('caret_offset') is not None:
+                    elem['caret_offset'] = node['caret_offset']
                 results.append(elem)
             
             for child in children:
@@ -2749,6 +2811,18 @@ def get_accessibility_tree_nested():
                         # Add editable attribute for text fields
                         if elem.get('editable'):
                             attrs.append('editable="true"')
+                        # Add focused attribute for focused elements
+                        if elem.get('focused'):
+                            attrs.append('focused="true"')
+                        # Add caret position for text input (normalized to 0-1)
+                        if elem.get('caret') and dw > 0 and dh > 0:
+                            caret = elem['caret']
+                            cx = caret.get('x', 0) / dw
+                            cy = caret.get('y', 0) / dh
+                            attrs.append(f'caret="[{cx:.3f},{cy:.3f}]"')
+                        # Add caret offset (character position)
+                        if elem.get('caret_offset') is not None:
+                            attrs.append(f'caret_offset="{elem["caret_offset"]}"')
                         # Add editing content for cells being edited
                         if elem.get('editing'):
                             editing_text = escape_xml(elem['editing'])
