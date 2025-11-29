@@ -435,9 +435,6 @@ class SetupController:
         if not shell and isinstance(command, str) and len(command.split()) > 1:
             logger.warning("Command should be a list of strings. Now it is a string. Will split it by space.")
             command = command.split()
-            if command[0] == 'google-chrome':
-                # add --force-renderer-accessibility to the command
-                command.append('--force-renderer-accessibility')
 
         payload = json.dumps({"command": command, "shell": shell})
         headers = {"Content-Type": "application/json"}
