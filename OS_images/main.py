@@ -11,7 +11,7 @@ from typing import List, Dict, Tuple, Literal
 import concurrent.futures
 
 # Server version - increment this to verify server reload
-SERVER_VERSION = "2025.11.29.13"
+SERVER_VERSION = "2025.11.29.15"
 
 # Debug flag for panel text extraction (set to False for production)
 DEBUG_PANEL_TEXT = False
@@ -2077,33 +2077,32 @@ def get_accessibility_tree_nested():
                 if state.contains(pyatspi.STATE_SELECTED):
                     elem["selected"] = True
             
-            # For text/entry fields, mark if editable
-            if role in ('text', 'entry', 'combo box', 'spin button', 'password text', 'paragraph'):
-                if state.contains(pyatspi.STATE_EDITABLE):
-                    elem["editable"] = True
-            
-            # For focused elements with text, get caret position
-            # Note: Some apps (LibreOffice) report multiple elements as focused
-            # We only mark as truly focused if there's a valid caret position
-            try:
-                text_iface = node.queryText()
-                if text_iface:
-                    caret_offset = text_iface.caretOffset
-                    if caret_offset >= 0:
-                        elem["focused"] = True
-                        elem["caret_offset"] = caret_offset
-                        # Get caret position in screen coordinates
-                        try:
-                            rect = text_iface.getCharacterExtents(caret_offset, 0)  # 0 = screen coords
-                            if rect and len(rect) >= 2:
-                                elem["caret"] = {"x": rect[0], "y": rect[1]}
-                                if len(rect) >= 4:
-                                    elem["caret"]["w"] = rect[2]
-                                    elem["caret"]["h"] = rect[3]
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+            # For text/entry fields, mark if editable and get caret position
+            # Only show caret for actually editable elements, not labels
+            editable_roles = ('text', 'entry', 'combo box', 'spin button', 'password text', 'paragraph')
+            if role in editable_roles and state.contains(pyatspi.STATE_EDITABLE):
+                elem["editable"] = True
+                
+                # For editable elements, get caret position if focused
+                try:
+                    text_iface = node.queryText()
+                    if text_iface:
+                        caret_offset = text_iface.caretOffset
+                        if caret_offset >= 0:
+                            elem["focused"] = True
+                            elem["caret_offset"] = caret_offset
+                            # Get caret position in screen coordinates
+                            try:
+                                rect = text_iface.getCharacterExtents(caret_offset, 0)  # 0 = screen coords
+                                if rect and len(rect) >= 2:
+                                    elem["caret"] = {"x": rect[0], "y": rect[1]}
+                                    if len(rect) >= 4:
+                                        elem["caret"]["w"] = rect[2]
+                                        elem["caret"]["h"] = rect[3]
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
         except Exception:
             pass
         
@@ -2262,6 +2261,8 @@ def get_accessibility_tree_nested():
                                 'bounds': para_bounds,
                                 'editable': child.get('editable', False),
                                 'name': child.get('name', ''),
+                                'caret_offset': child.get('caret_offset'),  # Include caret position
+                                'focused': child.get('focused', False),
                             }
                             break
             
@@ -2414,8 +2415,15 @@ def get_accessibility_tree_nested():
                             # For table cells, check if there's an associated editing panel
                             if child_role == 'table cell' and child_name in cell_editing_panels:
                                 editing = cell_editing_panels[child_name]
-                                if editing.get('text'):
-                                    item['editing'] = editing['text']
+                                if editing.get('text') is not None:  # Allow empty string
+                                    edit_text = editing['text']
+                                    caret_offset = editing.get('caret_offset')
+                                    # Insert caret marker if we have a valid caret position
+                                    if caret_offset is not None and caret_offset >= 0:
+                                        offset = min(caret_offset, len(edit_text))
+                                        edit_text = edit_text[:offset] + '<caret/>' + edit_text[offset:]
+                                        item['focused'] = True
+                                    item['editing'] = edit_text
                                     item['editable'] = True
                             
                             items.append(item)
@@ -2815,9 +2823,9 @@ def get_accessibility_tree_nested():
                         if elem.get('focused'):
                             attrs.append('focused="true"')
                         # Note: caret position is now shown inline in text as <caret/>
-                        # Add editing content for cells being edited
+                        # Add editing content for cells being edited (with caret marker preserved)
                         if elem.get('editing'):
-                            editing_text = escape_xml(elem['editing'])
+                            editing_text = escape_xml(elem['editing']).replace('&lt;caret/&gt;', '<caret/>')
                             attrs.append(f'editing="{editing_text}"')
                         # Add value for scroll bars/sliders
                         if elem.get('value') is not None:
