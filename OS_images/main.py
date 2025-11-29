@@ -11,7 +11,7 @@ from typing import List, Dict, Tuple, Literal
 import concurrent.futures
 
 # Server version - increment this to verify server reload
-SERVER_VERSION = "2025.11.29.26"
+SERVER_VERSION = "2025.11.29.28"
 
 # Debug flag for panel text extraction (set to False for production)
 DEBUG_PANEL_TEXT = False
@@ -2204,7 +2204,7 @@ def get_accessibility_tree_nested():
         # Roles that contain important content/context
         CONTENT_ROLES = {
             'static', 'label', 'heading', 'paragraph', 'block quote',
-            'article', 'caption', 'description', 'alert'
+            'article', 'caption', 'description', 'alert', 'terminal'
         }
         # Note: 'section' removed - Chrome sections duplicate content already in static/heading elements
         
