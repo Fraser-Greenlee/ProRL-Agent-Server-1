@@ -10,6 +10,18 @@ from typing import Any, Optional, Sequence
 from typing import List, Dict, Tuple, Literal
 import concurrent.futures
 
+# Server version - increment this to verify server reload
+SERVER_VERSION = "2025.11.29.9"
+
+# Debug flag for panel text extraction (set to False for production)
+DEBUG_PANEL_TEXT = False
+DEBUG_LOG_FILE = "/tmp/panel_debug.log"
+
+def debug_log(msg):
+    if DEBUG_PANEL_TEXT:
+        with open(DEBUG_LOG_FILE, "a") as f:
+            f.write(msg + "\n")
+
 import Xlib
 import lxml.etree
 import pyautogui
@@ -258,6 +270,17 @@ def launch_app():
         return "{:} launched successfully".format(command if shell else " ".join(command))
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/version', methods=['GET'])
+def get_version():
+    """Return server version to verify code updates."""
+    return jsonify({
+        "version": SERVER_VERSION,
+        "features": [
+            "panel_text_extraction",  # Extract text from presentation placeholders
+        ]
+    })
 
 
 @app.route('/screenshot', methods=['GET'])
@@ -2236,6 +2259,11 @@ def get_accessibility_tree_nested():
             bounds = node.get('bounds')
             children = node.get('children', [])
             
+            # Debug: log all nodes being processed
+            if 'document' in role or 'presentation' in role.lower():
+                debug_log(f"[NODE] role='{role}' name='{name}' bounds={bounds is not None} children={len(children)}")
+                debug_log(f"  in CONTAINER_WITH_ITEMS: {role in CONTAINER_WITH_ITEMS}")
+            
             # Handle container elements (lists, tables, trees) - extract with their items nested
             if role in CONTAINER_WITH_ITEMS and bounds:
                 # Collect items from this container
@@ -2315,6 +2343,20 @@ def get_accessibility_tree_nested():
                     elif child_role in ITEM_ROLES:
                         child_name = child.get('name', '')
                         child_text = child.get('text', '')
+                        
+                        # For panels (like presentation placeholders), look for text in child paragraphs
+                        if child_role == 'panel' and not child_text:
+                            debug_log(f"[PANEL] '{child_name}' has {len(child.get('children', []))} children")
+                            for gc in child.get('children', []):
+                                gc_role = gc.get('role', '')
+                                gc_text = gc.get('text', '')
+                                debug_log(f"  gc: [{gc_role}] text={gc_text!r}")
+                                if gc_role == 'paragraph':
+                                    if gc_text:
+                                        child_text = gc_text
+                                        debug_log(f"  -> Extracted: {child_text!r}")
+                                        break
+                        
                         # For paragraph/section, use text as the display content
                         # Include if there's any text content (not just name) and valid bounds
                         if is_valid_bounds(child_bounds) and (child_name or child_text):
@@ -2322,6 +2364,9 @@ def get_accessibility_tree_nested():
                             display_name = child_name
                             if child_role in ('paragraph', 'section') and child_text:
                                 display_name = child_text[:100]  # Truncate very long text
+                            # For panels with text content (presentation placeholders), show the text
+                            if child_role == 'panel' and child_text:
+                                display_name = child_name or child_text[:100]
                             item = {
                                 'role': child_role,
                                 'name': display_name,
@@ -2331,6 +2376,7 @@ def get_accessibility_tree_nested():
                             # Include full text if different from display name
                             if child_text and child_text != display_name:
                                 item['text'] = child_text
+                                debug_log(f"[TEXT] Added to '{display_name}': {child_text!r}")
                             if child.get('disabled'):
                                 item['disabled'] = True
                             if 'checked' in child:
@@ -2389,27 +2435,45 @@ def get_accessibility_tree_nested():
                                 if submenu_items:
                                     submenu['items'] = submenu_items
                                 nested_items.append(submenu)
-                            elif gc_role in ITEM_ROLES and is_valid_bounds(gc_bounds) and (gc_name or gc_text):
-                                display_name = gc_name
-                                if gc_role in ('paragraph', 'section') and gc_text:
-                                    display_name = gc_text[:100]
-                                item = {
-                                    'role': gc_role,
-                                    'name': display_name,
-                                    'bounds': gc_bounds,
-                                    'center': grandchild.get('center'),
-                                }
-                                if gc_text and gc_text != display_name:
-                                    item['text'] = gc_text
-                                if grandchild.get('disabled'):
-                                    item['disabled'] = True
-                                if 'checked' in grandchild:
-                                    item['checked'] = grandchild['checked']
-                                if grandchild.get('selected'):
-                                    item['selected'] = True
-                                if grandchild.get('selection'):
-                                    item['selection'] = grandchild['selection']
-                                nested_items.append(item)
+                            elif gc_role in ITEM_ROLES and is_valid_bounds(gc_bounds):
+                                # For panels (like presentation placeholders), look for text in child paragraphs
+                                if gc_role == 'panel' and not gc_text:
+                                    debug_log(f"[NESTED PANEL] '{gc_name}' has {len(grandchild.get('children', []))} children")
+                                    for ggc in grandchild.get('children', []):
+                                        ggc_role = ggc.get('role', '')
+                                        ggc_text = ggc.get('text', '')
+                                        debug_log(f"  ggc: [{ggc_role}] text={ggc_text!r}")
+                                        if ggc_role == 'paragraph' and ggc_text:
+                                            gc_text = ggc_text
+                                            debug_log(f"  -> Extracted: {gc_text!r}")
+                                            break
+                                
+                                # Only include if has name or text
+                                if gc_name or gc_text:
+                                    display_name = gc_name
+                                    if gc_role in ('paragraph', 'section') and gc_text:
+                                        display_name = gc_text[:100]
+                                    # For panels with text content, show the text
+                                    if gc_role == 'panel' and gc_text:
+                                        display_name = gc_name or gc_text[:100]
+                                    item = {
+                                        'role': gc_role,
+                                        'name': display_name,
+                                        'bounds': gc_bounds,
+                                        'center': grandchild.get('center'),
+                                    }
+                                    if gc_text and gc_text != display_name:
+                                        item['text'] = gc_text
+                                        debug_log(f"[NESTED TEXT] Added to '{display_name}': {gc_text!r}")
+                                    if grandchild.get('disabled'):
+                                        item['disabled'] = True
+                                    if 'checked' in grandchild:
+                                        item['checked'] = grandchild['checked']
+                                    if grandchild.get('selected'):
+                                        item['selected'] = True
+                                    if grandchild.get('selection'):
+                                        item['selection'] = grandchild['selection']
+                                    nested_items.append(item)
                         if nested_items:
                             # Use the nested container's role and bounds, with extracted items
                             nested_container = {
