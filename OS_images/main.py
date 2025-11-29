@@ -11,7 +11,7 @@ from typing import List, Dict, Tuple, Literal
 import concurrent.futures
 
 # Server version - increment this to verify server reload
-SERVER_VERSION = "2025.11.29.15"
+SERVER_VERSION = "2025.11.29.26"
 
 # Debug flag for panel text extraction (set to False for production)
 DEBUG_PANEL_TEXT = False
@@ -2283,10 +2283,6 @@ def get_accessibility_tree_nested():
             bounds = node.get('bounds')
             children = node.get('children', [])
             
-            # Debug: log all nodes being processed
-            if 'document' in role or 'presentation' in role.lower():
-                debug_log(f"[NODE] role='{role}' name='{name}' bounds={bounds is not None} children={len(children)}")
-                debug_log(f"  in CONTAINER_WITH_ITEMS: {role in CONTAINER_WITH_ITEMS}")
             
             # Handle container elements (lists, tables, trees) - extract with their items nested
             if role in CONTAINER_WITH_ITEMS and bounds:
@@ -2411,6 +2407,15 @@ def get_accessibility_tree_nested():
                             # Include text selection info
                             if child.get('selection'):
                                 item['selection'] = child['selection']
+                            # Include editable state and caret for paragraphs/text
+                            if child.get('editable'):
+                                item['editable'] = True
+                            if child.get('focused'):
+                                item['focused'] = True
+                            if child.get('caret_offset') is not None:
+                                item['caret_offset'] = child['caret_offset']
+                            if child.get('caret'):
+                                item['caret'] = child['caret']
                             
                             # For table cells, check if there's an associated editing panel
                             if child_role == 'table cell' and child_name in cell_editing_panels:
@@ -2473,6 +2478,18 @@ def get_accessibility_tree_nested():
                                 gc_caret_offset = None
                                 gc_focused = False
                                 gc_editable = False
+                                
+                                # For paragraphs directly in containers (like document text), extract caret info
+                                if gc_role == 'paragraph':
+                                    if grandchild.get('editable'):
+                                        gc_editable = True
+                                    if grandchild.get('focused') and grandchild.get('caret_offset') is not None:
+                                        gc_focused = True
+                                    if grandchild.get('caret'):
+                                        gc_caret = grandchild['caret']
+                                    if grandchild.get('caret_offset') is not None:
+                                        gc_caret_offset = grandchild['caret_offset']
+                                
                                 if gc_role == 'panel' and not gc_text:
                                     debug_log(f"[NESTED PANEL] '{gc_name}' has {len(grandchild.get('children', []))} children")
                                     for ggc in grandchild.get('children', []):
@@ -2844,15 +2861,19 @@ def get_accessibility_tree_nested():
                         
                         # Get display text with caret marker if applicable
                         display_text = text
+                        has_caret_in_name = False
                         caret_offset = elem.get('caret_offset')
                         if caret_offset is not None and elem.get('focused'):
                             # Insert caret marker into text
-                            # Note: we need to use the unescaped text for offset calculation
-                            raw_text = elem.get('text', '')
+                            # For paragraphs in containers, text content may be in 'name' or 'text'
+                            raw_text = elem.get('text', '') or name
                             if raw_text:
                                 marked_text = insert_caret_marker(raw_text, caret_offset)
                                 # Escape XML but preserve <caret/>
                                 display_text = escape_xml(marked_text).replace('&lt;caret/&gt;', '<caret/>')
+                                # If text was in 'name', we need to show it as content
+                                if not elem.get('text') and name:
+                                    has_caret_in_name = True
                         
                         # If this element has nested items (list, table, tree) or controls (scrollbars)
                         controls = elem.get('controls', [])
@@ -2865,7 +2886,7 @@ def get_accessibility_tree_nested():
                                 lines.append(format_element_xml(ctrl, indent + '  '))
                             lines.append(f'{indent}</{role}>')
                             return '\n'.join(lines)
-                        elif display_text and display_text != name:
+                        elif display_text and (display_text != name or has_caret_in_name):
                             return f'{indent}<{role} {attr_str}>{display_text}</{role}>'
                         else:
                             return f'{indent}<{role} {attr_str} />'
