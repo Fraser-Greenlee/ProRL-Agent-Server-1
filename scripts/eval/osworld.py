@@ -8,7 +8,7 @@ import copy
 import os
 import json 
 
-from openhands.nvidia.async_server import OpenHandsServer
+from openhands.nvidia.async_server_osworld import OpenHandsServer
 
 def get_existing_results(output_dir: str) -> set[str]:
     """Get set of instance IDs that already have results saved."""
@@ -75,8 +75,7 @@ def test_server(args):
     print('Starting server')
     server = OpenHandsServer(
         llm_server_addresses=[args.llm_server_address],
-        max_init_workers=args.max_parallel_jobs,
-        max_run_workers=args.max_parallel_jobs,
+        max_workers=args.max_parallel_jobs,
         allow_skip_eval=True,
     )
     server.start()
@@ -161,7 +160,7 @@ def parse_args():
     parser.add_argument(
         '--data-file',
         type=str,
-        default='/root/OSWorld/osworld_test_nogdrive.json',
+        default='/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json',
         help='Path to the data file'
     )
     parser.add_argument(
