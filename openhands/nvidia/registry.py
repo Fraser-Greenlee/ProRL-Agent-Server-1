@@ -19,6 +19,7 @@ _DEFAULT_AGENT_CONFIG = {
     'strict_loop_detector': False,
     'enable_vision': False,
     'enable_a11y_tree': False,
+    'max_image_history': None,
 }
 
 

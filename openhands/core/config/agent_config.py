@@ -54,6 +54,7 @@ class AgentConfig(BaseModel):
     action_timeout: float | None = Field(default=None)
     """The timeout for an action in seconds. If None, the action will not timeout and default to 300 seconds."""
     system_prompt_template: str | None = Field(default=None)
+    max_image_history: int | None = Field(default=None)
 
     model_config = {'extra': 'forbid'}
 

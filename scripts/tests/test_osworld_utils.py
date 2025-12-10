@@ -18,14 +18,14 @@ from openhands.nvidia.timer import PausableTimer
 async def run(instance):
     max_iterations = 35
     sampling_params = {
-        'model': 'gpt-5-mini-2025-08-07',
-        'api_key': os.getenv('OPENAI_API_KEY', ''),
+        'model': 'hosted_vllm/Qwen/Qwen3-VL-235B-A22B-Instruct',
+        #'api_key': os.getenv('OPENAI_API_KEY', ''),
         'modify_params': False,
-        'log_completions': True,
+        'log_completions': False,
         'native_tool_calling': True,
         'temperature': 1,
     }
-    llm_config = LLMConfig(base_url='https://api.openai.com/v1', **sampling_params)
+    llm_config = LLMConfig(base_url='http://localhost:8000/v1', **sampling_params)
 
 
     job_details = JobDetails(
@@ -36,6 +36,7 @@ async def run(instance):
     job_details.agent_config['max_iterations'] = max_iterations
     job_details.agent_config['enable_vision'] = True
     job_details.agent_config['enable_a11y_tree'] = False
+    job_details.agent_config['max_image_history'] = 3
     job_details.timer = PausableTimer(timeout=500)
     job_details.timer.start()
 

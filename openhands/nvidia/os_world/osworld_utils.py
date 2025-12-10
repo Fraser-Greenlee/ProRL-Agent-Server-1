@@ -5,6 +5,7 @@ import pandas as pd
 import base64
 import numpy as np
 import asyncio
+from typing import Callable
 from evaluation.utils.shared import (  # type: ignore
     EvalMetadata,
     get_default_sandbox_config_for_eval,
@@ -28,11 +29,11 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import (
     OSWorldSingularityRuntime,
 )
 from openhands.controller.state.state import State
-from openhands.events.action import CmdRunAction, IPythonRunCellAction, MessageAction
+from openhands.events.action import CmdRunAction, IPythonRunCellAction, MessageAction, Action
 from openhands.events.observation import CmdOutputObservation
 from openhands.nvidia.logger import nvidia_logger as logger
 from openhands.core.logger import openhands_logger as openhands_logger
-from evaluation.utils.shared import codeact_user_response, is_fatal_evaluation_error
+from evaluation.utils.shared import is_fatal_evaluation_error
 
 from openhands.nvidia.utils import is_last_action_finish
 import json
@@ -43,7 +44,18 @@ from openhands.nvidia.controller import run_controller_with_controller
 from openhands.nvidia.os_world.controllers.setup import SetupController
 from openhands.nvidia.os_world.evaluate import Evaluator
 
-
+def osworld_user_response(
+    state: State,
+    encapsulate_solution: bool = False,
+    try_parse: Callable[[Action], str] | None = None,
+) -> str:
+    msg = (
+        'Please continue working on the task on whatever approach you think is suitable.\n'
+        'If you think you have solved the task, use the finish tool to finish the interaction.\n'
+        'If you think that the task can not be solved, use the fail tool to indicate that the task can not be completed.\n'
+        'IMPORTANT: YOU SHOULD NEVER ASK FOR HUMAN HELP.\n'
+    )
+    return msg
 
 def get_config(
     instance: dict,
@@ -91,6 +103,7 @@ def get_config(
         strict_loop_detector=agent_config['strict_loop_detector'], # set to true only if training
         enable_vision=agent_config['enable_vision'],
         enable_a11y_tree=agent_config['enable_a11y_tree'],
+        max_image_history=agent_config['max_image_history'],
     )
     config.set_agent_config(agent_config)
     return config
@@ -105,6 +118,8 @@ def get_instruction(instance: pd.Series | dict, metadata: EvalMetadata, runtime:
     instruction = f"""Work on the following task accourding to the UI screenshot.
 
 Instruction: {instance['instruction']}
+
+First describe the screenshot in detail, think step by step, then generate the next move.
 """
     
     if include_a11y_tree:
@@ -190,10 +205,10 @@ async def initialize_runtime(runtime: Runtime, instance: dict, metadata: EvalMet
     This function is called before the runtime is used to run the agent.
     """
     openhands_logger.info(f'{"-" * 50} BEGIN Runtime Initialization Fn {"-" * 50}')
-    # create cache directory
-    cache_dir = f"/tmp/osworld_cache_{runtime.sid}"
-    os.makedirs(cache_dir, exist_ok=True)
-    logger.debug(f"Created cache directory: {cache_dir}")
+    cache_dir = os.getenv('OSWORLD_SETUP_CACHE_DIR', '/tmp/osworld_example')
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir, exist_ok=True)
+        logger.debug(f"Created cache directory: {cache_dir}")
 
     runtime.setup_controller = SetupController(
         vm_ip="127.0.0.1",
@@ -236,7 +251,7 @@ async def run_agent(
                 sid=sid,
                 runtime=runtime,
                 agent=agent,
-                fake_user_response_fn=codeact_user_response,
+                fake_user_response_fn=osworld_user_response,
                 controller=controller,
                 initial_state=initial_state,
             )
@@ -270,6 +285,13 @@ async def run_agent(
 async def evaluate_agent(run_results: dict, instance: dict, runtime: Runtime):
     try:
         evaluator = Evaluator(instance, runtime.setup_controller)
+
+        # create cache directory
+        cache_dir = f"/tmp/osworld_cache_{runtime.sid}"
+        os.makedirs(cache_dir, exist_ok=True)
+        logger.debug(f"Created eval cache directory: {cache_dir}")
+        evaluator.cache_dir = cache_dir
+
         score = await evaluator.evaluate(run_results['messages'])
         # Some evaluation metrics are fuzzy matching such as pdf comparison
         if score > 0.95:

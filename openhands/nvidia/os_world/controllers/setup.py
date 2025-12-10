@@ -456,7 +456,8 @@ class SetupController:
             time.sleep(self.additional_wait_time)
             ensure_launch_retries += 1
             if ensure_launch_retries >= 10:
-                raise Exception("Failed to ensure launch command finish after multiple retries")
+                logger.error("Failed to ensure launch command finish after multiple retries. Continue anyway...")
+                break
 
         # Sleep additional time to ensure window is launched
         if isinstance(command, list):
