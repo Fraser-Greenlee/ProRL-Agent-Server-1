@@ -338,11 +338,6 @@ class OpenHandsServer:
                 logger.warning(f'[worker-{wid}] Job {job_id} timed out during {current_stage}: {e}')
                 job_details.timeout_error = True
 
-                # Handle runtime cleanup
-                if job_details.runtime:
-                    self._cleanup_job_runtime(job_details.runtime, job_id)
-                    job_details.runtime = None
-
                 # Get the appropriate exception handler based on current stage
                 exception_type = f'{current_stage}_exception'
                 exception_func = get_registered_functions(
@@ -357,13 +352,13 @@ class OpenHandsServer:
                     }
                 if job_details.event is not None:
                     job_details.event.set()
-
-            except Exception as e:
-                logger.error(f'[worker-{wid}] Job {job_id} failed during {current_stage}: {e}')
                 # Handle runtime cleanup
                 if job_details.runtime:
                     self._cleanup_job_runtime(job_details.runtime, job_id)
                     job_details.runtime = None
+
+            except Exception as e:
+                logger.error(f'[worker-{wid}] Job {job_id} failed during {current_stage}: {e}')
 
                 # Get the appropriate exception handler based on current stage
                 exception_type = f'{current_stage}_exception'
@@ -376,6 +371,10 @@ class OpenHandsServer:
                     job_details.results = {'error': f'Exception during {current_stage}: {str(e)}'}
                 if job_details.event is not None:
                     job_details.event.set()
+                # Handle runtime cleanup
+                if job_details.runtime:
+                    self._cleanup_job_runtime(job_details.runtime, job_id)
+                    job_details.runtime = None
 
             finally:
                 # Thread-safe cleanup

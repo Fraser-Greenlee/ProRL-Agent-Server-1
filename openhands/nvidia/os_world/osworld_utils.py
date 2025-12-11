@@ -3,6 +3,7 @@ import time
 import os
 import pandas as pd
 import base64
+import traceback
 import numpy as np
 import asyncio
 from typing import Callable
@@ -195,6 +196,7 @@ async def initialize_agents(
         await initialize_runtime(runtime, instance, metadata)
 
     except Exception as e:
+        runtime.close()
         logger.error(f"Error initializing runtime: {e}")
         raise e
     return runtime, metadata, config
@@ -219,7 +221,10 @@ async def initialize_runtime(runtime: Runtime, instance: dict, metadata: EvalMet
         runtime=runtime  # Pass your runtime object here
     )
 
-    await runtime.setup_controller.setup(instance['config'])
+    if 'config' in instance:
+        await runtime.setup_controller.setup(instance['config'])
+    else:
+        logger.warning(f"No config found in instance: {instance}")
     openhands_logger.info(f'{"-" * 50} END Runtime Initialization Fn {"-" * 50}')
 
 async def run_agent(
