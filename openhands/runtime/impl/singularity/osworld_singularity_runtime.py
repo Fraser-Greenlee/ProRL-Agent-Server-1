@@ -781,11 +781,14 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         
         elif action_type == "PRESS":
             key = parameters.get('key', '')
+            presses = parameters.get('presses', 1)
             if isinstance(key, list):
                 # Multiple keys - treat as hotkey
                 keys_str = "', '".join(key)
                 return f"pyautogui.hotkey('{keys_str}')"
             else:
+                if presses > 1:
+                    return f"pyautogui.press('{key}', presses={presses})"
                 return f"pyautogui.press('{key}')"
         
         elif action_type == "HOTKEY":
