@@ -201,7 +201,7 @@ class OSWorldAgent(Agent):
         self.system_prompt = os.path.join(os.path.dirname(__file__), 'prompts', 'system_prompt_osworld.j2')
         with open(self.system_prompt, 'r') as file:
             self.system_prompt = file.read()
-        self.system_prompt = Template(self.system_prompt).render(CLIENT_PASSWORD='password')
+        self.system_prompt = Template(self.system_prompt).render(CLIENT_PASSWORD='password').format(CLIENT_PASSWORD='password')
 
         self.tools = OSWORLD_TOOLS
 
