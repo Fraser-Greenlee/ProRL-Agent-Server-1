@@ -925,7 +925,7 @@ Select the appropriate action using the osworld tool."""
 
                     # Some LLMs don't have reasoning content...
                     try:
-                        reasoning_content = reasoning[0].content
+                        reasoning_content = reasoning[0].content[0].text
                     except:
                         reasoning_content = f"Achieving goal: {goal}"
                     
@@ -1127,24 +1127,26 @@ Select the appropriate action using the osworld tool."""
         historical_goals = []  # Track goals separately
         await asyncio.sleep(4.0) # Wait for the UI to update
 
-         # Get current state
         state = self.get_current_state(runtime)
-        
-        # Save screenshot
-        screenshot_path = self.save_screenshot(
-            state['screenshot'],
-            trajectory_id,
-            0
-        )
-       
+     
         for step in range(self.max_steps_per_trajectory + 1):
             logger.info(f"\nStep {step + 1}/{self.max_steps_per_trajectory}")
             logger.info("-" * 80)
             
 
             if step == self.max_steps_per_trajectory:
+                 # Get current state
+                state = self.get_current_state(runtime)
+
+                # Save screenshot
+                screenshot_path = self.save_screenshot(
+                    state['screenshot'],
+                    trajectory_id,
+                    0
+                )
+ 
                 step_data = {
-                    'step': step,
+                    'step': len(trajectory['steps']) + 1,
                     'timestamp': state['timestamp'],
                     'screenshot': screenshot_path,
                     'ast_xml': state['ast_xml'],  # Keep full AST (not truncated)

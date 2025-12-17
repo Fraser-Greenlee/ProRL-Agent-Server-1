@@ -117,7 +117,7 @@ def convert_observation_to_message(
         prompt_text = ERROR_OBSERVATION_FEEDBACK_PROMPT.format(instruction=instruction, error_message=observation.content)
         return Message(
             role='tool', # or user?
-            content=[TextContent(text=observation.content)],
+            content=[TextContent(text=prompt_text)],
             tool_call_id=observation.error_id,
             name=observation.name,
         )
@@ -132,9 +132,12 @@ def convert_message_action_to_message_full_state(
         if accessibility_tree and len(accessibility_tree) > 0:
             accessibility_tree = linearize_accessibility_tree(action.accessibility_tree)
             text_content += f"\n\nAccessibility Tree:\n{accessibility_tree}"
-    content = [TextContent(text=text_content)]
-    content.append(ImageContent(image_urls=action.image_urls))
-    content.append(TextContent(text=action.accessibility_tree))
+    if isinstance(text_content, str):
+        content = [TextContent(text=text_content)]
+    if action.image_urls is not None and len(action.image_urls) > 0:
+        content.append(ImageContent(image_urls=action.image_urls))
+    if isinstance(action.accessibility_tree, str):
+        content.append(TextContent(text=action.accessibility_tree))
     return Message(
         role='user',
         content=content,
@@ -155,8 +158,10 @@ def convert_observation_to_message_full_state(
         content = [TextContent(text=prompt_text)]
         
         # We always add screenshot and accessibility tree to the message
-        content.append(ImageContent(image_urls=observation.image_urls))
-        content.append(TextContent(text=observation.accessibility_tree))
+        if observation.image_urls is not None and len(observation.image_urls) > 0:
+            content.append(ImageContent(image_urls=observation.image_urls))
+        if isinstance(observation.accessibility_tree, str):
+            content.append(TextContent(text=observation.accessibility_tree))
         return Message(
             role='tool', # or user?
             content=content,
@@ -167,7 +172,7 @@ def convert_observation_to_message_full_state(
         prompt_text = ERROR_OBSERVATION_FEEDBACK_PROMPT.format(instruction=instruction, error_message=observation.content)
         return Message(
             role='tool', # or user?
-            content=[TextContent(text=observation.content)],
+            content=[TextContent(text=prompt_text)],
             tool_call_id=observation.error_id,
             name=observation.name,
         )
@@ -196,7 +201,7 @@ class OSWorldAgent(Agent):
         self.system_prompt = os.path.join(os.path.dirname(__file__), 'prompts', 'system_prompt_osworld.j2')
         with open(self.system_prompt, 'r') as file:
             self.system_prompt = file.read()
-        self.system_prompt = Template(self.system_prompt).render(CLIENT_PASSWORD='password')
+        self.system_prompt = Template(self.system_prompt).render(CLIENT_PASSWORD='password').format(CLIENT_PASSWORD='password')
 
         self.tools = OSWORLD_TOOLS
 
@@ -261,28 +266,34 @@ class OSWorldAgent(Agent):
         """
         messages: list[Message] = []
 
-        # System message
-        messages.append(Message(role='system', content=[TextContent(text=self.system_prompt)]))
-
         # Get instruction from initial user message
         # User message is a MessageAction with content and image_urls, will be processed in events
         instruction = get_instruction(initial_user_message)
         include_a11y_tree = self.config.enable_a11y_tree
-        include_screenshot = self.config.enable_vision
+        total_screenshot_count = 0
 
-        # Build history prompts (alternating assistant/user messages)
-        for event in events:
+        # Build history prompts (alternating assistant/user messages) in reverse order
+        for event in reversed(events):
+            include_screenshot = self.config.enable_vision
+            if self.config.max_image_history is not None and total_screenshot_count >= self.config.max_image_history:
+                include_screenshot = False
+
             if isinstance(event, OSWorldInteractiveAction):
                 messages.append(convert_action_to_message(event))
             elif isinstance(event, MessageAction):
                 messages.append(convert_message_action_to_message(
                     event, include_a11y_tree=include_a11y_tree, include_screenshot=include_screenshot))
+                total_screenshot_count += 1
             elif isinstance(event, OSWorldOutputObservation) or isinstance(event, ErrorObservation):
                 msg = convert_observation_to_message(
                     event, instruction, include_a11y_tree=include_a11y_tree, include_screenshot=include_screenshot)
                 messages.append(msg)
+                total_screenshot_count += 1
 
-        return messages
+        # System message
+        messages.append(Message(role='system', content=[TextContent(text=self.system_prompt)]))
+
+        return messages[::-1]
 
     def step(self, state: State) -> Action:
         """Performs one step using the GuiAgent.

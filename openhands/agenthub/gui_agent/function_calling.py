@@ -49,6 +49,21 @@ def combine_thought(action: Action, thought: str) -> Action:
         action.thought = thought
     return action
 
+def validate_arguments(arguments: dict, tool_call_function_name: str) -> dict:
+    if 'x' not in arguments:
+        raise FunctionCallValidationError(
+            f'Missing required argument "x" in tool call {tool_call_function_name}'
+        )
+    if 'y' not in arguments:
+        # Qwen3-vl does not follow tool call format well. Instead gives our cordintes like {'x': [a, b]}
+        if len(arguments['x']) < 2:
+            raise FunctionCallValidationError(
+                f'Missing required argument "y" in tool call {tool_call_function_name}'
+            )
+        else:
+            arguments['y'] = arguments['x'][1]
+            arguments['x'] = arguments['x'][0]
+    return arguments
 
 def response_to_actions(
     response: ModelResponse,
@@ -84,14 +99,7 @@ def response_to_actions(
         # ================================================
 
         if tool_call.function.name == ClickTool['function']['name']:
-            if 'x' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "x" in tool call {tool_call.function.name}'
-                )
-            if 'y' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "y" in tool call {tool_call.function.name}'
-                )
+            arguments = validate_arguments(arguments, tool_call.function.name)
             action = OSWorldInteractiveAction(
                 method='execute_agentic_action',
                 params={
@@ -105,14 +113,7 @@ def response_to_actions(
         # RightClickTool
         # ================================================
         elif tool_call.function.name == RightClickTool['function']['name']:
-            if 'x' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "x" in tool call {tool_call.function.name}'
-                )
-            if 'y' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "y" in tool call {tool_call.function.name}'
-                )
+            arguments = validate_arguments(arguments, tool_call.function.name)
             action = OSWorldInteractiveAction(
                 method='execute_agentic_action',
                 params={
@@ -126,14 +127,7 @@ def response_to_actions(
         # MiddleClickTool
         # ================================================
         elif tool_call.function.name == MiddleClickTool['function']['name']:
-            if 'x' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "x" in tool call {tool_call.function.name}'
-                )
-            if 'y' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "y" in tool call {tool_call.function.name}'
-                )
+            arguments = validate_arguments(arguments, tool_call.function.name)
             action = OSWorldInteractiveAction(
                 method='execute_agentic_action',
                 params={
@@ -147,14 +141,7 @@ def response_to_actions(
         # DoubleClickTool
         # ================================================
         elif tool_call.function.name == DoubleClickTool['function']['name']:
-            if 'x' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "x" in tool call {tool_call.function.name}'
-                )
-            if 'y' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "y" in tool call {tool_call.function.name}'
-                )
+            arguments = validate_arguments(arguments, tool_call.function.name)
             action = OSWorldInteractiveAction(
                 method='execute_agentic_action',
                 params={
@@ -168,14 +155,7 @@ def response_to_actions(
         # TripleClickTool
         # ================================================
         elif tool_call.function.name == TripleClickTool['function']['name']:
-            if 'x' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "x" in tool call {tool_call.function.name}'
-                )
-            if 'y' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "y" in tool call {tool_call.function.name}'
-                )
+            arguments = validate_arguments(arguments, tool_call.function.name)
             action = OSWorldInteractiveAction(
                 method='execute_agentic_action',
                 params={
@@ -189,14 +169,7 @@ def response_to_actions(
         # MoveToTool
         # ================================================
         elif tool_call.function.name == MoveToTool['function']['name']:
-            if 'x' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "x" in tool call {tool_call.function.name}'
-                )
-            if 'y' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "y" in tool call {tool_call.function.name}'
-                )
+            arguments = validate_arguments(arguments, tool_call.function.name)
             action = OSWorldInteractiveAction(
                 method='execute_agentic_action',
                 params={
@@ -210,14 +183,7 @@ def response_to_actions(
         # DragToTool
         # ================================================
         elif tool_call.function.name == DragToTool['function']['name']:
-            if 'x' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "x" in tool call {tool_call.function.name}'
-                )
-            if 'y' not in arguments:
-                raise FunctionCallValidationError(
-                    f'Missing required argument "y" in tool call {tool_call.function.name}'
-                )
+            arguments = validate_arguments(arguments, tool_call.function.name)
             action = OSWorldInteractiveAction(
                 method='execute_agentic_action',
                 params={
