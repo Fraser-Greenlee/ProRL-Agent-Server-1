@@ -771,11 +771,13 @@ What specific sub-goal would you like to achieve next?"""
 - Your task is to imagine ONE reasonable sub-goal you could achieve based on what you see. 
 - Respond with a single, specific goal.
 
-1. First, conduct a detailed analysis of the question. Consider different angles, potential solutions, and reason through the problem step-by-step. Enclose this entire thinking process within <think> and </think> tags.
+1. First, conduct a detailed analysis of the question. Consider different angles, potential solutions, and reason through the problem step-by-step.
 
 2. After the thinking section, provide a clear, concise, and direct answer to the user's question. Separate the answer from the think section with a newline.
 
 Ensure that the thinking process is thorough but remains focused on the query. The final answer should be standalone goal and not reference the thinking section.
+Output should be in the following format:
+<goal>{goal}</goal>
 """
 
  
@@ -925,6 +927,16 @@ Ensure that the thinking process is thorough but remains focused on the query. T
                 for tool_call in msg.tool_calls:
                     func_name = tool_call.function.name
                     func_args = json.loads(tool_call.function.arguments or "{}")
+
+                    # Qwen3-vl does not follow tool call format well. Instead gives our cordintes like {'x': [a, b]}
+                    try:
+                        if 'y' not in func_args:
+                            func_args['y'] = func_args['x'][1]
+                            func_args['x'] = func_args['x'][0]
+                    except:
+                        print(f"Error parsing tool call arguments: {tool_call.function.arguments}")
+                        pass
+                        
                     logger.info(f"Tool call: {func_name}({func_args})")
                     
                     # Store the action
@@ -1137,6 +1149,8 @@ Continue with the goal or indicate if it's achieved."""
             
             # Generate goal using VLM (with screenshot + AST)
             goal = self.generate_goal_vlm(state, historical_goals, persona)
+            # extract the goal from the response
+            goal = goal.split('<goal>')[1].split('</goal>')[0]
             
             if goal is None:
                 logger.info("VLM decided to stop or failed to generate goal")
@@ -1151,7 +1165,7 @@ Continue with the goal or indicate if it's achieved."""
             
             state, final_message = result
             
-            # Add goal to history
+            # Add goal to history with achievement status
             historical_goals.append(f"{goal}\n{final_message}")
            
             # Save trajectory incrementally
