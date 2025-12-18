@@ -901,6 +901,37 @@ Ensure that the thinking process is thorough but remains focused on the query. T
                 msg = response.choices[0].message
                 
                 if not msg.tool_calls:
+                    # Check if the LLM tried to use <tool_call> tags instead of proper tool calling
+                    if msg.content and '<tool_call>' in msg.content and '</tool_call>' in msg.content:
+                        logger.warning("LLM generated <tool_call> tags in content instead of proper tool calls. Asking to retry...")
+                        
+                        # Add the malformed response to history
+                        messages.append({
+                            "role": "assistant",
+                            "content": msg.content,
+                        })
+                        
+                        # Ask the LLM to retry with proper tool calling format
+                        messages.append({
+                            "role": "user",
+                            "content": "Your tool call JSON is malformed (e.g., missing quotes, missing keys). Please use the tool calling function directly with valid JSON format."
+                        })
+                        
+                        # Retry the request
+                        try:
+                            response = self.vlm_client.chat.completions.create(
+                                model=self.vlm_model,
+                                messages=messages,
+                                tools=self.osworld_tools,
+                                tool_choice="auto",
+                                max_tokens=512,
+                                temperature=0.2,
+                            )
+                            continue  # Go back to process the new response
+                        except Exception as e:
+                            logger.error(f"Error retrying tool call: {e}")
+                            break
+                    
                     # No more tool calls - final answer reached
                     logger.info(f"=== FINAL ANSWER === {msg.content}")
                     final_message = f"     >>> final message for this goal: {msg.content}"
@@ -930,7 +961,7 @@ Ensure that the thinking process is thorough but remains focused on the query. T
 
                     # Qwen3-vl does not follow tool call format well. Instead gives our cordintes like {'x': [a, b]}
                     try:
-                        if 'y' not in func_args:
+                        if 'y' not in func_args and 'x' in func_args and isinstance(func_args['x'], list) and len(func_args['x']) > 1:
                             func_args['y'] = func_args['x'][1]
                             func_args['x'] = func_args['x'][0]
                     except:
