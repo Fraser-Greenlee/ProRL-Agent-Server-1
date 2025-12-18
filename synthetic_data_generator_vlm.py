@@ -903,39 +903,99 @@ Ensure that the thinking process is thorough but remains focused on the query. T
                 if not msg.tool_calls:
                     # Check if the LLM tried to use <tool_call> tags instead of proper tool calling
                     if msg.content and '<tool_call>' in msg.content and '</tool_call>' in msg.content:
-                        logger.warning("LLM generated <tool_call> tags in content instead of proper tool calls. Asking to retry...")
+                        logger.warning("LLM generated <tool_call> tags in content. Attempting to parse...")
                         
-                        # Add the malformed response to history
-                        messages.append({
-                            "role": "assistant",
-                            "content": msg.content,
-                        })
+                        # Try to parse and fix malformed tool calls
+                        import re
+                        parsed_tool_calls = []
+                        tool_call_matches = re.findall(r'<tool_call>\s*(.*?)\s*</tool_call>', msg.content, re.DOTALL)
                         
-                        # Ask the LLM to retry with proper tool calling format
-                        messages.append({
-                            "role": "user",
-                            "content": "Your tool call JSON is malformed (e.g., missing quotes, missing keys). Please use the tool calling function directly with valid JSON format."
-                        })
+                        for i, match in enumerate(tool_call_matches):
+                            try:
+                                raw_json = match.strip()
+                                
+                                # Try direct JSON parse first
+                                try:
+                                    tool_data = json.loads(raw_json)
+                                except json.JSONDecodeError:
+                                    # Fix common malformed patterns like {"x": 0.218, 0.941} -> {"x": 0.218, "y": 0.941}
+                                    # Pattern: {"x": <num>, <num>} missing "y":
+                                    fixed_json = re.sub(
+                                        r'"arguments"\s*:\s*\{\s*"x"\s*:\s*([\d.]+)\s*,\s*([\d.]+)\s*\}',
+                                        r'"arguments": {"x": \1, "y": \2}',
+                                        raw_json
+                                    )
+                                    # Also fix pattern like {x": 0.5, "y": 0.5} (missing quote before x)
+                                    fixed_json = re.sub(r'\{(\s*)x":', r'{"\1x":', fixed_json)
+                                    # Fix pattern like {"x": 0.5, y": 0.5} (missing quote before y) 
+                                    fixed_json = re.sub(r',(\s*)y":', r', "y":', fixed_json)
+                                    
+                                    tool_data = json.loads(fixed_json)
+                                    logger.info(f"Fixed malformed JSON: {raw_json[:50]}... -> {fixed_json[:50]}...")
+                                
+                                tool_name = tool_data.get('name', '')
+                                tool_args = tool_data.get('arguments', {})
+                                
+                                # Create a mock tool call object
+                                class MockToolCall:
+                                    def __init__(self, tc_id, name, arguments):
+                                        self.id = tc_id
+                                        self.function = type('Function', (), {
+                                            'name': name,
+                                            'arguments': json.dumps(arguments)
+                                        })()
+                                
+                                mock_tc = MockToolCall(
+                                    tc_id=f"parsed_call_{loop}_{i}",
+                                    name=tool_name,
+                                    arguments=tool_args
+                                )
+                                parsed_tool_calls.append(mock_tc)
+                                logger.info(f"Parsed tool call: {tool_name}({tool_args})")
+                                
+                            except (json.JSONDecodeError, Exception) as e:
+                                logger.warning(f"Failed to parse tool call: {match[:100]}... Error: {e}")
                         
-                        # Retry the request
-                        try:
-                            response = self.vlm_client.chat.completions.create(
-                                model=self.vlm_model,
-                                messages=messages,
-                                tools=self.osworld_tools,
-                                tool_choice="auto",
-                                max_tokens=512,
-                                temperature=0.2,
-                            )
-                            continue  # Go back to process the new response
-                        except Exception as e:
-                            logger.error(f"Error retrying tool call: {e}")
-                            break
+                        if parsed_tool_calls:
+                            # Use parsed tool calls - create a mock message with tool_calls
+                            class MockMessage:
+                                def __init__(self, content, tool_calls):
+                                    self.content = content
+                                    self.tool_calls = tool_calls
+                            
+                            msg = MockMessage(msg.content, parsed_tool_calls)
+                            logger.info(f"Successfully parsed {len(parsed_tool_calls)} tool call(s) from content")
+                        else:
+                            # Could not parse, ask LLM to retry
+                            logger.warning("Could not parse tool calls, asking LLM to retry...")
+                            messages.append({
+                                "role": "assistant",
+                                "content": msg.content,
+                            })
+                            messages.append({
+                                "role": "user",
+                                "content": f"Your tool call JSON is malformed (e.g., missing quotes, missing keys). Please use the tool calling function directly with valid JSON format."
+                            })
+                            
+                            try:
+                                response = self.vlm_client.chat.completions.create(
+                                    model=self.vlm_model,
+                                    messages=messages,
+                                    tools=self.osworld_tools,
+                                    tool_choice="auto",
+                                    max_tokens=512,
+                                    temperature=0.2,
+                                )
+                                continue
+                            except Exception as e:
+                                logger.error(f"Error retrying tool call: {e}")
+                                break
                     
                     # No more tool calls - final answer reached
-                    logger.info(f"=== FINAL ANSWER === {msg.content}")
-                    final_message = f"     >>> final message for this goal: {msg.content}"
-                    break
+                    if not msg.tool_calls:
+                        logger.info(f"=== FINAL ANSWER === {msg.content}")
+                        final_message = f"     >>> final message for this goal: {msg.content}"
+                        break
                 
                 logger.info(f"=== VLM TOOL LOOP {loop} === {len(msg.tool_calls)} tool calls")
                 
@@ -1021,7 +1081,8 @@ Ensure that the thinking process is thorough but remains focused on the query. T
                     # Build tool result with new screenshot
                     observation_text = json.dumps({
                         **observation,
-                        'current_cursor_position': state['cursor_position']
+                        'current_cursor_position': state['cursor_position'],
+                        'ast_xml': state['simplified_ast']
                     })
                     
                     # Add tool result message with NEW screenshot
@@ -1029,6 +1090,8 @@ Ensure that the thinking process is thorough but remains focused on the query. T
 
 Here is the updated screen after the action. The UI Accessibility Tree is now:
 {state['simplified_ast']}
+
+Please observe the screen, cursor position, and compare with previous screenshots and actions. If a repeated action does not change the screen (e.g., clicking the same coordinates multiple times with no effect), the click may be missing the target - adjust the coordinates to click on the correct element. If the action did not produce the expected result, fix it in the next step.
 
 Continue with the goal or indicate if it's achieved."""
                     
@@ -1042,7 +1105,7 @@ Continue with the goal or indicate if it's achieved."""
                 # Continue conversation
                 # Strip old images from history to manage context size
                 # Only the latest tool result will have the new screenshot
-                messages = strip_images_from_messages(messages[:-1]) + [messages[-1]]
+                messages = strip_images_from_messages(messages[:-3]) + [messages[-1]]
                 
                 try:
                     response = self.vlm_client.chat.completions.create(
