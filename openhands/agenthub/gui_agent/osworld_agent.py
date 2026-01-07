@@ -1,5 +1,6 @@
 import os
 from jinja2 import Template
+from collections import deque
 
 from openhands.agenthub.gui_agent.tools import OSWORLD_TOOLS
 
@@ -210,6 +211,8 @@ class OSWorldAgent(Agent):
             self.llm.model_info['supports_vision'] = True
         else:
             self.llm.model_info = {'supports_vision': True}
+        
+        self.pending_actions: deque['Action'] = deque()
 
         self.reset()
 
@@ -218,6 +221,7 @@ class OSWorldAgent(Agent):
         super().reset()
         self.cost_accumulator = 0
         self.error_accumulator = 0
+        self.pending_actions.clear()
 
     def _get_initial_user_message(self, history: list[Event]) -> MessageAction:
         """Get the initial user message from the conversation history.
@@ -308,6 +312,9 @@ class OSWorldAgent(Agent):
         - MessageAction(content) - Message action to run (e.g. ask for clarification)
         - AgentFinishAction() - end the interaction
         """
+        # Continue with pending actions if any
+        if self.pending_actions:
+            return self.pending_actions.popleft()
 
         format_error = state.get_last_agent_format_error()
         if format_error and isinstance(format_error, str):
@@ -334,12 +341,15 @@ class OSWorldAgent(Agent):
         params['extra_body'] = {'metadata': state.to_llm_metadata(agent_name=self.name)}
         response = self.llm.completion(**params)
         logger.debug(f'Response from LLM: {response}')
-        action = codeact_function_calling.response_to_actions(response, timeout=self.config.action_timeout)
-        if self.pause_time > 0.5:
-            logger.info(f'Setting pause time to {self.pause_time} seconds for agentic action')
-            action.pause_time = self.pause_time
-        logger.debug(f'Actions after response_to_actions: {action}')
-        return action
+        actions = codeact_function_calling.response_to_actions(response, timeout=self.config.action_timeout)
+        logger.debug(f'Actions after response_to_actions: {actions}')
+        for action in actions:
+            if self.pause_time > 0.5:
+                logger.info(f'Setting pause time to {self.pause_time} seconds for agentic action')
+                action.pause_time = self.pause_time
+            self.pending_actions.append(action)
+        
+        return self.pending_actions.popleft()
 
     def _get_messages_from_agent_state(
         self, events: list[Event], initial_user_message: MessageAction,
