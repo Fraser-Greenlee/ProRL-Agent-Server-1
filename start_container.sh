@@ -6,10 +6,9 @@
 #SBATCH --time=4:00:00
 #SBATCH --account=llmservice_fm_vision
 #SBATCH --gpus-per-node=8
-#SBATCH --output=slurm-%j.out
-#SBATCH --error=slurm-%j.err
+#SBATCH --output=./cua/logs/slurm-%j.out
+#SBATCH --error=./cua/logs/slurm-%j.out
 #SBATCH --reservation=sla_res_osworld_agent_vlm_gpu
-##SBATCH --nodelist=pool0-01466
 
 # Mounts
 # NODE_NAME=$1
