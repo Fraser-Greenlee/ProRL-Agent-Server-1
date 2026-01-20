@@ -64,7 +64,7 @@ async def main():
     config.sandbox.run_as_fakeroot = True
 
     # Check if VM image exists
-    vm_image_path = Path(__file__).parent.parent / "OS_images/Ubuntu.qcow2.bak"  # todo change this to qco2 when transfer is over
+    vm_image_path = Path(__file__).parent.parent / "OS_images/Ubuntu.qcow2"
     if not Path(vm_image_path).exists():
         print(f"ERROR: VM image not found at {vm_image_path}")
         print("Please place your Ubuntu VM image with OSWorld server at this location.")
