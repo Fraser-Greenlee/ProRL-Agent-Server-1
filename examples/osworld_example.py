@@ -21,6 +21,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+import ipdb
+
 from openhands.core.config import OpenHandsConfig
 from openhands.core.logger import openhands_logger as logger
 from openhands.events import EventStream
@@ -31,41 +33,56 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import (
 from openhands.storage import get_file_store
 
 
+def save_screenshot(runtime: OSWorldSingularityRuntime, screenshot_path: str = None):
+    # Also get raw screenshot for saving
+    screenshot = runtime.get_vm_screenshot()
+    if screenshot:
+        if screenshot_path is None:
+            screenshot_path = f"./screenshots/debug-{len(list(Path('./screenshots').glob('debug-*.png')))}.png"
+        with open(screenshot_path, 'wb') as f:
+            f.write(screenshot)
+        print(f"✓ Screenshot saved to {screenshot_path}")
+        print(f"  Size: {len(screenshot)} bytes")
+    else:
+        print("✗ Failed to get screenshot")
+    print()
+
+
 async def main():
     """Main example function."""
-    
+
     print("=" * 80)
     print("OSWorld Runtime Example")
     print("=" * 80)
     print()
-    
+
     # 1. Create configuration
     print("1. Creating configuration...")
     config = OpenHandsConfig()
     config.runtime = 'osworld'
     config.sandbox.base_container_image = 'ubuntu:24.04'
     config.sandbox.run_as_fakeroot = True
-    
+
     # Check if VM image exists
-    vm_image_path = './OS_images/Ubuntu.qcow2'
+    vm_image_path = Path(__file__).parent.parent / "OS_images/Ubuntu.qcow2.bak"  # todo change this to qco2 when transfer is over
     if not Path(vm_image_path).exists():
         print(f"ERROR: VM image not found at {vm_image_path}")
         print("Please place your Ubuntu VM image with OSWorld server at this location.")
         return 1
-    
+
     print(f"✓ Configuration created")
     print(f"  Runtime: {config.runtime}")
     print(f"  Base image: {config.sandbox.base_container_image}")
     print(f"  VM image: {vm_image_path}")
     print()
-    
+
     # 2. Create event stream
     print("2. Creating event stream...")
     file_store = get_file_store('local', '/tmp/osworld_example')
     event_stream = EventStream(sid='osworld-example', file_store=file_store)
     print("✓ Event stream created")
     print()
-    
+
     # 3. Create OSWorld runtime
     print("3. Creating OSWorld runtime...")
     runtime = OSWorldSingularityRuntime(
@@ -79,7 +96,7 @@ async def main():
     print("✓ Runtime created")
     print(f"  OS Type: {runtime.os_type}")
     print()
-    
+
     try:
         # 4. Connect to runtime (starts VM)
         print("4. Connecting to runtime (this may take 1-2 minutes)...")
@@ -92,7 +109,7 @@ async def main():
         print(f"  VM Server URL: {runtime.osworld_vm_url}")
         print(f"  VNC URL: {runtime.vnc_url}")
         print()
-        
+
         # 5. Check if VM is alive
         print("5. Checking VM health...")
         runtime.check_if_alive()
@@ -101,7 +118,7 @@ async def main():
 
          # Wait a bit
         await asyncio.sleep(10)
-        
+
         # 6. Get VM screenshot using OSWorldInteractiveAction
         print("6. Taking VM screenshot...")
         action = OSWorldInteractiveAction(
@@ -111,22 +128,13 @@ async def main():
         )
         observation = runtime.run_action(action)
         print(f"   Observation: {observation.content[:100]}...")  # Show first 100 chars
-        
+
         # Also get raw screenshot for saving
-        screenshot = runtime.get_vm_screenshot()
-        if screenshot:
-            screenshot_path = '/tmp/osworld_screenshot.png'
-            with open(screenshot_path, 'wb') as f:
-                f.write(screenshot)
-            print(f"✓ Screenshot saved to {screenshot_path}")
-            print(f"  Size: {len(screenshot)} bytes")
-        else:
-            print("✗ Failed to get screenshot")
-        print()
-        
+        save_screenshot(runtime, screenshot_path="./screenshots/startup.png")
+
         # 7. Execute some actions using OSWorldInteractiveAction
         print("7. Executing VM actions...")
-        
+
         # Example 1: Click at position
         print("   a. Clicking at position (10, 10)...")
         action = OSWorldInteractiveAction(
@@ -142,10 +150,12 @@ async def main():
         observation = runtime.run_action(action)
         print(f"      Result: {observation.content}")
         print(f"      Exit code: {observation.exit_code}")
-        
+
         # Wait a bit
         await asyncio.sleep(1)
-        
+
+        save_screenshot(runtime, screenshot_path="./screenshots/click.png")
+
         # Example 2: Type some text
         print("   b. Typing 'Hello OSWorld'...")
         action = OSWorldInteractiveAction(
@@ -161,10 +171,12 @@ async def main():
         observation = runtime.run_action(action)
         print(f"      Result: {observation.content}")
         print(f"      Exit code: {observation.exit_code}")
-        
+
         # Wait a bit
         await asyncio.sleep(1)
-        
+
+        save_screenshot(runtime, screenshot_path="./screenshots/hello_world.png")
+
         # Example 3: Press Enter
         print("   c. Pressing Enter key...")
         action = OSWorldInteractiveAction(
@@ -180,13 +192,15 @@ async def main():
         observation = runtime.run_action(action)
         print(f"      Result: {observation.content}")
         print(f"      Exit code: {observation.exit_code}")
-        
+
         print("✓ Actions executed successfully")
         print()
-        
+
+        save_screenshot(runtime, screenshot_path="./screenshots/enter.png")
+
         # 8. Get VM information
         print("8. Getting VM information...")
-        
+
         # Get platform
         print("   a. Getting VM platform...")
         action = OSWorldInteractiveAction(
@@ -196,7 +210,7 @@ async def main():
         )
         observation = runtime.run_action(action)
         print(f"      Platform: {observation.content}")
-        
+
         # Get screen size
         print("   b. Getting screen size...")
         action = OSWorldInteractiveAction(
@@ -206,33 +220,33 @@ async def main():
         )
         observation = runtime.run_action(action)
         print(f"      Screen size: {observation.content}")
-        
+
         print("✓ VM information retrieved")
         print()
-        
+
         # 9. Test advanced OSWorld methods
         print("9. Testing advanced OSWorld methods...")
-        
-        # Test get_accessibility_tree
-        print("   a. Getting accessibility tree...")
-        action = OSWorldInteractiveAction(
-            method='get_accessibility_tree',
-            params={},
-            thought='Getting UI accessibility tree for element inspection'
-        )
-        observation = runtime.run_action(action)
-        if observation.content and len(observation.content) > 0:
-            print(f"      Accessibility tree retrieved ({len(observation.content)} chars)")
-            # Show first 200 characters
-            print(f"      Preview: {observation.content[:200]}...")
-            with open('/tmp/osworld_accessibility_tree.xml', 'w') as f:
-                f.write(observation.content)
-            print(f"      Accessibility tree saved to /tmp/osworld_accessibility_tree.xml")
-        else:
-            print("      Note: Accessibility tree not available or empty")
-        
-        await asyncio.sleep(1)
-        
+
+        # # Test get_accessibility_tree
+        # print("   a. Getting accessibility tree...")
+        # action = OSWorldInteractiveAction(
+        #     method='get_accessibility_tree',
+        #     params={},
+        #     thought='Getting UI accessibility tree for element inspection'
+        # )
+        # observation = runtime.run_action(action)
+        # if observation.content and len(observation.content) > 0:
+        #     print(f"      Accessibility tree retrieved ({len(observation.content)} chars)")
+        #     # Show first 200 characters
+        #     print(f"      Preview: {observation.content[:200]}...")
+        #     with open('/tmp/osworld_accessibility_tree.xml', 'w') as f:
+        #         f.write(observation.content)
+        #     print(f"      Accessibility tree saved to /tmp/osworld_accessibility_tree.xml")
+        # else:
+        #     print("      Note: Accessibility tree not available or empty")
+        #
+        # await asyncio.sleep(1)
+
         # Test get_terminal_output
         print("   b. Getting terminal output...")
         action = OSWorldInteractiveAction(
@@ -246,9 +260,9 @@ async def main():
             print(f"      Preview: {observation.content[:200]}...")
         else:
             print("      Note: No terminal output available")
-        
+
         await asyncio.sleep(1)
-        
+
         # Test execute_python_command
         print("   c. Executing Python command...")
         action = OSWorldInteractiveAction(
@@ -261,9 +275,9 @@ async def main():
         observation = runtime.run_action(action)
         print(f"      Python output: {observation.content}")
         print(f"      Exit code: {observation.exit_code}")
-        
+
         await asyncio.sleep(1)
-        
+
         # Test run_python_script
         print("   d. Running Python script...")
         python_script = """
@@ -289,9 +303,9 @@ print(f"Home directory: {os.path.expanduser('~')}")
             if line.strip():
                 print(f"        {line}")
         print(f"      Exit code: {observation.exit_code}")
-        
+
         await asyncio.sleep(1)
-        
+
         # Test run_bash_script
         print("   e. Running bash script...")
         bash_script = """echo "Hello from Bash!"
@@ -308,7 +322,7 @@ echo "Date: $(date)"
             thought='Running a simple bash script'
         )
         observation = runtime.run_action(action)
-        
+
         # Handle both success and error cases
         from openhands.events.observation import ErrorObservation
         if isinstance(observation, ErrorObservation):
@@ -320,13 +334,13 @@ echo "Date: $(date)"
                     print(f"        {line}")
             if hasattr(observation, 'exit_code'):
                 print(f"      Exit code: {observation.exit_code}")
-        
+
         print("✓ Advanced methods tested")
         print()
-        
+
         # 10. Test file download with get_file
         print("10. Testing file download (get_file)...")
-        
+
         # First, create a test file in the VM
         print("   a. Creating test file in VM...")
         test_content = "Hello from OSWorld VM!\nThis is a test file.\nCreated at: $(date)"
@@ -343,9 +357,9 @@ echo "Date: $(date)"
             print(f"      ⚠ Could not create test file: {observation.content}")
         else:
             print(f"      Test file created")
-        
+
         await asyncio.sleep(1)
-        
+
         # Now download it using get_file
         print("   b. Downloading test file using get_file...")
         action = OSWorldInteractiveAction(
@@ -372,13 +386,13 @@ echo "Date: $(date)"
                     print(f"      Unexpected format: {observation.content[:100]}")
             except Exception as e:
                 print(f"      Could not save file: {e}")
-        
+
         print("✓ File download tested")
         print()
-        
+
         # 11. Test VM information methods
         print("11. Testing VM information methods...")
-        
+
         # Test get_vm_window_size
         print("   a. Getting VM window size...")
         action = OSWorldInteractiveAction(
@@ -394,9 +408,9 @@ echo "Date: $(date)"
             print(f"      Note: {observation.content}")
         else:
             print(f"      Window size: {observation.content}")
-        
+
         await asyncio.sleep(1)
-        
+
         # Test get_vm_wallpaper
         print("   b. Getting VM wallpaper...")
         action = OSWorldInteractiveAction(
@@ -422,9 +436,9 @@ echo "Date: $(date)"
                     print(f"      Unexpected format: {observation.content[:100]}")
             except Exception as e:
                 print(f"      Could not save wallpaper: {e}")
-        
+
         await asyncio.sleep(1)
-        
+
         # Test get_vm_desktop_path
         print("   c. Getting VM desktop path...")
         action = OSWorldInteractiveAction(
@@ -435,9 +449,9 @@ echo "Date: $(date)"
         observation = runtime.run_action(action)
         desktop_path = observation.content
         print(f"      Desktop path: {desktop_path}")
-        
+
         await asyncio.sleep(1)
-        
+
         # Test get_vm_directory_tree
         print("   d. Getting VM directory tree...")
         action = OSWorldInteractiveAction(
@@ -458,13 +472,13 @@ echo "Date: $(date)"
                     print(f"        {line}")
             if len(observation.content.split('\n')) > 10:
                 print(f"        ... ({len(observation.content.split('\n')) - 10} more lines)")
-        
+
         print("✓ VM information methods tested")
         print()
-        
+
         # 12. Test screen recording
         print("12. Testing screen recording...")
-        
+
         # Start recording
         print("   a. Starting screen recording...")
         action = OSWorldInteractiveAction(
@@ -477,11 +491,11 @@ echo "Date: $(date)"
             print(f"      ⚠ Recording not available: {observation.content}")
         else:
             print(f"      Recording started: {observation.content}")
-            
+
             # Wait a few seconds while recording
             print("   b. Recording for 3 seconds...")
             await asyncio.sleep(3)
-            
+
             # Do some actions while recording
             print("   c. Performing actions while recording...")
             action = OSWorldInteractiveAction(
@@ -510,7 +524,7 @@ echo "Date: $(date)"
             )
             runtime.run_action(action)
             await asyncio.sleep(1)
-            
+
             print("   e. Clicking at center...")
             action = OSWorldInteractiveAction(
                 method='execute_action',
@@ -524,7 +538,7 @@ echo "Date: $(date)"
             )
             runtime.run_action(action)
             await asyncio.sleep(1)
-            
+
             # Stop recording
             print("   f. Stopping recording and downloading...")
             action = OSWorldInteractiveAction(
@@ -550,10 +564,10 @@ echo "Date: $(date)"
                         print(f"      Unexpected format: {observation.content[:100]}")
                 except Exception as e:
                     print(f"      Could not save recording: {e}")
-        
+
         print("✓ Screen recording tested")
         print()
-        
+
         # 13. Get another screenshot to see changes
         print("13. Taking final screenshot...")
         action = OSWorldInteractiveAction(
@@ -562,7 +576,7 @@ echo "Date: $(date)"
             thought='Taking final screenshot after interactions'
         )
         observation = runtime.run_action(action)
-        
+
         screenshot = runtime.get_vm_screenshot()
         if screenshot:
             screenshot_path = '/tmp/osworld_screenshot_after.png'
@@ -572,9 +586,9 @@ echo "Date: $(date)"
 
         # Wait a bit
         await asyncio.sleep(2)
- 
+
         print()
-        
+
         print("=" * 80)
         print("Example completed successfully!")
         print("=" * 80)
@@ -591,14 +605,14 @@ echo "Date: $(date)"
         print(f"  • Chrome DevTools: {runtime.chromium_devtools_url}")
         print(f"  • VLC Web Interface: {runtime.vlc_url}")
         print()
-        
+
         return 0
-        
+
     except Exception as e:
         print(f"✗ Error: {e}")
         logger.exception("Failed to run example")
         return 1
-        
+
     finally:
         # 14. Clean up
         print("14. Cleaning up...")

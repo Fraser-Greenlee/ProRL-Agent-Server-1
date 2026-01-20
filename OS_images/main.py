@@ -163,7 +163,7 @@ def execute_command_with_verification():
             timeout=120,
             creationflags=flags,
         )
-        
+
         # If no verification is needed, return immediately
         if not verification:
             return jsonify({
@@ -172,19 +172,19 @@ def execute_command_with_verification():
                 'error': result.stderr,
                 'returncode': result.returncode
             })
-        
+
         # Wait and verify the result
         import time
         start_time = time.time()
         while time.time() - start_time < max_wait_time:
             verification_passed = True
-            
+
             # Check window existence if specified
             if 'window_exists' in verification:
                 window_name = verification['window_exists']
                 try:
                     if platform_name == 'Linux':
-                        wmctrl_result = subprocess.run(['wmctrl', '-l'], 
+                        wmctrl_result = subprocess.run(['wmctrl', '-l'],
                                                      capture_output=True, text=True, check=True)
                         if window_name.lower() not in wmctrl_result.stdout.lower():
                             verification_passed = False
@@ -195,18 +195,18 @@ def execute_command_with_verification():
                             verification_passed = False
                 except Exception:
                     verification_passed = False
-            
+
             # Check command execution if specified
             if 'command_success' in verification:
                 verify_cmd = verification['command_success']
                 try:
-                    verify_result = subprocess.run(verify_cmd, shell=True, 
+                    verify_result = subprocess.run(verify_cmd, shell=True,
                                                  capture_output=True, text=True, timeout=5)
                     if verify_result.returncode != 0:
                         verification_passed = False
                 except Exception:
                     verification_passed = False
-            
+
             if verification_passed:
                 return jsonify({
                     'status': 'success',
@@ -216,9 +216,9 @@ def execute_command_with_verification():
                     'verification': 'passed',
                     'wait_time': time.time() - start_time
                 })
-            
+
             time.sleep(check_interval)
-        
+
         # Verification failed
         return jsonify({
             'status': 'verification_failed',
@@ -228,7 +228,7 @@ def execute_command_with_verification():
             'verification': 'failed',
             'wait_time': max_wait_time
         }), 500
-        
+
     except Exception as e:
         return jsonify({
             'status': 'error',
@@ -339,11 +339,20 @@ def capture_screen_with_cursor():
             logger.warning(f"Failed to capture cursor on Windows, screenshot will not have a cursor. Error: {e}")
 
         img.save(file_path)
-    elif user_platform == "Linux":
+        # Move mouse 1 pixel relative to current position to wake up monitor/GPU
+        # We use moveRelNone to avoid triggering UI elements
+        current_x, current_y = pyautogui.position()
+        pyautogui.moveTo(current_x + 1, current_y)
+        pyautogui.moveTo(current_x, current_y)
+        # =====================================
+
         cursor_obj = Xcursor()
         imgarray = cursor_obj.getCursorImageArrayFast()
         cursor_img = Image.fromarray(imgarray)
+
+        # Taking screenshot after the wake-up
         screenshot = pyautogui.screenshot()
+
         cursor_x, cursor_y = pyautogui.position()
         screenshot.paste(cursor_img, (cursor_x, cursor_y), cursor_img)
         screenshot.save(file_path)
@@ -1162,7 +1171,7 @@ def _collect_all_visible_elements_minimal(root: Accessible, max_depth: int = 40)
             node.queryComponent()
         except Exception:
             pass
-        
+
         # Recurse into children
         # Use Python iterator instead of getChildAtIndex for better AT-SPI cache handling
         try:
@@ -1244,23 +1253,23 @@ def get_accessibility_minimal():
     Return a JSON snapshot of all visible AT-SPI elements on the current
     desktop, including nested labels and text, with absolute screen
     coordinates and occlusion handled via hit-testing.
-    
+
     This is a cleaner, less noisy alternative to /accessibility that:
     - Returns flat JSON instead of verbose XML
     - Properly handles occlusion using GetAccessibleAtPoint (optional)
     - Only includes elements that are actually visible on screen
-    
+
     Query parameters:
     - filter_occlusion: "true" (default) or "false" - whether to filter occluded elements
     """
     os_name: str = platform.system()
-    
+
     if os_name != "Linux":
         return jsonify({"error": "accessibility_minimal is only implemented for Linux"}), 500
-    
+
     # Check if occlusion filtering is requested (default: false for now since it's unreliable)
     filter_occlusion = request.args.get('filter_occlusion', 'false').lower() == 'true'
-    
+
     try:
         desktop: Accessible = pyatspi.Registry.getDesktop(0)
     except Exception as e:
@@ -1349,13 +1358,13 @@ def _rect_intersection_area(r1, r2):
     """Calculate intersection area between two rectangles (x, y, w, h)."""
     x1, y1, w1, h1 = r1
     x2, y2, w2, h2 = r2
-    
+
     # Calculate intersection
     ix1 = max(x1, x2)
     iy1 = max(y1, y2)
     ix2 = min(x1 + w1, x2 + w2)
     iy2 = min(y1 + h1, y2 + h2)
-    
+
     if ix1 < ix2 and iy1 < iy2:
         return (ix2 - ix1) * (iy2 - iy1)
     return 0
@@ -1364,17 +1373,17 @@ def _rect_intersection_area(r1, r2):
 def _is_window_occluded(window_bounds, windows_above, threshold: float = 0.0):
     """
     Check if a window is significantly occluded by windows above it.
-    
+
     Args:
         window_bounds: (x, y, w, h) of the window to check
         windows_above: List of (x, y, w, h) bounds of windows above this one
         threshold: Occlusion threshold (0.0 = center-based, 0.9 = 90% area covered)
-    
+
     Returns True if the window should be considered occluded.
     """
     x, y, w, h = window_bounds
     window_area = w * h
-    
+
     if threshold <= 0:
         # Center-based occlusion: check if center is covered
         cx, cy = x + w // 2, y + h // 2
@@ -1388,7 +1397,7 @@ def _is_window_occluded(window_bounds, windows_above, threshold: float = 0.0):
         for above_bounds in windows_above:
             intersection = _rect_intersection_area(window_bounds, above_bounds)
             total_occluded += intersection
-        
+
         if window_area > 0:
             occlusion_ratio = total_occluded / window_area
             return occlusion_ratio >= threshold
@@ -1399,14 +1408,14 @@ def _is_window_occluded(window_bounds, windows_above, threshold: float = 0.0):
 def get_accessibility_tree_nested():
     """
     Return a nested DOM-like tree structure of all visible AT-SPI elements.
-    
+
     This endpoint returns the accessibility tree in a hierarchical structure
     where each element contains its children, similar to a DOM tree.
-    
+
     Window occlusion is handled by:
     1. Determining window stacking order (active window on top)
     2. Filtering out windows based on occlusion mode
-    
+
     Query parameters:
     - max_depth: Maximum depth to traverse (default: 40)
     - filter_occluded: Whether to filter occluded windows (default: true)
@@ -1417,15 +1426,15 @@ def get_accessibility_tree_nested():
     - flat: If "true", return only actionable elements in a flat list (default: false)
     """
     os_name: str = platform.system()
-    
+
     if os_name != "Linux":
         return jsonify({"error": "accessibility_tree is only implemented for Linux"}), 500
-    
+
     max_depth = int(request.args.get('max_depth', '40'))
     filter_occluded = request.args.get('filter_occluded', 'true').lower() == 'true'
     occlusion_mode = request.args.get('occlusion_mode', 'center').lower()
     flat_mode = request.args.get('flat', 'true').lower() == 'true'
-    
+
     try:
         desktop: Accessible = pyatspi.Registry.getDesktop(0)
     except Exception as e:
@@ -1438,38 +1447,38 @@ def get_accessibility_tree_nested():
     except Exception:
         dx = dy = 0
         dw = dh = 1920  # Default fallback
-    
+
     # Get window stacking order and active window for occlusion filtering
     stacking_order = _get_window_stacking_order() if filter_occluded else []
     active_window_id = _get_active_window_id() if filter_occluded else None
-    
+
     # Collect all top-level windows (frames/dialogs) with their bounds and app info
     # We'll use this to determine occlusion
     top_level_windows = []  # List of (app_node, frame_node, bounds, window_name)
-    
+
     # Background service apps that should be completely excluded
     # These don't have visible UI that users interact with
-    BACKGROUND_APPS = {'ibus-x11', 'ibus-extension-gtk3', 'gsd-color', 'gsd-keyboard', 
-                       'gsd-media-keys', 'gsd-wacom', 'gsd-power', 'gsd-xsettings', 
+    BACKGROUND_APPS = {'ibus-x11', 'ibus-extension-gtk3', 'gsd-color', 'gsd-keyboard',
+                       'gsd-media-keys', 'gsd-wacom', 'gsd-power', 'gsd-xsettings',
                        'evolution-alarm-notify', 'xdg-desktop-portal-gtk', 'gnome-calendar',
                        'gnome-software'}
-    
+
     # Apps whose windows should not be counted for occlusion (they're overlays/compositors)
     # but their UI elements (dock, panel) should still be included in the tree
     OVERLAY_APPS = {'gnome-shell', 'gjs'}
-    
+
     def collect_top_level_windows(app_node):
         """Collect all frame/dialog windows from an application for occlusion calculation."""
         app_name = (app_node.name or "").strip().lower()
-        
+
         # Skip background service apps entirely
         if app_name in BACKGROUND_APPS:
             return []
-        
+
         # Skip overlay apps from occlusion calculation (but they'll still be in the tree)
         if app_name in OVERLAY_APPS:
             return []
-        
+
         windows = []
         # Warmup: Access app attributes to trigger AT-SPI cache population (needed for Chrome)
         try:
@@ -1477,7 +1486,7 @@ def get_accessibility_tree_nested():
             app_node.get_attributes()
         except Exception:
             pass
-        
+
         # Use Python iterator instead of getChildAtIndex for better AT-SPI cache handling
         try:
             for child in app_node:
@@ -1489,7 +1498,7 @@ def get_accessibility_tree_nested():
                         child.queryComponent()
                     except Exception:
                         pass
-                    
+
                     role = (child.getRoleName() or "").strip().lower()
                     if role in ("frame", "dialog", "window", "alert", "file chooser"):
                         bounds = _get_bounds_minimal(child)
@@ -1499,7 +1508,7 @@ def get_accessibility_tree_nested():
         except Exception:
             pass
         return windows
-    
+
     # First pass: collect all top-level windows
     try:
         for app_node in desktop:
@@ -1507,7 +1516,7 @@ def get_accessibility_tree_nested():
             top_level_windows.extend(windows)
     except Exception:
         pass
-    
+
     # Build a map from window class/name to X11 stacking index
     x11_stacking_map = {}  # Maps (class_name, window_name) to stacking index
     try:
@@ -1528,12 +1537,12 @@ def get_accessibility_tree_nested():
                     pass
     except Exception:
         pass
-    
+
     # Sort windows by X11 stacking order
     def normalize_name(name):
         """Normalize app/window names for comparison."""
         return name.lower().replace(" ", "").replace("-", "").replace("_", "")
-    
+
     def get_stacking_index(window_info):
         app_node, frame_node, bounds, win_name = window_info
         app_name = (app_node.name or "").strip()
@@ -1541,13 +1550,13 @@ def get_accessibility_tree_nested():
         win_name_lower = (win_name or "").lower()[:50]
         win_name_norm = normalize_name(win_name or "")
         role = (frame_node.getRoleName() or "").strip().lower()
-        
+
         # Try to find matching X11 window
         best_match_idx = -1
-        
+
         for (cls, name), idx in x11_stacking_map.items():
             cls_norm = normalize_name(cls)
-            
+
             # Check if app names match (normalized)
             if cls_norm and app_name_norm and (cls_norm in app_name_norm or app_name_norm in cls_norm):
                 # If we have a window name match too, this is a strong match
@@ -1556,7 +1565,7 @@ def get_accessibility_tree_nested():
                 # Otherwise, remember this as a potential match
                 if idx > best_match_idx:
                     best_match_idx = idx
-            
+
             # Also try matching by window title (for apps like soffice -> libreoffice-calc)
             # Match if X11 window name matches AT-SPI window title
             elif name and win_name_lower and (name in win_name_lower or win_name_lower in name):
@@ -1566,10 +1575,10 @@ def get_accessibility_tree_nested():
             elif cls_norm and win_name_norm and (cls_norm in win_name_norm or win_name_norm in cls_norm):
                 if idx > best_match_idx:
                     best_match_idx = idx
-        
+
         if best_match_idx >= 0:
             return best_match_idx
-        
+
         # Dialogs that are ACTIVE should be on top of their parent app
         # but not necessarily above other apps
         if role == "dialog":
@@ -1583,7 +1592,7 @@ def get_accessibility_tree_nested():
                             return idx + 0.5  # Dialog is above its parent but below next app
             except Exception:
                 pass
-        
+
         # Fallback: use AT-SPI state for windows we couldn't match
         try:
             state = frame_node.getState()
@@ -1594,9 +1603,9 @@ def get_accessibility_tree_nested():
         except Exception:
             pass
         return -1  # Unknown windows go to bottom
-    
+
     top_level_windows.sort(key=get_stacking_index)
-    
+
     # Check for modal dialogs - if a modal dialog is active, only show it
     # Modal dialogs block interaction with other windows
     modal_dialog = None
@@ -1611,7 +1620,7 @@ def get_accessibility_tree_nested():
                 break
         except Exception:
             pass
-    
+
     # Also check for file chooser dialogs which are modal
     if not modal_dialog:
         for app_node, frame_node, bounds, name in top_level_windows:
@@ -1627,11 +1636,11 @@ def get_accessibility_tree_nested():
                             break
             except Exception:
                 pass
-    
+
     # Determine which windows are occluded based on mode
     visible_windows = set()  # Set of frame_node objects that are visible
     windows_above = []  # Accumulated bounds of windows processed (higher in stack)
-    
+
     # If a modal dialog is active, only show that dialog
     if modal_dialog and filter_occluded:
         visible_windows.add(modal_dialog)
@@ -1641,7 +1650,7 @@ def get_accessibility_tree_nested():
             occlusion_threshold = 0.9  # 90% coverage to be considered occluded
         else:
             occlusion_threshold = 0.0  # Center-based (default)
-        
+
         # Process from top to bottom (reverse order)
         for app_node, frame_node, bounds, name in reversed(top_level_windows):
             if filter_occluded:
@@ -1660,13 +1669,13 @@ def get_accessibility_tree_nested():
                     continue
             visible_windows.add(frame_node)
             windows_above.append(bounds)
-    
+
     # LibreOffice Calc optimization constants
     # Maximum column: 1024 if ver<=7.3 else 16384
     # Maximum row: 1048576
     CALC_MAX_COLUMN = 16384  # Use newer LibreOffice limit
     CALC_MAX_ROW = 1048576
-    
+
     def build_calc_table_children(table_node: Accessible, inherited_app: str = None, inherited_window: str = None) -> list:
         """
         Optimized traversal for LibreOffice Calc tables.
@@ -1674,7 +1683,7 @@ def get_accessibility_tree_nested():
         Only traverses visible cells instead of all columns × rows.
         """
         children = []
-        
+
         try:
             table_iface = table_node.queryTable()
             n_rows = min(table_iface.nRows, CALC_MAX_ROW)
@@ -1682,12 +1691,12 @@ def get_accessibility_tree_nested():
         except Exception:
             # Fall back to old method if table interface not available
             return children
-        
+
         first_showing_row = None
         last_showing_row = None
         first_showing_col = None
         last_showing_col = None
-        
+
         # First pass: find the visible range by checking edges
         # Check first 100 rows to find visible range
         for row in range(min(100, n_rows)):
@@ -1704,18 +1713,18 @@ def get_accessibility_tree_nested():
                             last_showing_col = col
                 except Exception:
                     pass
-        
+
         # If no visible cells found, return empty
         if first_showing_row is None:
             return children
-        
+
         # Second pass: collect all visible cells in the detected range
         # Add some buffer to catch all visible cells
         start_row = max(0, first_showing_row)
         end_row = min(n_rows, last_showing_row + 50)  # Buffer for scrolling
         start_col = max(0, first_showing_col)
         end_col = min(n_cols, last_showing_col + 10)  # Buffer for columns
-        
+
         for row in range(start_row, end_row):
             row_has_visible = False
             for col in range(start_col, end_col):
@@ -1723,10 +1732,10 @@ def get_accessibility_tree_nested():
                     cell = table_iface.getAccessibleAt(row, col)
                     if cell is None:
                         continue
-                    
+
                     if not cell.getState().contains(pyatspi.STATE_SHOWING):
                         continue
-                    
+
                     row_has_visible = True
                     bounds = _get_bounds_minimal(cell)
                     if bounds:
@@ -1734,7 +1743,7 @@ def get_accessibility_tree_nested():
                         cell_name = (cell.name or "").strip()
                         cell_text = _get_text_minimal(cell)
                         cell_role = (cell.getRoleName() or "").strip().lower()
-                        
+
                         cell_elem = {
                             "role": cell_role,
                             "name": cell_name,
@@ -1751,29 +1760,29 @@ def get_accessibility_tree_nested():
                         children.append(cell_elem)
                 except Exception:
                     pass
-            
+
             # If we've found visible rows and this row has none, we might be past the visible area
             if last_showing_row is not None and row > last_showing_row + 5 and not row_has_visible:
                 break
-        
+
         return children
-    
+
     # Roles that are pure containers with no semantic value - skip if unnamed
     CONTAINER_ROLES = {'panel', 'filler', 'section', 'redundant object', 'unknown', 'scroll pane'}
     # Roles that should always be skipped (decorative/structural only)
     SKIP_ROLES = {'separator'}
     # Generic actions that don't indicate meaningful interactivity
     GENERIC_ACTIONS = {'doDefault', 'showContextMenu', 'click', 'press', 'release'}
-    
+
     def has_meaningful_actions(actions: list) -> bool:
         """Check if actions list contains non-generic actions."""
         if not actions:
             return False
         return any(a not in GENERIC_ACTIONS for a in actions)
-    
+
     def build_tree(node: Accessible, depth: int = 0, in_calc: bool = False, inherited_app: str = None, inherited_window: str = None) -> dict | None:
         """Recursively build a nested tree structure from an AT-SPI node.
-        
+
         Args:
             node: The AT-SPI accessible node
             depth: Current depth in the tree
@@ -1783,14 +1792,14 @@ def get_accessibility_tree_nested():
         """
         if depth > max_depth:
             return None
-        
+
         role = (node.getRoleName() or "").strip().lower()
         is_showing = _is_showing_minimal(node)
-        
+
         # Skip decorative/structural roles entirely
         if role in SKIP_ROLES:
             return None
-        
+
         # Special handling for menu items: only include if parent menu is expanded
         # GTK caches menu item bounds even when menus are closed, causing stale data
         if role in ("menu item", "check menu item", "radio menu item"):
@@ -1803,7 +1812,7 @@ def get_accessibility_tree_nested():
                         # Check the grandparent to determine the context
                         grandparent = parent.parent
                         grandparent_role = (grandparent.getRoleName() or "").strip().lower() if grandparent else ""
-                        
+
                         if grandparent_role == "combo box":
                             # Combo box dropdown - include if the menu has STATE_SHOWING
                             parent_state = parent.getState()
@@ -1815,7 +1824,7 @@ def get_accessibility_tree_nested():
                                 return None
             except Exception:
                 pass
-        
+
         # For submenus (menu inside menu), only include if parent menu is expanded
         if role == "menu":
             try:
@@ -1833,23 +1842,23 @@ def get_accessibility_tree_nested():
                             return None
             except Exception:
                 pass
-        
+
         # Track app name and window title for passing down to children
         current_app = inherited_app
         current_window = inherited_window
-        
+
         # If this is an application node, capture its name
         if role == "application":
             current_app = (node.name or "").strip()
-        
+
         # If this is a frame/window, capture its title
         if role in ("frame", "dialog", "window") and node.name:
             current_window = (node.name or "").strip()
-        
+
         # Detect LibreOffice Calc document
         if role == "document spreadsheet":
             in_calc = True
-        
+
         # Check if this is a top-level window that should be filtered due to occlusion
         # Only apply to actual top-level windows (depth == 1, direct children of application)
         # Not to internal frames used for layout (like Qt frames in VLC)
@@ -1858,18 +1867,18 @@ def get_accessibility_tree_nested():
                 # Window is occluded - check if it's an overlay app (gnome-shell, gjs)
                 # Overlay apps contain dock/panel UI and should always be included
                 app_name_check = (current_app or "").lower()
-                
+
                 if app_name_check in OVERLAY_APPS:
                     # Overlay app window - include it (dock/panel UI)
                     pass
                 else:
                     # Regular app window that's occluded - skip it
                     return None
-        
+
         # First, try to build children - this allows us to include parent nodes
         # that aren't "showing" themselves but have visible children
         children = []
-        
+
         # Warmup: Access node attributes to trigger AT-SPI cache population
         # This is needed for some apps like Chrome that use lazy initialization
         try:
@@ -1878,7 +1887,7 @@ def get_accessibility_tree_nested():
             node.queryComponent()
         except Exception:
             pass
-        
+
         # Special handling for LibreOffice Calc tables - use optimized traversal
         if in_calc and role == "table":
             children = build_calc_table_children(node, current_app, current_window)
@@ -1892,7 +1901,7 @@ def get_accessibility_tree_nested():
                             children.append(child_tree)
             except Exception:
                 pass
-        
+
         # Now decide whether to include this node
         bounds = _get_bounds_minimal(node)
         name = (node.name or "").strip()
@@ -1907,7 +1916,7 @@ def get_accessibility_tree_nested():
             except Exception:
                 pass
         text = _get_text_minimal(node)
-        
+
         # If still no name/description, try parent's description (e.g., LibreOffice sidebar buttons)
         # BUT: Don't use parent description for content roles (paragraph, section, etc.)
         # because for documents, we want to show the actual text content, not parent's description
@@ -1922,12 +1931,12 @@ def get_accessibility_tree_nested():
             except Exception:
                 pass
         actions = _get_actions_minimal(node)
-        
+
         # Get text selection for content roles
         selection = None
         if role in content_roles:
             selection = _get_text_selection(node)
-        
+
         # Check if this is a "useless" container node:
         # - It's a container role (panel, filler, section)
         # - It has no name, no text, no description, and only generic actions
@@ -1936,7 +1945,7 @@ def get_accessibility_tree_nested():
         # - If multiple children, keep as container
         is_container = role in CONTAINER_ROLES
         has_content = bool(name or description or text or has_meaningful_actions(actions))
-        
+
         if is_container and not has_content:
             if len(children) == 0:
                 return None
@@ -1946,7 +1955,7 @@ def get_accessibility_tree_nested():
             # Multiple children - filter out empty containers from children
             # Keep children that have: children, name, text, actions, OR valid bounds for interactive roles
             INTERACTIVE_CHILD_ROLES = {
-                'scroll bar', 'slider', 'spin button', 'toggle button', 'push button', 
+                'scroll bar', 'slider', 'spin button', 'toggle button', 'push button',
                 'button', 'check button', 'radio button', 'check box', 'combo box'
             }
             def is_meaningful_child(c):
@@ -1964,7 +1973,7 @@ def get_accessibility_tree_nested():
             elif len(non_empty_children) == 1:
                 return non_empty_children[0]
             children = non_empty_children
-        
+
         # If node is not showing and has no visible children, skip it
         # Exception: application nodes are containers and should be included if they have children
         # Exception: menu items in an expanded menu should be included
@@ -1984,10 +1993,10 @@ def get_accessibility_tree_nested():
                     is_menu_item_in_expanded = _is_menu_expanded(parent)
             except Exception:
                 pass
-        
+
         if not is_showing and role != "application" and not children and not is_menu_item_in_expanded:
             return None
-        
+
         if bounds is None:
             # No bounds - only include if we have children
             if children:
@@ -2002,7 +2011,7 @@ def get_accessibility_tree_nested():
                     "children": children
                 }
             return None
-        
+
         # Node has bounds - build full element
         x, y, w, h = bounds
         # Use inherited app/window names (passed down during traversal) as they're more reliable
@@ -2016,10 +2025,10 @@ def get_accessibility_tree_nested():
                 app_name = walked_app
             if not window_title:
                 window_title = walked_window
-        
+
         # Use name, or description as fallback
         display_name = name or description
-        
+
         # Build element data
         elem = {
             "role": role,
@@ -2027,7 +2036,7 @@ def get_accessibility_tree_nested():
             "bounds": {"x": x, "y": y, "w": w, "h": h},
             "center": {"x": x + w // 2, "y": y + h // 2},
         }
-        
+
         # Only include optional fields if they have values
         if text:
             elem["text"] = text
@@ -2042,7 +2051,7 @@ def get_accessibility_tree_nested():
             elem["app"] = app_name
         if window_title:
             elem["window"] = window_title
-        
+
         # Mark active/focused/disabled state
         try:
             state = node.getState()
@@ -2056,33 +2065,33 @@ def get_accessibility_tree_nested():
             # An element is disabled if it's NOT enabled or NOT sensitive
             if not state.contains(pyatspi.STATE_ENABLED) or not state.contains(pyatspi.STATE_SENSITIVE):
                 # Only mark as disabled for interactive roles (buttons, entries, etc.)
-                interactive_roles = {'push button', 'button', 'toggle button', 'check button', 
+                interactive_roles = {'push button', 'button', 'toggle button', 'check button',
                                     'radio button', 'check box', 'entry', 'text', 'combo box',
                                     'spin button', 'slider', 'link', 'menu item', 'list item'}
                 if role in interactive_roles:
                     elem["disabled"] = True
-            
+
             # For checkable elements (checkboxes, radio buttons, toggle buttons), mark checked state
-            checkable_roles = {'check box', 'check button', 'radio button', 'toggle button', 
+            checkable_roles = {'check box', 'check button', 'radio button', 'toggle button',
                               'check menu item', 'radio menu item'}
             if role in checkable_roles:
                 if state.contains(pyatspi.STATE_CHECKED):
                     elem["checked"] = True
                 else:
                     elem["checked"] = False
-            
+
             # For selectable items (list items, tree items), mark selected state
             selectable_roles = {'list item', 'tree item', 'table cell', 'table row', 'menu item'}
             if role in selectable_roles:
                 if state.contains(pyatspi.STATE_SELECTED):
                     elem["selected"] = True
-            
+
             # For text/entry fields, mark if editable and get caret position
             # Only show caret for actually editable elements, not labels
             editable_roles = ('text', 'entry', 'combo box', 'spin button', 'password text', 'paragraph')
             if role in editable_roles and state.contains(pyatspi.STATE_EDITABLE):
                 elem["editable"] = True
-                
+
                 # For editable elements, get caret position if focused
                 try:
                     text_iface = node.queryText()
@@ -2105,7 +2114,7 @@ def get_accessibility_tree_nested():
                     pass
         except Exception:
             pass
-        
+
         # For scroll bars and sliders, get the current value
         if role in ('scroll bar', 'slider', 'spin button'):
             try:
@@ -2116,35 +2125,35 @@ def get_accessibility_tree_nested():
                     elem["max_value"] = round(vi.maximumValue, 2)
             except Exception:
                 pass
-        
+
         # Add text selection info for content roles
         if selection:
             elem["selection"] = selection
-        
+
         # Add children (already built above)
         if children:
             elem["children"] = children
-        
+
         return elem
-    
+
     def flatten_tree(node):
         """Post-process to flatten chains of single-child containers."""
         if not isinstance(node, dict):
             return node
-        
+
         children = node.get('children', [])
         # Recursively flatten children first
         children = [flatten_tree(c) for c in children if c is not None]
         children = [c for c in children if c is not None]
-        
+
         role = node.get('role', '')
         name = node.get('name', '')
         text = node.get('text', '')
         actions = node.get('actions', [])
-        
+
         # Check if this is a pure container with no semantic content
         has_content = bool(name or text or actions)
-        
+
         # For container roles (panel, section, filler, etc.), flatten aggressively
         if role in CONTAINER_ROLES and not has_content:
             # Filter out children that are empty containers
@@ -2155,22 +2164,22 @@ def get_accessibility_tree_nested():
                 c_has_children = bool(c.get('children'))
                 if c_has_content or c_has_children or c_role not in CONTAINER_ROLES:
                     non_empty.append(c)
-            
+
             if len(non_empty) == 0:
                 return None
             elif len(non_empty) == 1:
                 # Flatten: return the single meaningful child
                 return non_empty[0]
             children = non_empty
-        
+
         # Update children
         if children:
             node['children'] = children
         elif 'children' in node:
             del node['children']
-        
+
         return node
-    
+
     # Build tree for each application under the desktop
     apps = []
     try:
@@ -2179,7 +2188,7 @@ def get_accessibility_tree_nested():
             app_name = (app_node.name or "").strip().lower()
             if app_name in BACKGROUND_APPS:
                 continue
-            
+
             app_tree = build_tree(app_node)
             if app_tree:
                 # Post-process to flatten chains
@@ -2207,14 +2216,14 @@ def get_accessibility_tree_nested():
             'article', 'caption', 'description', 'alert', 'terminal'
         }
         # Note: 'section' removed - Chrome sections duplicate content already in static/heading elements
-        
+
         # Roles that are interactive even without names (media controls, etc.)
         INTERACTIVE_ROLES = {
             'push button', 'button', 'toggle button', 'check button', 'radio button',
             'check box', 'slider', 'spin button', 'combo box', 'entry', 'text',
             'scroll bar'
         }
-        
+
         # Container roles that should include their children (lists, tables, trees, menus, etc.)
         CONTAINER_WITH_ITEMS = {'list', 'list box', 'tree', 'tree table', 'table', 'layered pane', 'document text', 'document frame', 'document', 'scroll pane', 'document presentation', 'menu', 'menu bar', 'combo box', 'dialog', 'alert', 'file chooser'}
         ITEM_ROLES = {'list item', 'tree item', 'table cell', 'table row', 'canvas', 'icon', 'paragraph', 'shape', 'panel', 'menu item', 'check menu item', 'radio menu item'}
@@ -2223,7 +2232,7 @@ def get_accessibility_tree_nested():
         # Note: 'section' removed from ITEM_ROLES - Chrome uses section for layout, not content
         # Note: 'panel' added for LibreOffice Impress presentation placeholders (PresentationTitle, PresentationSubtitle)
         # Note: 'menu', 'menu bar' added as containers, 'menu item' variants added as items
-        
+
         def is_valid_bounds(b):
             """Check if bounds are valid (on-screen, positive coordinates)."""
             if not b:
@@ -2237,16 +2246,16 @@ def get_accessibility_tree_nested():
                 if x / dw > 2.0 or y / dh > 2.0:
                     return False
             return True
-        
+
         # Pre-collect cell editing panels (panels named "Cell X#" with editable paragraphs)
         # These are overlay panels that appear when editing a spreadsheet cell
         cell_editing_panels = {}  # Maps cell name (e.g., "A1") to editing content
-        
+
         def collect_cell_editing_panels(node):
             """Recursively collect cell editing panels from the tree."""
             role = node.get('role', '')
             name = node.get('name', '')
-            
+
             # Check if this is a cell editing panel (pattern: "Cell A1", "Cell B2", etc.)
             if role == 'panel' and name and name.startswith('Cell '):
                 cell_name = name[5:]  # Extract "A1" from "Cell A1"
@@ -2265,25 +2274,25 @@ def get_accessibility_tree_nested():
                                 'focused': child.get('focused', False),
                             }
                             break
-            
+
             for child in node.get('children', []):
                 collect_cell_editing_panels(child)
-        
+
         # Collect editing panels from all apps
         for app in apps:
             collect_cell_editing_panels(app)
-        
+
         def extract_actionable(node, results=None, parent_is_container=False):
             if results is None:
                 results = []
-            
+
             role = node.get('role', '')
             name = node.get('name', '')
             text = node.get('text', '')
             bounds = node.get('bounds')
             children = node.get('children', [])
-            
-            
+
+
             # Handle container elements (lists, tables, trees) - extract with their items nested
             if role in CONTAINER_WITH_ITEMS and bounds:
                 # Collect items from this container
@@ -2292,12 +2301,12 @@ def get_accessibility_tree_nested():
                 sibling_elements = []
                 # Track nested containers (e.g., table inside scroll pane)
                 nested_containers = []
-                
+
                 for child in children:
                     child_role = child.get('role', '')
                     child_bounds = child.get('bounds')
                     child_name = child.get('name', '')
-                    
+
                     # Include scrollbars as sibling elements within the container
                     if child_role in ('scroll bar', 'slider') and is_valid_bounds(child_bounds):
                         scrollbar = {
@@ -2318,7 +2327,7 @@ def get_accessibility_tree_nested():
                             gc_role = gc.get('role', '')
                             gc_name = gc.get('name', '')
                             gc_bounds = gc.get('bounds')
-                            
+
                             if gc_role in MENU_ROLES and is_valid_bounds(gc_bounds) and gc_name:
                                 menu_item = {
                                     'role': gc_role,
@@ -2350,7 +2359,7 @@ def get_accessibility_tree_nested():
                                     if submenu_items:
                                         menu_item['items'] = submenu_items
                                 menu_items.append(menu_item)
-                        
+
                         menu_elem = {
                             'role': child_role,
                             'name': child_name,
@@ -2363,7 +2372,7 @@ def get_accessibility_tree_nested():
                     elif child_role in ITEM_ROLES:
                         child_name = child.get('name', '')
                         child_text = child.get('text', '')
-                        
+
                         # For panels (like presentation placeholders), look for text in child paragraphs
                         if child_role == 'panel' and not child_text:
                             debug_log(f"[PANEL] '{child_name}' has {len(child.get('children', []))} children")
@@ -2376,7 +2385,7 @@ def get_accessibility_tree_nested():
                                         child_text = gc_text
                                         debug_log(f"  -> Extracted: {child_text!r}")
                                         break
-                        
+
                         # For paragraph/section, use text as the display content
                         # Include if there's any text content (not just name) and valid bounds
                         if is_valid_bounds(child_bounds) and (child_name or child_text):
@@ -2416,7 +2425,7 @@ def get_accessibility_tree_nested():
                                 item['caret_offset'] = child['caret_offset']
                             if child.get('caret'):
                                 item['caret'] = child['caret']
-                            
+
                             # For table cells, check if there's an associated editing panel
                             if child_role == 'table cell' and child_name in cell_editing_panels:
                                 editing = cell_editing_panels[child_name]
@@ -2430,7 +2439,7 @@ def get_accessibility_tree_nested():
                                         item['focused'] = True
                                     item['editing'] = edit_text
                                     item['editable'] = True
-                            
+
                             items.append(item)
                     elif child_role in CONTAINER_WITH_ITEMS and is_valid_bounds(child_bounds):
                         # Nested container (e.g., table inside scroll pane, or submenu inside menu)
@@ -2441,7 +2450,7 @@ def get_accessibility_tree_nested():
                             gc_name = grandchild.get('name', '')
                             gc_text = grandchild.get('text', '')
                             gc_bounds = grandchild.get('bounds')
-                            
+
                             # Handle nested submenus (menu inside menu)
                             if gc_role in ('menu',) and is_valid_bounds(gc_bounds) and gc_name:
                                 # This is a submenu - recursively extract its items
@@ -2478,7 +2487,7 @@ def get_accessibility_tree_nested():
                                 gc_caret_offset = None
                                 gc_focused = False
                                 gc_editable = False
-                                
+
                                 # For paragraphs directly in containers (like document text), extract caret info
                                 if gc_role == 'paragraph':
                                     if grandchild.get('editable'):
@@ -2489,7 +2498,7 @@ def get_accessibility_tree_nested():
                                         gc_caret = grandchild['caret']
                                     if grandchild.get('caret_offset') is not None:
                                         gc_caret_offset = grandchild['caret_offset']
-                                
+
                                 if gc_role == 'panel' and not gc_text:
                                     debug_log(f"[NESTED PANEL] '{gc_name}' has {len(grandchild.get('children', []))} children")
                                     for ggc in grandchild.get('children', []):
@@ -2509,7 +2518,7 @@ def get_accessibility_tree_nested():
                                                 gc_caret_offset = ggc['caret_offset']
                                             debug_log(f"  -> Extracted: {gc_text!r} focused={gc_focused} caret={gc_caret}")
                                             break
-                                
+
                                 # Only include if has name or text
                                 if gc_name or gc_text:
                                     display_name = gc_name
@@ -2563,11 +2572,11 @@ def get_accessibility_tree_nested():
                             n_name = node.get('name', '')
                             n_text = node.get('text', '')
                             n_bounds = node.get('bounds')
-                            
+
                             # Skip menu items inside combo boxes (they're already nested)
                             if in_combo and n_role in ('menu', 'menu item'):
                                 return
-                            
+
                             if n_role in ACTIONABLE_ROLES and is_valid_bounds(n_bounds) and (n_name or n_text or n_role in INTERACTIVE_ROLES):
                                 display_name = n_name or n_text or f'[{n_role}]'
                                 item = {
@@ -2602,21 +2611,21 @@ def get_accessibility_tree_nested():
                                     if combo_items:
                                         item['items'] = combo_items
                                 collected.append(item)
-                                
+
                                 # If this is a combo box, don't recurse into its children
                                 # (menu items are already extracted above)
                                 if n_role == 'combo box':
                                     return
-                            
+
                             # Recurse into children
                             for gc in node.get('children', []):
                                 collect_dialog_items(gc, collected, in_combo=(n_role == 'combo box'))
-                        
+
                         collect_dialog_items(child, items)
                     else:
                         # Recurse into non-item children
                         extract_actionable(child, results, parent_is_container=True)
-                
+
                 # For scroll pane, merge nested containers with scrollbars
                 if role == 'scroll pane' and nested_containers and sibling_elements:
                     # Add scrollbars to each nested container
@@ -2626,7 +2635,7 @@ def get_accessibility_tree_nested():
                             nc['app'] = node.get('app')
                         results.append(nc)
                     return results
-                
+
                 # Only add the container if it has items
                 if items or sibling_elements or nested_containers:
                     container_elem = {
@@ -2647,7 +2656,7 @@ def get_accessibility_tree_nested():
                         container_elem['app'] = node.get('app')
                     results.append(container_elem)
                 return results
-            
+
             # Include if it's an actionable role with name or text
             if role in ACTIONABLE_ROLES and (name or text) and is_valid_bounds(bounds):
                 elem = {
@@ -2735,16 +2744,16 @@ def get_accessibility_tree_nested():
                 if node.get('caret_offset') is not None:
                     elem['caret_offset'] = node['caret_offset']
                 results.append(elem)
-            
+
             for child in children:
                 extract_actionable(child, results, parent_is_container=False)
-            
+
             return results
-        
+
         actionable = []
         for app in apps:
             extract_actionable(app, actionable)
-        
+
         # Get actual screen dimensions from X11 display
         try:
             d = display.Display()
@@ -2755,13 +2764,13 @@ def get_accessibility_tree_nested():
                 dh = screen_h
         except Exception:
             pass
-        
+
         # Fallback to common screen sizes if still invalid
         if dw <= 0:
             dw = 1920
         if dh <= 0:
             dh = 1080
-        
+
         # Group elements by app
         by_app = {}
         for elem in actionable:
@@ -2769,17 +2778,17 @@ def get_accessibility_tree_nested():
             if app_name not in by_app:
                 by_app[app_name] = []
             by_app[app_name].append(elem)
-        
+
         # Check if XML format is requested
         output_format = request.args.get('format', 'xml').lower()
-        
+
         if output_format == 'xml':
             # Build XML output
             def escape_xml(s):
                 if s is None:
                     return ''
                 return str(s).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
-            
+
             xml_parts = [f'<desktop screen_w="{dw}" screen_h="{dh}">']
             for app_name, elements in by_app.items():
                 xml_parts.append(f'  <app name="{escape_xml(app_name)}">')
@@ -2792,7 +2801,7 @@ def get_accessibility_tree_nested():
                         bounds = elem.get('bounds', {})
                         center = elem.get('center', {})
                         items = elem.get('items', [])
-                        
+
                         # Format bounds as box attribute [x,y,w,h] normalized to 0-1
                         if bounds and dw > 0 and dh > 0:
                             bx = bounds.get('x', 0) / dw
@@ -2802,7 +2811,7 @@ def get_accessibility_tree_nested():
                             box_attr = f'box="[{bx:.3f},{by:.3f},{bw:.3f},{bh:.3f}]"'
                         else:
                             box_attr = ''
-                        
+
                         # Format center as normalized coordinates
                         if center and dw > 0 and dh > 0:
                             cx = center.get('x', 0) / dw
@@ -2810,7 +2819,7 @@ def get_accessibility_tree_nested():
                             center_attr = f'center="[{cx:.3f},{cy:.3f}]"'
                         else:
                             center_attr = ''
-                        
+
                         # Build element tag
                         attrs = []
                         if name:
@@ -2847,9 +2856,9 @@ def get_accessibility_tree_nested():
                         # Add value for scroll bars/sliders
                         if elem.get('value') is not None:
                             attrs.append(f'value="{elem["value"]}"')
-                        
+
                         attr_str = ' '.join(attrs)
-                        
+
                         # Helper to insert <caret/> into text at the correct position
                         def insert_caret_marker(txt, caret_offset):
                             """Insert <caret/> marker at the specified character offset."""
@@ -2858,7 +2867,7 @@ def get_accessibility_tree_nested():
                             # Ensure offset is within bounds
                             offset = min(caret_offset, len(txt))
                             return txt[:offset] + '<caret/>' + txt[offset:]
-                        
+
                         # Get display text with caret marker if applicable
                         display_text = text
                         has_caret_in_name = False
@@ -2874,7 +2883,7 @@ def get_accessibility_tree_nested():
                                 # If text was in 'name', we need to show it as content
                                 if not elem.get('text') and name:
                                     has_caret_in_name = True
-                        
+
                         # If this element has nested items (list, table, tree) or controls (scrollbars)
                         controls = elem.get('controls', [])
                         if items or controls:
@@ -2890,14 +2899,14 @@ def get_accessibility_tree_nested():
                             return f'{indent}<{role} {attr_str}>{display_text}</{role}>'
                         else:
                             return f'{indent}<{role} {attr_str} />'
-                    
+
                     xml_parts.append(format_element_xml(elem))
-                
+
                 xml_parts.append('  </app>')
             xml_parts.append('</desktop>')
-            
+
             return '\n'.join(xml_parts), 200, {'Content-Type': 'application/xml'}
-        
+
         # JSON format (default) - grouped by app
         payload = {
             "screen": {
@@ -2912,7 +2921,7 @@ def get_accessibility_tree_nested():
             "occlusion_mode": occlusion_mode,
         }
         return jsonify(payload)
-    
+
     payload = {
         "screen": {
             "x": dx,
@@ -3108,10 +3117,10 @@ def get_file():
         # Check if the file exists and get its size
         if not os.path.exists(file_path):
             return jsonify({"error": "File not found"}), 404
-        
+
         file_size = os.path.getsize(file_path)
         logger.info(f"Serving file: {file_path} ({file_size} bytes)")
-        
+
         # Check if the file exists and send it to the user
         return send_file(file_path, as_attachment=True)
     except FileNotFoundError:
@@ -3128,20 +3137,20 @@ def upload_file():
     if 'file_path' in request.form and 'file_data' in request.files:
         file_path = os.path.expandvars(os.path.expanduser(request.form['file_path']))
         file = request.files["file_data"]
-        
+
         try:
             # Ensure target directory exists
             target_dir = os.path.dirname(file_path)
             if target_dir:  # Only create directory if it's not empty
                 os.makedirs(target_dir, exist_ok=True)
-            
+
             # Save file and get size for verification
             file.save(file_path)
             uploaded_size = os.path.getsize(file_path)
-            
+
             logger.info(f"File uploaded successfully: {file_path} ({uploaded_size} bytes)")
             return f"File Uploaded: {uploaded_size} bytes"
-            
+
         except Exception as e:
             logger.error(f"Error uploading file to {file_path}: {e}")
             # Clean up partial file if it exists
@@ -3209,13 +3218,13 @@ def download_file():
 
     max_retries = 3
     error: Optional[Exception] = None
-    
+
     for i in range(max_retries):
         try:
             logger.info(f"Download attempt {i+1}/{max_retries} for {url}")
             response = requests.get(url, stream=True, timeout=300)
             response.raise_for_status()
-            
+
             # Get expected file size if available
             total_size = int(response.headers.get('content-length', 0))
             if total_size > 0:
@@ -3230,12 +3239,12 @@ def download_file():
                         if total_size > 0 and downloaded_size % (1024*1024) == 0:  # Log every MB
                             progress = (downloaded_size / total_size) * 100
                             logger.info(f"Download progress: {progress:.1f}%")
-            
+
             # Verify download completeness
             actual_size = os.path.getsize(path)
             if total_size > 0 and actual_size != total_size:
                 raise Exception(f"Download incomplete. Expected {total_size} bytes, got {actual_size} bytes")
-            
+
             logger.info(f"File downloaded successfully: {path} ({actual_size} bytes)")
             return f"File downloaded successfully: {actual_size} bytes"
 
@@ -3264,7 +3273,7 @@ def open_file():
 
     # Check if it's a file path that exists
     is_file_path = path_obj.exists()
-    
+
     # If it's not a file path, treat it as an application name/command
     if not is_file_path:
         # Check if it's a valid command by trying to find it in PATH
@@ -3549,15 +3558,15 @@ def run_python():
     # Create a temporary file to save the Python code
     import tempfile
     import uuid
-    
+
     # Generate unique filename
     temp_filename = f"/tmp/python_exec_{uuid.uuid4().hex}.py"
-    
+
     try:
         # Write code to temporary file
         with open(temp_filename, 'w') as f:
             f.write(code)
-        
+
         # Execute the file using subprocess to capture all output
         result = subprocess.run(
             ['/usr/bin/python3', temp_filename],
@@ -3566,22 +3575,22 @@ def run_python():
             text=True,
             timeout=30  # 30 second timeout
         )
-        
+
         # Clean up the temporary file
         try:
             os.remove(temp_filename)
         except:
             pass  # Ignore cleanup errors
-        
+
         # Prepare response
         output = result.stdout
         error_output = result.stderr
-        
+
         # Combine output and errors if both exist
         combined_message = output
         if error_output:
             combined_message += ('\n' + error_output) if output else error_output
-        
+
         # Determine status based on return code and errors
         if result.returncode != 0:
             status = 'error'
@@ -3591,7 +3600,7 @@ def run_python():
                 combined_message = combined_message + '\n' + error_output if combined_message else error_output
         else:
             status = 'success'
-        
+
         return jsonify({
             'status': status,
             'message': combined_message,
@@ -3600,14 +3609,14 @@ def run_python():
             'error': error_output,   # stderr only
             'return_code': result.returncode
         })
-        
+
     except subprocess.TimeoutExpired:
         # Clean up the temporary file on timeout
         try:
             os.remove(temp_filename)
         except:
             pass
-            
+
         return jsonify({
             'status': 'error',
             'message': 'Execution timeout: Code took too long to execute',
@@ -3615,14 +3624,14 @@ def run_python():
             'need_more': False,
             'output': None,
         }), 500
-        
+
     except Exception as e:
         # Clean up the temporary file on error
         try:
             os.remove(temp_filename)
         except:
             pass
-            
+
         # Capture the exception details
         return jsonify({
             'status': 'error',
@@ -3639,7 +3648,7 @@ def run_bash_script():
     script = data.get('script', None)
     timeout = data.get('timeout', 100)  # Default timeout of 30 seconds
     working_dir = data.get('working_dir', None)
-    
+
     if not script:
         return jsonify({
             'status': 'error',
@@ -3647,7 +3656,7 @@ def run_bash_script():
             'error': "",  # Always empty as requested
             'returncode': -1
         }), 400
-    
+
     # Expand user directory if provided
     if working_dir:
         working_dir = os.path.expanduser(working_dir)
@@ -3658,7 +3667,7 @@ def run_bash_script():
                 'error': "",  # Always empty as requested
                 'returncode': -1
             }), 400
-    
+
     # Create a temporary script file
     import tempfile
     with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as tmp_file:
@@ -3666,11 +3675,11 @@ def run_bash_script():
             script = "#!/bin/bash\n\n" + script
         tmp_file.write(script)
         tmp_file_path = tmp_file.name
-    
+
     try:
         # Make the script executable
         os.chmod(tmp_file_path, 0o755)
-        
+
         # Execute the script
         if platform_name == "Windows":
             # On Windows, use Git Bash or WSL if available, otherwise cmd
@@ -3699,19 +3708,19 @@ def run_bash_script():
                 creationflags=flags,
                 shell=False
             )
-        
+
         # Log the command execution for trajectory recording
-        # _append_event("BashScript", 
-        #               {"script": script, "output": result.stdout, "error": "", "returncode": result.returncode}, 
+        # _append_event("BashScript",
+        #               {"script": script, "output": result.stdout, "error": "", "returncode": result.returncode},
         #               ts=time.time())
-        
+
         return jsonify({
             'status': 'success' if result.returncode == 0 else 'error',
             'output': result.stdout,  # Contains both stdout and stderr merged
             'error': "",  # Always empty as requested
             'returncode': result.returncode
         })
-        
+
     except subprocess.TimeoutExpired:
         return jsonify({
             'status': 'error',
@@ -3731,11 +3740,11 @@ def run_bash_script():
                 cwd=working_dir,
                 shell=False
             )
-            
-            # _append_event("BashScript", 
-            #               {"script": script, "output": result.stdout, "error": "", "returncode": result.returncode}, 
+
+            # _append_event("BashScript",
+            #               {"script": script, "output": result.stdout, "error": "", "returncode": result.returncode},
             #               ts=time.time())
-            
+
             return jsonify({
                 'status': 'success' if result.returncode == 0 else 'error',
                 'output': result.stdout,  # Contains both stdout and stderr merged

@@ -253,3 +253,7 @@ containers/runtime/Dockerfile
 containers/runtime/project.tar.gz
 containers/runtime/code
 **/node_modules/
+
+# OS image files
+*.qcow2
+**/screenshots/*

@@ -46,15 +46,15 @@ OSWORLD_CONTAINER_NAME_PREFIX = 'openhands-osworld-runtime-'
 
 class OSWorldSingularityRuntime(SingularityRuntime):
     """Runtime for OSWorld environments using QEMU VMs in Singularity containers.
-    
+
     This runtime manages QEMU VMs inside Singularity containers, providing:
     - Port management for parallel VM instances
     - Communication with OSWorld server inside the VM
     - Support for both Linux and Windows VMs
     """
-    
+
     _osworld_port_allocation_lock = threading.Lock()
-    
+
     def __init__(
         self,
         config: OpenHandsConfig,
@@ -70,7 +70,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         vm_image_path: str | None = None,
     ):
         """Initialize OSWorld Singularity Runtime.
-        
+
         Args:
             config: OpenHands configuration
             event_stream: Event stream for communication
@@ -83,7 +83,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             main_module: Main module to run
             os_type: Type of OS in VM ('linux' or 'windows')
             vm_image_path: Path to QCOW2 VM image file
-        
+
         Note:
             Snapshot mode is ALWAYS enabled (disk writes are not saved).
             This protects the base QCOW2 image from modifications.
@@ -101,7 +101,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         self._vnc_port: int = -1
         self._chromium_port: int = -1
         self._vlc_port: int = -1
-        
+
         # Call parent constructor first
         super().__init__(
             config=config,
@@ -114,11 +114,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             headless_mode=headless_mode,
             main_module=main_module,
         )
-        
+
         # Override container name prefix for OSWorld (AFTER parent init)
         # This must come after super().__init__() to avoid being overwritten
         self.container_name = OSWORLD_CONTAINER_NAME_PREFIX + sid
-        
+
     def _get_default_vm_image_path(self) -> str:
         """Get default VM image path based on OS type."""
         if self.os_type == 'linux':
@@ -127,7 +127,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return '/OS_images/Windows-10-x64.qcow2'
         else:
             raise ValueError(f'Unsupported OS type: {self.os_type}')
-    
+
     def _get_singularity_image_path(self) -> str:
         """Get the Singularity image file path for OSWorld runtime."""
         # Use a specific OSWorld runtime image
@@ -145,10 +145,10 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         image_repo = get_runtime_image_repo()
         os.makedirs(image_repo, exist_ok=True)
         return f'{image_repo}/osworld_ubuntu_24_04.sif'
-    
+
     def _allocate_osworld_ports(self) -> tuple[int, int, int, int]:
         """Allocate ports for OSWorld VM services.
-        
+
         Returns:
             Tuple of (vm_server_port, vnc_port, chromium_port, vlc_port)
         """
@@ -170,28 +170,28 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 OSWORLD_VLC_PORT_RANGE[1]
             )
             return vm_server_port, vnc_port, chromium_port, vlc_port
-    
+
     def _check_kvm_available(self) -> bool:
         """Check if KVM is available and accessible.
-        
+
         Returns:
             True if /dev/kvm exists and has read/write permissions, False otherwise
         """
         kvm_device = '/dev/kvm'
-        
+
         # Check if the device exists
         if not os.path.exists(kvm_device):
             self.log('debug', f'KVM device {kvm_device} does not exist')
             return False
-        
+
         # Check if we have read and write permissions
         if not os.access(kvm_device, os.R_OK | os.W_OK):
             self.log('debug', f'KVM device {kvm_device} exists but lacks read/write permissions')
             return False
-        
+
         self.log('debug', f'KVM device {kvm_device} is available and accessible')
         return True
-    
+
     def _get_qemu_command(self) -> list[str]:
         """Build QEMU command based on OS type and configuration."""
         # Check if VM image exists
@@ -200,35 +200,35 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 f'VM image not found: {self.vm_image_path}. '
                 f'Please ensure the QCOW2 image file exists.'
             )
-        
+
         # Get the VM image filename (it will be mounted at /OS_images/ inside container)
         vm_image_filename = os.path.basename(self.vm_image_path)
         vm_image_container_path = f'/OS_images/{vm_image_filename}'
-        
+
         # Check if KVM is available
         kvm_available = self._check_kvm_available()
         if kvm_available:
             self.log('info', 'KVM is available, enabling hardware acceleration')
         else:
             self.log('warning', 'KVM is not available, running QEMU in emulation mode (slower)')
-        
+
         # Log snapshot mode (always enabled)
         self.log('info', 'Snapshot mode ENABLED: disk changes will NOT be saved (protects base image)')
-        
+
         # Base QEMU command
         cmd = [
             'qemu-system-x86_64',
             '-bios', '/usr/share/ovmf/OVMF.fd',
             '-machine', 'q35',
         ]
-        
+
         # Add KVM flags only if available
         if kvm_available:
             cmd.extend(['-cpu', 'host', '-enable-kvm'])
         else:
             # Use generic CPU for emulation mode
             cmd.extend(['-cpu', 'qemu64'])
-        
+
         # Continue with common flags
         # Port forwarding: VM:5000->host:vm_server_port, VM:9222->host:chromium_port, VM:8080->host:vlc_port
         portfwd = (
@@ -237,7 +237,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             f'hostfwd=tcp::{self._chromium_port}-:9222,'
             f'hostfwd=tcp::{self._vlc_port}-:8080'
         )
-        
+
         cmd.extend([
             '-m', '2G',
             '-smp', '2',
@@ -246,17 +246,17 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             '-device', 'virtio-net-pci,netdev=net0',
             '-snapshot',  # Always use snapshot mode (non-persistent)
         ])
-        
+
         # Add VNC on the allocated port (not the default 5900)
         # QEMU VNC uses display numbers: port = 5900 + display_number
         # Example: if _vnc_port=19242, display=13342, QEMU listens on 5900+13342=19242
         vnc_display = self._vnc_port - 5900
         cmd.extend(['-vnc', f'0.0.0.0:{vnc_display}'])  # VNC accessible from any IP
-        
+
         # Note: Don't use -daemonize, we manage the process with Popen
-        
+
         return cmd
-    
+
     def maybe_prepare_runtime_container_image(self):
         """Prepare the OSWorld runtime container image."""
         # Use simple template for OSWorld
@@ -264,20 +264,20 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             if self.base_container_image is None:
                 # Default to Ubuntu 24.04 for OSWorld
                 self.base_container_image = 'ubuntu:24.04'
-            
+
             self.send_status_message('STATUS$STARTING_CONTAINER')
-            
+
             with SingularityRuntime._runtime_builder_lock:
                 from openhands.runtime.utils.singularity_runtime_build import (
                     build_runtime_image_from_template,
                 )
-                
+
                 # Build OSWorld-specific image
                 template_path = os.path.join(
                     os.path.dirname(__file__),
                     '../../utils/runtime_templates/osworld_singularity.j2'
                 )
-                
+
                 self.runtime_container_image = build_runtime_image_from_template(
                     base_image=self.base_container_image,
                     template_path=template_path,
@@ -289,15 +289,15 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         else:
             # Pull the image if it doesn't exist locally
             self._pull_image_if_needed()
-    
+
     def init_container(self):
         """Initialize the Singularity container and start QEMU VM."""
         self.log('debug', 'Preparing to start OSWorld Singularity container with QEMU VM...')
         self.send_status_message('STATUS$PREPARING_CONTAINER')
-        
+
         # Allocate ports for OSWorld services
         self._vm_server_port, self._vnc_port, self._chromium_port, self._vlc_port = self._allocate_osworld_ports()
-        
+
         self.log(
             'info',
             f'Allocated OSWorld ports - '
@@ -306,12 +306,12 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             f'Chromium DevTools: {self._chromium_port}, '
             f'VLC: {self._vlc_port}'
         )
-        
+
         # Get the image path
         image_path = self._get_singularity_image_path()
         if not os.path.exists(image_path):
             raise RuntimeError(f'Singularity image not found: {image_path}')
-        
+
         # Prepare environment variables for QEMU
         env_vars = {
             'VM_SERVER_PORT': str(self._vm_server_port),
@@ -320,11 +320,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             'VLC_PORT': str(self._vlc_port),
             'OS_TYPE': self.os_type,
         }
-        
+
         # Get absolute path to VM image
         vm_image_abs_path = os.path.abspath(self.vm_image_path)
         vm_image_dir = os.path.dirname(vm_image_abs_path)
-        
+
         # Build the singularity exec command to run QEMU
         cmd = [
             'singularity', 'exec',
@@ -333,38 +333,38 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             '--no-mount', 'cwd,tmp',
             '--home', '/root',
         ]
-        
+
         # Add fakeroot if configured
         if self.config.sandbox.run_as_fakeroot:
             cmd.extend(['--fakeroot'])
-        
+
         # Add environment variables
         for key, value in env_vars.items():
             cmd.extend(['--env', f'{key}={value}'])
-        
+
         # Mount VM image directory (needs to be writable for QEMU to maintain disk state)
         cmd.extend(['--bind', f'{vm_image_dir}:/OS_images'])
-        
+
         # Add image path
         cmd.append(image_path)
-        
+
         # Add QEMU command
         qemu_cmd = self._get_qemu_command()
         cmd.extend(qemu_cmd)
-        
+
         self.log('info', f'Starting QEMU VM with command: {" ".join(cmd)}')
-        
+
         try:
             # Create log directory for QEMU output
             log_dir = '/tmp/openhands_osworld_logs'
             os.makedirs(log_dir, exist_ok=True)
             qemu_stdout_path = os.path.join(log_dir, f'{self.sid}_qemu.out')
             qemu_stderr_path = os.path.join(log_dir, f'{self.sid}_qemu.err')
-            
+
             # Start QEMU in the container (non-blocking with Popen)
             self._qemu_stdout = open(qemu_stdout_path, 'w')
             self._qemu_stderr = open(qemu_stderr_path, 'w')
-            
+
             self.qemu_process = subprocess.Popen(
                 cmd,
                 stdout=self._qemu_stdout,
@@ -372,10 +372,10 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 text=True,
                 start_new_session=True  # Create new process group for easier cleanup
             )
-            
+
             # Save the QEMU PID
             self.qemu_pid = self.qemu_process.pid
-            
+
             # Check if QEMU process started successfully
             time.sleep(2)  # Give QEMU a moment to start
             if self.qemu_process.poll() is not None:
@@ -388,13 +388,16 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                     f'QEMU failed to start. Return code: {self.qemu_process.returncode}\n'
                     f'Error: {error_output}'
                 )
-            
+
             self.log('info', f'QEMU VM started with PID: {self.qemu_pid}')
             self.log('debug', f'QEMU logs: stdout={qemu_stdout_path}, stderr={qemu_stderr_path}')
-            
+
             # Wait for VM to boot and OSWorld server to be ready
             self._wait_for_vm_ready()
-            
+
+            # JH: disable screensaver and power saving feature to preempt black screenshot
+            self._disable_screensaver()
+
             # Store session information
             session_info = {
                 'vm_server_port': self._vm_server_port,
@@ -406,7 +409,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 'qemu_pid': self.qemu_pid,
             }
             self._save_session_port_info(session_info)
-            
+
             self.log('info', 'OSWorld VM is ready')
             self.log('info', f'VM Services:')
             self.log('info', f'  • OSWorld API: {self.osworld_vm_url}')
@@ -414,21 +417,21 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             self.log('info', f'  • Chrome DevTools: {self.chromium_devtools_url}')
             self.log('info', f'  • VLC Web Interface: {self.vlc_url}')
             self.send_status_message('STATUS$CONTAINER_STARTED')
-            
+
         except Exception as e:
             self.log('error', f'Error starting OSWorld runtime: {str(e)}')
             self.close()
             raise e
-    
+
     def _wait_for_vm_ready(self, timeout: int = 300):
         """Wait for the VM to boot and OSWorld server to be ready.
-        
+
         Args:
             timeout: Maximum time to wait in seconds
         """
         self.log('info', 'Waiting for OSWorld VM to boot...')
         start_time = time.time()
-        
+
         while time.time() - start_time < timeout:
             try:
                 # Try to connect to OSWorld server
@@ -442,22 +445,22 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                     return
             except Exception:
                 pass
-            
+
             # Check every 5 seconds
             time.sleep(5)
             self.log('debug', f'Still waiting for VM... ({int(time.time() - start_time)}s elapsed)')
-        
+
         raise TimeoutError(
             f'OSWorld VM failed to become ready within {timeout} seconds. '
             f'VM Server port: {self._vm_server_port}'
         )
-    
+
     def _is_container_running(self) -> bool:
         """Check if the QEMU VM is currently running."""
         # For OSWorld, we check the QEMU process instead of container process
         if self.qemu_process is not None:
             return self.qemu_process.poll() is None
-        
+
         # If we attached to an existing QEMU, check by PID
         if self.qemu_pid is not None:
             try:
@@ -465,9 +468,9 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 return True
             except (OSError, ProcessLookupError):
                 return False
-        
+
         return False
-    
+
     def wait_until_alive(self):
         """Wait until the OSWorld VM is ready."""
         # For OSWorld, we only need to check if QEMU is running
@@ -478,7 +481,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             )
         # OSWorld VM is already validated in _wait_for_vm_ready()
         self.log('debug', 'OSWorld runtime is alive and ready')
-    
+
     def _attach_to_container(self):
         """Attach to an existing OSWorld container."""
         # Get port information from session registry
@@ -487,7 +490,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             raise AgentRuntimeNotFoundError(
                 f'OSWorld container {self.container_name} not found or not running.'
             )
-        
+
         self._vm_server_port = session_info.get('vm_server_port', -1)
         self._vnc_port = session_info.get('vnc_port', -1)
         self._chromium_port = session_info.get('chromium_port', -1)
@@ -495,14 +498,14 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         self.os_type = session_info.get('os_type', 'linux')
         self.vm_image_path = session_info.get('vm_image_path', self._get_default_vm_image_path())
         self.qemu_pid = session_info.get('qemu_pid')
-        
+
         self.log(
             'debug',
             f'Attached to OSWorld container: {self.container_name} '
             f'VM Server: {self._vm_server_port}, VNC: {self._vnc_port}, '
             f'Chromium: {self._chromium_port}, VLC: {self._vlc_port}, QEMU PID: {self.qemu_pid}'
         )
-    
+
     def check_if_alive(self) -> None:
         """Check if the OSWorld VM server is alive."""
         try:
@@ -516,7 +519,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             raise AgentRuntimeDisconnectedError(
                 f'OSWorld VM server is not reachable: {str(e)}'
             )
-    
+
     def close(self, rm_all_containers: bool | None = None):
         """Close the OSWorld runtime and stop QEMU VM."""
         # Close QEMU log file handles
@@ -532,7 +535,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 self._qemu_stderr = None
         except Exception as e:
             logger.warning(f'Failed to close QEMU stderr: {e}')
-        
+
         # Stop QEMU process if we started it
         if self.qemu_pid is not None:
             try:
@@ -548,44 +551,44 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 self.qemu_pid = None
             except Exception as e:
                 self.log('warning', f'Failed to stop QEMU VM: {e}')
-        
+
         # Call parent close
         super().close(rm_all_containers)
-    
+
     @property
     def osworld_vm_url(self) -> str:
         """Get the OSWorld VM server URL."""
         return f'http://localhost:{self._vm_server_port}'
-    
+
     @property
     def vnc_url(self) -> str:
         """Get the VNC URL for the VM.
-        
+
         QEMU's built-in VNC server listens on the allocated VNC port.
         Connect with: vncviewer localhost:{display} (where display = port - 5900)
         """
         return f'vnc://localhost:{self._vnc_port}'
-    
+
     @property
     def chromium_devtools_url(self) -> str:
         """Get the Chrome DevTools Protocol URL.
-        
+
         Access the Chromium browser's DevTools interface inside the VM.
         Example usage: Connect Puppeteer or Chrome DevTools to this endpoint.
         """
         return f'http://localhost:{self._chromium_port}'
-    
+
     @property
     def vlc_url(self) -> str:
         """Get the VLC web interface URL.
-        
+
         Access the VLC media player's web interface inside the VM.
         """
         return f'http://localhost:{self._vlc_port}'
-    
+
     def get_vm_screenshot(self) -> bytes | None:
         """Get screenshot from the VM.
-        
+
         Returns:
             PNG image bytes or None if failed
         """
@@ -603,7 +606,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
 
     def get_vm_accessibility_tree(self) -> str | None:
         """Get accessibility tree from the VM.
-        
+
         Returns:
             Accessibility tree string or None if failed
         """
@@ -618,13 +621,13 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         except Exception as e:
             self.log('error', f'Failed to get VM accessibility tree: {e}')
             return None
-    
+
     def _execute_pyautogui_command(self, pyautogui_command: str) -> dict:
         """Execute a PyAutoGUI command string in the VM.
-        
+
         Args:
             pyautogui_command: Raw PyAutoGUI command(s) to execute
-            
+
         Returns:
             Response dictionary from OSWorld server
         """
@@ -633,7 +636,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             command = f"import pyautogui; import time; pyautogui.FAILSAFE = False; {pyautogui_command}"
             command_list = ["python", "-c", command]
             payload = {"command": command_list, "shell": False}
-            
+
             response = httpx.post(
                 f'{self.osworld_vm_url}/execute',
                 json=payload,
@@ -643,114 +646,114 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         except Exception as e:
             self.log('error', f'Failed to execute PyAutoGUI command: {e}')
             return {'status': 'error', 'message': str(e)}
-    
+
     def execute_vm_action(self, action_data: dict) -> dict:
         """Execute an action in the OSWorld VM.
-        
+
         Args:
             action_data: Action data dictionary with 'action_type' and 'parameters'
-            
+
         Returns:
             Response from OSWorld server
         """
         try:
             action_type = action_data.get('action_type')
             parameters = action_data.get('parameters', {})
-            
+
             # Convert action to PyAutoGUI command
             pyautogui_command = self._action_to_pyautogui_command(action_type, parameters)
-            
+
             if pyautogui_command is None:
                 return {'status': 'error', 'message': f'Unknown action type: {action_type}'}
-            
+
             # Execute using the common method
             return self._execute_pyautogui_command(pyautogui_command)
         except Exception as e:
             self.log('error', f'Failed to execute VM action: {e}')
             return {'status': 'error', 'message': str(e)}
-    
+
     def _action_to_pyautogui_command(self, action_type: str, parameters: dict) -> str | None:
         """Convert an action dictionary to a PyAutoGUI command string.
-        
+
         Args:
             action_type: Type of action (e.g., 'CLICK', 'TYPING', 'PRESS')
             parameters: Action parameters
-            
+
         Returns:
             PyAutoGUI command string or None if unknown action type
         """
         import random
-        
+
         # For MOVE_TO actions with duration
         move_mode = random.choice([
             "pyautogui.easeInQuad", "pyautogui.easeOutQuad", "pyautogui.easeInOutQuad",
             "pyautogui.easeInBounce", "pyautogui.easeInElastic"
         ])
-        
+
         if action_type == "CLICK":
             x = parameters.get('x')
             y = parameters.get('y')
             button = parameters.get('button', 'left')
             num_clicks = parameters.get('clicks', 1)
-            interval = parameters.get('interval', 0.0)
+            interval = parameters.get('interval', 0.01)
             duration = parameters.get('duration', 0.0)
-            
+
             if x is not None and y is not None:
-                return f"pyautogui.click(x={x}, y={y}, button='{button}', clicks={num_clicks}, interval={interval}, duration={duration})"
+                return f"pyautogui.click(x={x}, y={y}, button='{button}', clicks={num_clicks}, interval={interval}, duration={duration}); time.sleep(0.5)"
             else:
-                return "pyautogui.click()"
-        
+                return "pyautogui.click(); time.sleep(0.5)"
+
         elif action_type == "DOUBLE_CLICK":
             x = parameters.get('x')
             y = parameters.get('y')
             button = parameters.get('button', 'left')
-            interval = parameters.get('interval', 0.0)
+            interval = parameters.get('interval', 0.01)
             duration = parameters.get('duration', 0.0)
             if x is not None and y is not None:
-                return f"pyautogui.doubleClick(x={x}, y={y}, button='{button}', interval={interval}, duration={duration})"
+                return f"pyautogui.doubleClick(x={x}, y={y}, button='{button}', interval={interval}, duration={duration}); time.sleep(0.5)"
             else:
-                return "pyautogui.doubleClick()"
-        
+                return "pyautogui.doubleClick(); time.sleep(0.5)"
+
         elif action_type == "TRIPLE_CLICK":
             x = parameters.get('x')
             y = parameters.get('y')
             button = parameters.get('button', 'left')
-            interval = parameters.get('interval', 0.0)
+            interval = parameters.get('interval', 0.01)
             duration = parameters.get('duration', 0.0)
             if x is not None and y is not None:
-                return f"pyautogui.tripleClick(x={x}, y={y}, button='{button}', interval={interval}, duration={duration})"
+                return f"pyautogui.tripleClick(x={x}, y={y}, button='{button}', interval={interval}, duration={duration}); time.sleep(0.5)"
             else:
-                return "pyautogui.tripleClick()"
-        
+                return "pyautogui.tripleClick(); time.sleep(0.5)"
+
         elif action_type == "RIGHT_CLICK":
             x = parameters.get('x')
             y = parameters.get('y')
             interval = parameters.get('interval', 0.0)
             duration = parameters.get('duration', 0.0)
             if x is not None and y is not None:
-                return f"pyautogui.rightClick(x={x}, y={y}, interval={interval}, duration={duration})"
+                return f"pyautogui.rightClick(x={x}, y={y}, interval={interval}, duration={duration}); time.sleep(0.5)"
             else:
-                return "pyautogui.rightClick()"
-        
+                return "pyautogui.rightClick(); time.sleep(0.5)"
+
         elif action_type == "MIDDLE_CLICK":
             x = parameters.get('x')
             y = parameters.get('y')
             interval = parameters.get('interval', 0.0)
             duration = parameters.get('duration', 0.0)
             if x is not None and y is not None:
-                return f"pyautogui.middleClick(x={x}, y={y}, interval={interval}, duration={duration})"
+                return f"pyautogui.middleClick(x={x}, y={y}, interval={interval}, duration={duration}); time.sleep(0.5)"
             else:
-                return "pyautogui.click(button='middle')"
-        
+                return "pyautogui.click(button='middle'); time.sleep(0.5)"
+
         elif action_type == "MOVE_TO":
             x = parameters.get('x')
             y = parameters.get('y')
             duration = parameters.get('duration', 0.0)
             if x is not None and y is not None:
-                return f"pyautogui.moveTo({x}, {y}, {duration}, {move_mode})"
+                return f"pyautogui.moveTo({x}, {y}, {duration}, {move_mode}); time.sleep(0.5)"
             else:
-                return "pyautogui.moveTo()"
-        
+                return "pyautogui.moveTo(); time.sleep(0.5)"
+
         elif action_type == "DRAG_TO":
             x = parameters.get('x')
             y = parameters.get('y')
@@ -758,102 +761,102 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             button = parameters.get('button', 'left')
             mouseDownUp = parameters.get('mouseDownUp', True)
             if x is not None and y is not None:
-                return f"pyautogui.dragTo({x}, {y}, button='{button}', duration={duration}, mouseDownUp={mouseDownUp})"
+                return f"pyautogui.dragTo({x}, {y}, button='{button}', duration={duration}, mouseDownUp={mouseDownUp}); time.sleep(0.5)"
             return None
-        
+
         elif action_type == "SCROLL":
             x = parameters.get('x', None)
             y = parameters.get('y', None)
             amount = parameters.get('amount', 1)
-            return f"pyautogui.scroll({amount}, x={x}, y={y})"
+            return f"pyautogui.scroll({amount}, x={x}, y={y}); time.sleep(0.5)"
 
         elif action_type == "HSCROLL":
             x = parameters.get('x', None)
             y = parameters.get('y', None)
             amount = parameters.get('amount', 1)
-            return f"pyautogui.hscroll({amount}, x={x}, y={y})"
-        
+            return f"pyautogui.hscroll({amount}, x={x}, y={y}); time.sleep(0.5)"
+
         elif action_type == "TYPING":
             text = parameters.get('text', '')
-            interval = parameters.get('interval', 0.0)
+            interval = parameters.get('interval', 0.01)
             # Use repr() to properly escape the text (same as OSWorld)
-            return f"pyautogui.typewrite({repr(text)}, interval={interval})"
-        
+            return f"pyautogui.typewrite({repr(text)}, interval={interval}); time.sleep(0.5)"
+
         elif action_type == "PRESS":
             key = parameters.get('key', '')
             presses = parameters.get('presses', 1)
             if isinstance(key, list):
                 # Multiple keys - treat as hotkey
                 keys_str = "', '".join(key)
-                return f"pyautogui.hotkey('{keys_str}')"
+                return f"pyautogui.hotkey('{keys_str}'); time.sleep(0.5)"
             else:
                 if presses > 1:
                     return f"pyautogui.press('{key}', presses={presses})"
-                return f"pyautogui.press('{key}')"
-        
+                return f"pyautogui.press('{key}'); time.sleep(0.5)"
+
         elif action_type == "HOTKEY":
             keys = parameters.get('keys', [])
             if isinstance(keys, list) and keys:
                 keys_str = "', '".join(keys)
-                return f"pyautogui.hotkey('{keys_str}')"
+                return f"pyautogui.hotkey('{keys_str}'); time.sleep(0.5)"
             return None
-        
+
         elif action_type == "KEY_DOWN":
             key = parameters.get('key', '')
-            return f"pyautogui.keyDown('{key}')"
-        
+            return f"pyautogui.keyDown('{key}'); time.sleep(0.5)"
+
         elif action_type == "KEY_UP":
             key = parameters.get('key', '')
-            return f"pyautogui.keyUp('{key}')"
-        
+            return f"pyautogui.keyUp('{key}'); time.sleep(0.5)"
+
         elif action_type == "MOUSE_DOWN":
             button = parameters.get('button', 'left')
-            return f"pyautogui.mouseDown(button='{button}')"
-        
+            return f"pyautogui.mouseDown(button='{button}'); time.sleep(0.5)"
+
         elif action_type == "MOUSE_UP":
             button = parameters.get('button', 'left')
-            return f"pyautogui.mouseUp(button='{button}')"
+            return f"pyautogui.mouseUp(button='{button}'); time.sleep(0.5)"
 
         elif action_type == "WAIT":
             seconds = parameters.get('seconds', 1)
-            return f"time.sleep({seconds})"
-        
+            return f"time.sleep({seconds}); time.sleep(0.5)"
+
         else:
             return None
-    
+
     def run_action(self, action):
         """Run an action in the OSWorld VM.
-        
+
         This method is called by the runtime system to execute actions.
         For OSWorldInteractiveAction, it converts the actions to PyAutoGUI commands.
         """
         from openhands.events.action.os import OSWorldInteractiveAction
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         if isinstance(action, OSWorldInteractiveAction):
             return self.osworld_interactive(action)
         else:
             # Fallback to parent implementation for other actions
             return super().run_action(action)
-    
+
     def osworld_interactive(self, action) -> 'Observation':
         """Handle OSWorld interactive actions.
-        
+
         Dispatches to appropriate handler based on action.method.
         Supports all PythonController methods from OSWorld.
-        
+
         Args:
             action: OSWorldInteractiveAction with method and params
-            
+
         Returns:
             Appropriate Observation based on the method
         """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         try:
             method = action.method
             params = action.params or {}
-            
+
             # Dispatch to appropriate handler
             if method == 'execute_action':
                 return self._handle_execute_action(params)
@@ -891,20 +894,20 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 return self._handle_get_vm_directory_tree(params)
             else:
                 return ErrorObservation(f'Unknown OSWorld method: {method}')
-                
+
         except Exception as e:
             self.log('error', f'Failed to execute OSWorld interactive action: {e}')
             return ErrorObservation(f'Failed to execute OSWorld action: {str(e)}')
-    
+
     # Handler methods for each PythonController method
-    
+
     def _handle_execute_action(self, params: dict) -> 'Observation':
         """Handle execute_action - PyAutoGUI actions like CLICK, TYPING, etc."""
         from openhands.events.observation import CmdOutputObservation
-        
+
         action_data = params.get('action', params)
         result = self.execute_vm_action(action_data)
-        
+
         if result.get('status') == 'success':
             return CmdOutputObservation(
                 content=result.get('output', 'Action executed successfully'),
@@ -921,14 +924,14 @@ class OSWorldSingularityRuntime(SingularityRuntime):
 
     def _handle_execute_agentic_action(self, params: dict, tool_call_metadata: ToolCallMetadata | None, pause_time: float = 0.0) -> 'Observation':
         """Handle execute_action - PyAutoGUI actions like CLICK, TYPING, etc."""
-        from openhands.events.observation.osworld import OSWorldOutputObservation  
-        from openhands.events.observation import ErrorObservation   
+        from openhands.events.observation.osworld import OSWorldOutputObservation
+        from openhands.events.observation import ErrorObservation
         import base64
 
         # Always save screenshot and accessibility tree. Will leave message formatting to the agent.
         include_screenshot = True #self.config.agents['agent'].enable_vision
         include_a11y_tree = True #self.config.agents['agent'].enable_a11y_tree
-        
+
         action_data = params.get('action', params)
 
         # Convert normalized coordinates to pixel coordinates
@@ -944,7 +947,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             logger.info(f"Converted normalized coordinates to pixel coordinates: {action_data}. Screen size: {width}x{height}.")
 
         result = self.execute_vm_action(action_data)
-        
+
         if result.get('status') == 'success':
             if pause_time > 0.5:
                 time.sleep(pause_time)
@@ -976,12 +979,12 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 error_id=tool_call_metadata.tool_call_id,
                 name=tool_call_metadata.function_name,
             )
-    
+
     def _handle_get_screenshot(self) -> 'Observation':
         """Handle get_screenshot - returns screenshot as base64."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import base64
-        
+
         screenshot_bytes = self.get_vm_screenshot()
         if screenshot_bytes:
             # Return as base64 encoded string
@@ -993,11 +996,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             )
         else:
             return ErrorObservation('Failed to capture screenshot')
-    
+
     def _handle_get_accessibility_tree(self) -> 'Observation':
         """Handle get_accessibility_tree."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         at = self.get_vm_accessibility_tree()
         if at:
             return CmdOutputObservation(
@@ -1006,11 +1009,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 exit_code=0,
             )
         return ErrorObservation('Failed to get accessibility tree')
-    
+
     def _handle_get_terminal_output(self) -> 'Observation':
         """Handle get_terminal_output."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         try:
             response = httpx.get(
                 f'{self.osworld_vm_url}/terminal',
@@ -1026,20 +1029,20 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to get terminal output: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to get terminal output: {e}')
-    
+
     def _handle_get_file(self, params: dict) -> 'Observation':
         """Handle get_file - downloads file from VM.
-        
+
         Returns the full file content as base64-encoded string in observation.content.
         Format: "base64:<base64_data>"
         """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import base64
-        
+
         file_path = params.get('file_path', '')
         if not file_path:
             return ErrorObservation('file_path parameter required')
-        
+
         try:
             response = httpx.post(
                 f'{self.osworld_vm_url}/file',
@@ -1058,11 +1061,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to get file: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to get file: {e}')
-    
+
     def _handle_execute_python_command(self, params: dict) -> 'Observation':
         """Handle execute_python_command - raw Python command execution."""
         from openhands.events.observation import CmdOutputObservation
-        
+
         command = params.get('command', '')
         if not command:
             return CmdOutputObservation(
@@ -1070,9 +1073,9 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 command='execute_python_command',
                 exit_code=1,
             )
-        
+
         result = self._execute_pyautogui_command(command)
-        
+
         if result.get('status') == 'success':
             return CmdOutputObservation(
                 content=result.get('output', ''),
@@ -1086,15 +1089,15 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 command=command,
                 exit_code=result.get('returncode', 1),
             )
-    
+
     def _handle_run_python_script(self, params: dict) -> 'Observation':
         """Handle run_python_script."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         script = params.get('script', '')
         if not script:
             return ErrorObservation('script parameter required')
-        
+
         try:
             payload = {'code': script}
             response = httpx.post(
@@ -1123,46 +1126,46 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to run Python script (HTTP {response.status_code}): {error_msg}')
         except Exception as e:
             return ErrorObservation(f'Failed to run Python script: {e}')
-    
+
     def _handle_run_bash_script(self, params: dict) -> 'Observation':
         """Handle run_bash_script.
-        
+
         Note: The /run_bash_script endpoint has a bug (missing _append_event function).
         As a workaround, we use /execute with base64 encoding to safely transfer scripts.
         """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import base64
         import uuid
-        
+
         script = params.get('script', '')
         if not script:
             return ErrorObservation('script parameter required')
-        
+
         timeout = params.get('timeout', 30)
         working_dir = params.get('working_dir')
-        
+
         try:
             # Workaround: Use /execute endpoint instead of /run_bash_script
             # Encode script as base64 to avoid escaping issues
             script_name = f'/tmp/bash_script_{uuid.uuid4().hex}.sh'
-            
+
             # Add shebang if not present
             if '#!/bin/bash' not in script:
                 script = '#!/bin/bash\n\n' + script
-            
+
             # Base64 encode the script for safe transfer
             script_b64 = base64.b64encode(script.encode('utf-8')).decode('ascii')
-            
+
             # Build command to decode, write, and execute the script
             commands = [
                 f'echo "{script_b64}" | base64 -d > {script_name}',
                 f'chmod +x {script_name}',
             ]
-            
+
             # If working_dir is specified, cd to it before executing
             if working_dir:
                 commands.append(f'cd {working_dir}')
-            
+
             # Execute and capture exit code
             commands.extend([
                 f'{script_name}',
@@ -1170,37 +1173,37 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 f'rm -f {script_name}',
                 f'exit $SCRIPT_EXIT_CODE'
             ])
-            
+
             bash_command = ' && '.join(commands)
-            
+
             # Use /execute endpoint with shell=True
             payload = {
                 'command': bash_command,
                 'shell': True
             }
-            
+
             response = httpx.post(
                 f'{self.osworld_vm_url}/execute',
                 json=payload,
                 timeout=timeout + 10.0
             )
-            
+
             if response.status_code == 200:
                 result = response.json()
                 output = result.get('output', '')
                 error = result.get('error', '')
-                
+
                 # Combine output and error
                 content = output
                 if error:
                     content += f'\n{error}' if content else error
-                
+
                 return CmdOutputObservation(
                     content=content,
                     command='run_bash_script',
                     exit_code=result.get('returncode', 0),
                 )
-            
+
             # Try to get error details from response
             try:
                 error_detail = response.json()
@@ -1208,14 +1211,14 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             except:
                 error_msg = response.text or 'Unknown error'
             return ErrorObservation(f'Failed to run bash script (HTTP {response.status_code}): {error_msg}')
-        
+
         except Exception as e:
             return ErrorObservation(f'Failed to run bash script: {e}')
-    
+
     def _handle_start_recording(self) -> 'Observation':
         """Handle start_recording."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         try:
             response = httpx.post(
                 f'{self.osworld_vm_url}/start_recording',
@@ -1230,19 +1233,19 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to start recording: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to start recording: {e}')
-    
+
     def _handle_end_recording(self, params: dict) -> 'Observation':
         """Handle end_recording.
-        
+
         Note: The /end_recording endpoint returns the actual recording video file (binary).
         The 'dest' parameter is IGNORED by the OSWorld server - the recording is always
         saved to /tmp/recording.mp4 inside the VM. We return the video as base64-encoded data.
         """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import base64
-        
+
         dest = params.get('dest', '/tmp/recording.mp4')  # Ignored by server, kept for documentation
-        
+
         try:
             response = httpx.post(
                 f'{self.osworld_vm_url}/end_recording',
@@ -1260,14 +1263,14 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to end recording: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to end recording: {e}')
-    
+
     def _handle_get_vm_platform(self) -> 'Observation':
         """Handle get_vm_platform."""
         from openhands.events.observation import CmdOutputObservation
-        
+
         command = "import platform; print(platform.system())"
         result = self._execute_pyautogui_command(command)
-        
+
         if result.get('status') == 'success':
             platform = result.get('output', '').strip()
             return CmdOutputObservation(
@@ -1281,11 +1284,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
                 command='get_vm_platform',
                 exit_code=1,
             )
-    
+
     def _handle_get_vm_screen_size(self) -> 'Observation':
         """Handle get_vm_screen_size."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         try:
             if hasattr(self, 'screen_size'):
                 width, height = self.screen_size
@@ -1307,15 +1310,15 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to get screen size: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to get screen size: {e}')
-    
+
     def _handle_get_vm_window_size(self, params: dict) -> 'Observation':
         """Handle get_vm_window_size."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         app_class_name = params.get('app_class_name', '')
         if not app_class_name:
             return ErrorObservation('app_class_name parameter required')
-        
+
         try:
             response = httpx.post(
                 f'{self.osworld_vm_url}/window_size',
@@ -1333,16 +1336,16 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to get window size: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to get window size: {e}')
-    
+
     def _handle_get_vm_wallpaper(self) -> 'Observation':
         """Handle get_vm_wallpaper.
-        
+
         Note: The /wallpaper endpoint returns the actual wallpaper image file (binary),
         not the path. We return it as base64-encoded data.
         """
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import base64
-        
+
         try:
             response = httpx.post(
                 f'{self.osworld_vm_url}/wallpaper',
@@ -1360,11 +1363,11 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to get wallpaper: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to get wallpaper: {e}')
-    
+
     def _handle_get_vm_desktop_path(self) -> 'Observation':
         """Handle get_vm_desktop_path."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
-        
+
         try:
             response = httpx.post(
                 f'{self.osworld_vm_url}/desktop_path',
@@ -1380,16 +1383,16 @@ class OSWorldSingularityRuntime(SingularityRuntime):
             return ErrorObservation(f'Failed to get desktop path: {response.status_code}')
         except Exception as e:
             return ErrorObservation(f'Failed to get desktop path: {e}')
-    
+
     def _handle_get_vm_directory_tree(self, params: dict) -> 'Observation':
         """Handle get_vm_directory_tree."""
         from openhands.events.observation import CmdOutputObservation, ErrorObservation
         import json
-        
+
         path = params.get('path', '')
         if not path:
             return ErrorObservation('path parameter required')
-        
+
         try:
             payload = {'path': path}
             response = httpx.post(
@@ -1413,3 +1416,33 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         self, selected_repository: str | None
     ):
         return []
+
+    def _disable_screensaver(self):
+        """Disables the screen saver and power management in the VM."""
+        self.log('info', 'Disabling VM screensaver and power management...')
+
+        # Commands to disable GNOME screen blanking and locking
+        commands = [
+            "gsettings set org.gnome.desktop.session idle-delay 0",
+            "gsettings set org.gnome.desktop.screensaver lock-enabled false",
+            "gsettings set org.gnome.settings-daemon.plugins.power idle-dim false",
+            "xset s off",
+            "xset -dpms",
+            "xset s noblank"
+        ]
+
+        for cmd in commands:
+            try:
+                # We use the /execute endpoint on the VM server
+                response = httpx.post(
+                    f'{self.osworld_vm_url}/execute',
+                    json={
+                        'command': cmd,
+                        'shell': True
+                    },
+                    timeout=5.0
+                )
+                if response.status_code != 200:
+                    self.log('warning', f'Failed to execute disable screensaver command: {cmd}')
+            except Exception as e:
+                self.log('warning', f'Error disabling screensaver: {e}')
