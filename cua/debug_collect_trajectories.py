@@ -36,6 +36,14 @@ def parse_args():
         default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json"
     )
 
+    # OpenAIWrapper
+    parser.add_argument("--explorer_node", type=str)
+    parser.add_argument("--model_name", type=str)
+    parser.add_argument("--min_pixels", type=int, default=-1)
+    parser.add_argument("--max_pixels", type=int, default=-1)
+    parser.add_argument("--max_retry_for_action_generation", type=int, default=3)
+
+
     args = parser.parse_args()
 
     return args

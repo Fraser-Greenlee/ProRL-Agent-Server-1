@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 import ipdb
+
+from cua.modules.module_openai_wrapper import OpenAIWrapper
 from openhands.core.logger import openhands_logger
 from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWorldSingularityRuntime
 
@@ -42,8 +44,14 @@ class DataCollector:
     Excluded asyncio / threading for debugging purposes.
     """
     def __init__(self, args: Namespace):
+        self.openai_wrapper = OpenAIWrapper(args)
+
         self.vm_image_path = args.vm_image_path
         self.os_type = 'linux' if 'Ubuntu' in self.vm_image_path else 'windows'
+
+        # set model name
+        self.explorer_model_name = ''  # todo
+        self.parser_model_name = ''  # todo
 
         # will be later set in the first observation
         self.screen_width = None
@@ -54,10 +62,6 @@ class DataCollector:
             self.default_screen_width, self.default_screen_height = 1280, 800
         else:
             self.default_screen_width, self.default_screen_height = 1920, 1080
-
-        # set model name
-        self.explorer_model_name = ''  # todo
-        self.parser_model_name = ''  # todo
 
         # load persona dataset if args.persona_dataset_path is set
         self.persona_dfs, self.persona_df_weights = load_persona_dataset(args.persona_dataset_path, logger)
