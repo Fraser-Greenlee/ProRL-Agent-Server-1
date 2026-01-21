@@ -257,3 +257,5 @@ containers/runtime/code
 # OS image files
 *.qcow2
 **/screenshots/*
+**/annotated_images/*
+**/trajectories/*

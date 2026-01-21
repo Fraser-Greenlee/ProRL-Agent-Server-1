@@ -1,6 +1,10 @@
 from typing import Dict
 
 from openai import OpenAI
+from openhands.core.logger import openhands_logger
+
+# Create a child logger
+logger = openhands_logger.getChild('openai_wrapper')
 
 
 class OpenAIWrapper:
@@ -23,6 +27,10 @@ class OpenAIWrapper:
         # todo parse action (i.e., action schema) from the generation
         # the parsed action should abide by the SOM action scheme
         # (EnvController will convert this to executable OSWorld action)
+
+        # todo return similar object as `action_info` in synthetic_data_generator.generate_action function
+        # todo specifically, we need action_info Dict with "tool_name" and "params"
+        # todo this includes converting selected Mark object into a solid coordinate in pixels
         pass
 
     def prompt_goal(self):
@@ -33,6 +41,8 @@ class OpenAIWrapper:
         # todo similar to SyntheticDataGenerator.generate_goal, generate high-level sub-goal to pick random actions
         # todo conditioned on persona
         pass
+
+
 
 
 

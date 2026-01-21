@@ -1,7 +1,7 @@
 from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWorldSingularityRuntime
 
 
-class DataCollector:
+class ModuleDataCollector:
     """
     Class managing actual workflow to collect trajectory data.
     Orchestrates usage of EnvController and OpenAIWrapper.

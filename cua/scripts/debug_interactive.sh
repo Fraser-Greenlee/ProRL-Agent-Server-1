@@ -22,6 +22,8 @@ JOB_ID=$(sbatch --parsable \
     --ntasks-per-node=1 \
     --time="$TIME_LIMIT" \
     --exclusive \
+    --output=/dev/null \
+    --error=/dev/null \
     --wrap="srun --container-image=$IMAGE --container-mounts=/lustre:/lustre sleep infinity")
 
 if [ -z "$JOB_ID" ]; then
@@ -79,8 +81,7 @@ echo "[Local] Found Container PID: $CONTAINER_PID"
 
 # --- 5. Launch Interactive Session ---
 echo "=========================================================="
-echo "   Dropping you into KVM-enabled shell on $NODE"
-echo "   (Permissions preserved via host-side enroot exec)"
+echo "                KVM-enabled shell on $NODE                "
 echo "=========================================================="
 
 # -t forces pseudo-terminal allocation so you get an interactive shell
