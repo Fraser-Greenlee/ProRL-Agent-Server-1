@@ -23,6 +23,14 @@ if openhands_logger.handlers:
 def parse_args():
     parser = argparse.ArgumentParser()
 
+    # Set Explorer / Parser nodes
+    parser.add_argument("--explorer_node", type=str)
+    parser.add_argument("--parser_node", type=str, required=True)
+    parser.add_argument(
+        "--explorer_model_name", type=str,
+        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/models/Qwen3-VL-235B-A22B-Thinking")
+
+    # DataCollector
     parser.add_argument(
         "--vm_image_path", type=str,
         default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/OS_images/Ubuntu.qcow2",
@@ -35,6 +43,7 @@ def parse_args():
         "--osworld_setup_path", type=str,
         default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json"
     )
+    parser.add_argument("--max_steps_per_trajectory", type=int, default=20)
 
     # OpenAIWrapper
     parser.add_argument("--explorer_node", type=str)
@@ -57,5 +66,13 @@ async def main(args):
 if __name__ == "__main__":
     args = parse_args()
     asyncio.run(main(args))
+
+
+# How to run (interactive session)
+# 1. Run cpu node with /dev/kvm write access
+# cd ~/lustre/cua/prorl-agent-server/cua/scripts; bash debug_interactive.sh
+# 2. Run gpu node for parser server
+# 3. Run
+
 
 

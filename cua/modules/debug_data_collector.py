@@ -49,9 +49,12 @@ class DataCollector:
         self.vm_image_path = args.vm_image_path
         self.os_type = 'linux' if 'Ubuntu' in self.vm_image_path else 'windows'
 
-        # set model name
+        self.max_steps_per_trajectory = args.max_steps_per_trajectory
+
+        # model name and nodes
+        self.explorer_node = ''  # todo
+        self.parser_node = ''  # todo
         self.explorer_model_name = ''  # todo
-        self.parser_model_name = ''  # todo
 
         # will be later set in the first observation
         self.screen_width = None
@@ -143,12 +146,16 @@ class DataCollector:
             'steps': [],
         }
 
-        initial_image_path = trajectory_save_dir / "0.png"
-        screenshot = EnvController.get_and_save_screenshot(job_details.runtime, initial_image_path)
+        for step_idx in range(self.max_steps_per_trajectory):
+            # get screenshot and save it
+            image_path = trajectory_save_dir / f"{step_idx}.png"
+            screenshot_bytes = EnvController.get_and_save_screenshot(job_details.runtime, image_path)
 
-        # todo utilize screenshot to generate actions
-        ipdb.set_trace()
-        pass
+            # todo use parser to parse the screenshot
+
+            # todo utilize screenshot to generate actions
+            ipdb.set_trace()
+            pass
 
 
 

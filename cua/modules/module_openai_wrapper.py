@@ -78,22 +78,17 @@ class OpenAIWrapper:
     @staticmethod
     def prepare_generate_goal_messages(current_screenshot: Image.Image, persona: Dict, previous_goals: List[str]):
         # todo
-        # These are the previous goals you pursued:
-        # Some of these goals may not have been fully achieved. Based on the current screenshot, determine whether
-        # your last goal has been achieved, and try to make a natural connection when coming up with a new goal.
-        # (e.g. if the current state is to go to a different website and the screenshot tells you that you just
-        # clicked on the URL field on chrome, your next goal could be typing the URL.
-
         # You are an AI agent exploring a Ubuntu desktop environment.
         #
         # Your task is to imagine ONE reasonable sub-goal you could achieve based on the current screen state.
         #
         # Respond with a single, specific goal.
 
-        # how to use previous goals?
-        # - Determine whether your last goal has been accomplished, and if not, try to finish the previous goal by
-        # - generating a solid next step to do so, rather than moving onto a completely new goal.
-        # how to define "goal"
+        # These are the previous goals you pursued:
+        # Some of these goals may not have been fully achieved. Based on the current screen state, determine whether
+        # your last goal has been achieved, and try to make a natural connection when coming up with a new goal.
+        # (e.g. if the current state is to go to a different website and the screenshot tells you that you just
+        # clicked on the URL field on chrome, your next goal could be typing the URL.
 
         # Guidelines
         # - Don't ask clarification questions - just generate a simple goal
