@@ -324,13 +324,14 @@ EOF
 
 # Create Chrome desktop entry with debugging
 # Chrome listens on internal port 9223, socat forwards from 0.0.0.0:9222
+# --no-sandbox is required for Chrome to run in Docker containers
 RUN cat > /usr/share/applications/google-chrome.desktop << 'EOF'
 [Desktop Entry]
 Version=1.0
 Name=Google Chrome
 GenericName=Web Browser
 Comment=Access the Internet
-Exec=/usr/bin/google-chrome-stable --remote-debugging-port=9223 --user-data-dir=/home/user/.config/google-chrome-debug --no-first-run --no-default-browser-check %U
+Exec=/usr/bin/google-chrome-stable --no-sandbox --remote-debugging-port=9223 --remote-debugging-address=127.0.0.1 --user-data-dir=/home/user/.config/google-chrome-debug --no-first-run --no-default-browser-check %U
 StartupNotify=true
 Terminal=false
 Icon=google-chrome
