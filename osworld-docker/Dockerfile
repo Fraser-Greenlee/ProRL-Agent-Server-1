@@ -323,13 +323,14 @@ RUN mkdir -p /etc/opt/chrome/policies/managed \
 EOF
 
 # Create Chrome desktop entry with debugging
+# Chrome listens on internal port 9223, socat forwards from 0.0.0.0:9222
 RUN cat > /usr/share/applications/google-chrome.desktop << 'EOF'
 [Desktop Entry]
 Version=1.0
 Name=Google Chrome
 GenericName=Web Browser
 Comment=Access the Internet
-Exec=/usr/bin/google-chrome-stable --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 %U
+Exec=/usr/bin/google-chrome-stable --remote-debugging-port=9223 --user-data-dir=/home/user/.config/google-chrome-debug --no-first-run --no-default-browser-check %U
 StartupNotify=true
 Terminal=false
 Icon=google-chrome
@@ -338,6 +339,9 @@ Categories=Network;WebBrowser;
 MimeType=application/pdf;application/rdf+xml;application/rss+xml;application/xhtml+xml;application/xhtml_xml;application/xml;image/gif;image/jpeg;image/png;image/webp;text/html;text/xml;x-scheme-handler/http;x-scheme-handler/https;
 Actions=new-window;new-private-window;
 EOF
+
+# Create Chrome debug data directory
+RUN mkdir -p /home/${USER_NAME}/.config/google-chrome-debug
 
 # ============================================
 # STAGE 17: Configure VLC
@@ -487,6 +491,11 @@ sleep 1
 # Start noVNC
 echo "Starting noVNC..."
 su - user -c "websockify --web=/usr/share/novnc 5910 localhost:5900 &"
+sleep 1
+
+# Start socat to forward Chrome debug port from localhost to all interfaces
+echo "Starting Chrome debug port forwarder..."
+socat TCP-LISTEN:9222,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9223 &
 sleep 1
 
 # Start OSWorld server
