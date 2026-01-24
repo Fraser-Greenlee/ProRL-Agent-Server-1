@@ -1,10 +1,16 @@
 # OSWorld Linux Docker Environment
 
-This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with GNOME desktop) for benchmark tasks. It includes all required applications and configurations as specified in the OSWorld setup documentation.
+This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with Unity desktop) for benchmark tasks. It includes all required applications and configurations as specified in the OSWorld setup documentation.
+
+## Screenshot
+
+![Ubuntu Unity Desktop](screenshot_unity_desktop.png)
+
+*Ubuntu 22.04 with Unity desktop environment - matching the OSWorld QEMU VM appearance*
 
 ## Features
 
-- **Base OS**: Ubuntu 22.04 LTS with GNOME desktop environment
+- **Base OS**: Ubuntu 22.04 LTS with Unity desktop environment
 - **Display**: 1920x1080 resolution via Xvfb (headless)
 - **VNC Access**: x11vnc + noVNC for remote desktop access
 - **OSWorld Server**: Flask-based API server for automation
@@ -138,6 +144,11 @@ docker exec osworld-linux /usr/local/bin/verify-apps.sh
 
 ## Configuration Details
 
+### Unity Desktop
+- Unity launcher with pre-configured application shortcuts
+- Compiz window manager with Unity shell plugin
+- Ubuntu Jammy Jellyfish wallpaper
+
 ### Chrome Configuration
 - Remote debugging enabled on port 9222
 - Password manager disabled
@@ -165,7 +176,8 @@ This Docker image provides a similar environment to the QEMU-based OSWorld but w
 
 | Feature | Docker | QEMU |
 |---------|--------|------|
-| Startup time | Fast (~10s) | Slower (~60s) |
+| Desktop Environment | Unity | Unity |
+| Startup time | Fast (~40s) | Slower (~60s) |
 | Resource usage | Lower | Higher |
 | Nested virtualization | Not required | Required (KVM) |
 | Snapshot support | Via Docker commits | Native QEMU snapshots |
@@ -183,6 +195,12 @@ docker exec osworld-linux pgrep x11vnc
 
 # Restart services
 docker exec osworld-linux /usr/local/bin/entrypoint.sh
+```
+
+### Unity launcher not showing
+```bash
+# Restart compiz to reload Unity shell
+docker exec -u user osworld-linux bash -c "export DISPLAY=:0 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && pkill compiz; sleep 2; compiz --replace ccp &"
 ```
 
 ### OSWorld server not responding
