@@ -819,7 +819,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
 
         elif action_type == "WAIT":
             seconds = parameters.get('seconds', 1)
-            return f"time.sleep({seconds}); time.sleep(0.5)"
+            return f"time.sleep({seconds}); time.sleep(1)"
 
         else:
             return None

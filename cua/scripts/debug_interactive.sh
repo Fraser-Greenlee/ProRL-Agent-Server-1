@@ -1,30 +1,36 @@
 #!/bin/bash
 
-# --- Configuration ---
-JOB_NAME="kvm_interactive"
-ACCOUNT="nvr_lpr_agentic"
-PARTITION="cpu_interactive"
-RESERVATION="sla_res_osworld_agent_vlm_cpu_only"
-TIME_LIMIT="04:00:00"
-IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
-
 # --- 1. Submit the "Holder" Job ---
 echo "[Local] Submitting background job to reserve node..."
 
-# We use sbatch with --parsable to get the Job ID cleanly.
-# We mount /dev/kvm here so it exists inside the container.
+# for CPU reservation
+IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
 JOB_ID=$(sbatch --parsable \
-    --job-name="$JOB_NAME" \
-    --account="$ACCOUNT" \
-    --partition="$PARTITION" \
-    --reservation="$RESERVATION" \
+    --job-name=kvm_interactive \
+    --account=nvr_lpr_agentic \
+    --partition=cpu_interactive \
+    --reservation=sla_res_osworld_agent_vlm_cpu_only \
     --nodes=1 \
     --ntasks-per-node=1 \
-    --time="$TIME_LIMIT" \
+    --time=04:00:00 \
     --exclusive \
     --output=/dev/null \
     --error=/dev/null \
     --wrap="srun --container-image=$IMAGE --container-mounts=/lustre:/lustre sleep infinity")
+
+# for GPU reservation
+#IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_vllm.sqsh"
+#JOB_ID=$(sbatch --parsable \
+#    --job-name=kvm_interactive \
+#    --account=llmservice_fm_vision \
+#    --partition=interactive \
+#    --gpus-per-node=8 \
+#    --reservation=sla_res_osworld_agent_vlm \
+#    --time=04:00:00 \
+#    --exclusive \
+#    --output=/dev/null \
+#    --error=/dev/null \
+#    --wrap="srun --container-image=$IMAGE --container-mounts=/lustre:/lustre sleep infinity")
 
 if [ -z "$JOB_ID" ]; then
     echo "Error: Job submission failed."

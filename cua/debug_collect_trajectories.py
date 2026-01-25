@@ -7,7 +7,7 @@ from modules.debug_data_collector import DataCollector
 
 
 # Create a child logger
-openhands_logger.setLevel(logging.WARNING)
+openhands_logger.setLevel(logging.WARNING)  # todo logging.WARNING
 logger = openhands_logger.getChild('collect_trajectories')
 logger.setLevel(logging.DEBUG)
 
@@ -46,10 +46,10 @@ def parse_args():
     parser.add_argument("--max_steps_per_trajectory", type=int, default=20)
 
     # OpenAIWrapper
-    parser.add_argument("--explorer_node", type=str)
     parser.add_argument("--model_name", type=str)
-    parser.add_argument("--min_pixels", type=int, default=-1)
-    parser.add_argument("--max_pixels", type=int, default=-1)
+    parser.add_argument("--min_pixels", type=int, default=4 * 28 * 28)
+    parser.add_argument("--max_pixels", type=int, default=-5120 * 28 * 28)
+    parser.add_argument("--max_retry_for_goal_generation", type=int, default=1)
     parser.add_argument("--max_retry_for_action_generation", type=int, default=3)
 
 
@@ -69,10 +69,13 @@ if __name__ == "__main__":
 
 
 # How to run (interactive session)
-# 1. Run cpu node with /dev/kvm write access
-# cd ~/lustre/cua/prorl-agent-server/cua/scripts; bash debug_interactive.sh
-# 2. Run gpu node for parser server
-# 3. Run
+# 1. Run parser server (+ vLLM server)
+#   cd ~/lustre/cua/prorl-agent-server/cua/scripts; sbatch run_models.sbatch
+# 2. Check the parser server / vLLM server log to fetch node names
+# 3. Boot kvm-writable CPU node
+#   cd ~/lustre/cua/prorl-agent-server/cua/scripts; bash debug_interactive.sh
+# 4. Run data collection script with
+#   python debug_collect_trajectories.py --parser_node=pool0-02237 --explorer_node=pool0-03094
 
 
 

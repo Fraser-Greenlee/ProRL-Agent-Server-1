@@ -5,6 +5,7 @@ from typing import Any, Dict, Tuple
 
 import ipdb
 
+from cua.modules.util import save_image
 from examples.setup import SetupController
 from openhands.core.config import OpenHandsConfig
 from openhands.events import EventStream
@@ -108,7 +109,7 @@ class EnvController:
         return width, height
 
     @staticmethod
-    def get_and_save_screenshot(runtime: OSWorldSingularityRuntime, screenshot_path: Path = None) -> bytes:
+    def get_screenshot(runtime: OSWorldSingularityRuntime) -> bytes:
         """
         Returns the current screenshot from the runtime, in base64 format.
         If screenshot_path is set, save the screenshot as png.
@@ -117,11 +118,6 @@ class EnvController:
         if not screenshot:
             logger.debug("✗ Failed to get screenshot from runtime.")
             raise RuntimeError("Failed to get screenshot from runtime.")
-
-        if screenshot_path:
-            with open(screenshot_path, 'wb') as f:
-                f.write(screenshot)
-            logger.debug(f"✓ Screenshot saved to {str(screenshot_path)} | Size: {len(screenshot)} bytes")
 
         return screenshot
 

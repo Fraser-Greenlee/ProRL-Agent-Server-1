@@ -13,6 +13,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Union, Optional
 from typing import Dict, List
 from urllib.parse import urlparse, urlunparse, ParseResult
@@ -46,7 +47,7 @@ def compare_urls(url1, url2, full=True):
     """
     if url1 is None or url2 is None:
         return url1 == url2
-    
+
     logger.info(f"compare_urls. url1: {url1}; url2: {url2}")
 
     def parse_with_default_scheme(url):
@@ -66,7 +67,7 @@ def compare_urls(url1, url2, full=True):
 
         # Extract the domain parts using tldextract
         extracted = tldextract.extract(parsed_url.netloc.lower())
-        
+
         # Drop 'www' if it's the only subdomain
         subdomain = extracted.subdomain
         if subdomain == 'www':
@@ -117,7 +118,7 @@ class SetupController:
 
     def reset_cache_dir(self, cache_dir: str):
         self.cache_dir = cache_dir
-    
+
     async def setup(self, config: List[Dict[str, Any]])-> bool:
         """
         Args:
@@ -129,12 +130,12 @@ class SetupController:
                     "parameters": dict like {str, Any} providing the keyword
                       parameters
                 }
-        """  
+        """
         # Runtime is required for setup
         if not self.runtime:
             logger.error("Runtime is required for SetupController. Please provide a runtime object.")
             return False
-        
+
         # Make sure connection can be established
         logger.info(f"Checking runtime connection...")
         retry = 0
@@ -153,11 +154,11 @@ class SetupController:
             time.sleep(5)
             retry += 1
             logger.info(f"retry: {retry}/{MAX_RETRIES}")
-            
+
             if retry == MAX_RETRIES:
                 logger.error("Failed to establish runtime connection after maximum retries")
                 return False
-                
+
 
         for i, cfg in enumerate(config):
             config_type: str = cfg["type"]
@@ -167,27 +168,27 @@ class SetupController:
             # protocol
             setup_function: str = "_{:}_setup".format(config_type)
             assert hasattr(self, setup_function), f'Setup controller cannot find init function {setup_function}'
-            
+
             try:
                 logger.info(f"Executing setup step {i+1}/{len(config)}: {setup_function}")
                 logger.debug(f"Setup parameters: {parameters}")
-                
+
                 # Get the setup function
                 func = getattr(self, setup_function)
-                
+
                 # Check if it's a coroutine function and await if necessary
                 if inspect.iscoroutinefunction(func):
                     await func(**parameters)
                 else:
                     func(**parameters)
-                    
+
                 logger.info(f"SETUP COMPLETED: {setup_function}({str(parameters)})")
             except Exception as e:
                 logger.error(f"SETUP FAILED at step {i+1}/{len(config)}: {setup_function}({str(parameters)})")
                 logger.error(f"Error details: {e}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 raise Exception(f"Setup step {i+1} failed: {setup_function} - {e}") from e
-        
+
         return True
 
     def _download_setup(self, files: List[Dict[str, str]]):
@@ -201,7 +202,7 @@ class SetupController:
         """
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         for f in files:
             url: str = f["url"]
             path: str = f["path"]
@@ -212,6 +213,8 @@ class SetupController:
                 raise Exception(f"Setup Download - Invalid URL ({url}) or path ({path}).")
 
             if not os.path.exists(cache_path):
+                os.makedirs(Path(cache_path).parent, exist_ok=True)  # sometimes /tmp/osworld_example does not exist
+
                 logger.info(f"Cache file not found, downloading from {url} to {cache_path}")
                 max_retries = 3
                 downloaded = False
@@ -221,7 +224,7 @@ class SetupController:
                         logger.info(f"Download attempt {i+1}/{max_retries} for {url}")
                         response = requests.get(url, stream=True, timeout=300)  # Add 5 minute timeout
                         response.raise_for_status()
-                        
+
                         # Get file size if available
                         total_size = int(response.headers.get('content-length', 0))
                         if total_size > 0:
@@ -236,7 +239,7 @@ class SetupController:
                                     if total_size > 0 and downloaded_size % (1024*1024) == 0:  # Log every MB
                                         progress = (downloaded_size / total_size) * 100
                                         logger.info(f"Download progress: {progress:.1f}%")
-                        
+
                         logger.info(f"File downloaded successfully to {cache_path} ({downloaded_size / (1024*1024):.2f} MB)")
                         downloaded = True
                         break
@@ -250,7 +253,7 @@ class SetupController:
                 if not downloaded:
                     raise requests.RequestException(f"Failed to download {url}. No retries left.")
 
-            
+
             self._upload_file_setup([{
                 "local_path": cache_path,
                 "path": path
@@ -267,7 +270,7 @@ class SetupController:
         """
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         for f in files:
             local_path: str = f["local_path"]
             path: str = f["path"]
@@ -333,7 +336,7 @@ class SetupController:
     def _change_wallpaper_setup(self, path: str):
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         if not path:
             raise Exception(f"Setup Wallpaper - Invalid path ({path}).")
 
@@ -359,7 +362,7 @@ class SetupController:
     def _open_setup(self, path: str):
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         if not path:
             raise Exception(f"Setup Open - Invalid path ({path}).")
 
@@ -499,11 +502,11 @@ class SetupController:
             return False
 
         return True
-    
+
     def _launch_setup(self, command: Union[str, List[str]], shell: bool = False):
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         if not command:
             raise Exception("Empty command to launch.")
 
@@ -532,7 +535,7 @@ class SetupController:
             ensure_launch_retries += 1
             if ensure_launch_retries >= 10:
                 raise Exception("Failed to ensure launch command finish after multiple retries")
-            
+
         # Sleep additional time to ensure window is launched
         if isinstance(command, list):
             command = ' '.join(command)
@@ -586,7 +589,7 @@ class SetupController:
         # Runtime is required
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         # Execute using runtime
         while not terminates:
             try:
@@ -633,7 +636,7 @@ class SetupController:
             shell: bool = False
     ):
         """Execute command with verification of results
-        
+
         Args:
             command: Command to execute
             verification: Dict with verification criteria:
@@ -645,14 +648,14 @@ class SetupController:
         """
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         if not command:
             raise Exception("Empty command to launch.")
 
         verification = verification or {}
-        
+
         payload = json.dumps({
-            "command": command, 
+            "command": command,
             "shell": shell,
             "verification": verification,
             "max_wait_time": max_wait_time,
@@ -662,7 +665,7 @@ class SetupController:
 
         # Note: This uses a custom /setup endpoint, not a standard OSWorld method
         try:
-            response = requests.post(self.http_server + "/setup" + "/execute_with_verification", 
+            response = requests.post(self.http_server + "/setup" + "/execute_with_verification",
                                    headers=headers, data=payload, timeout=max_wait_time + 10)
             if response.status_code == 200:
                 result = response.json()
@@ -701,7 +704,7 @@ class SetupController:
     def _activate_window_setup(self, window_name: str, strict: bool = False, by_class: bool = False):
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         if not window_name:
             raise Exception(f"Setup Open - Invalid path ({window_name}).")
 
@@ -725,7 +728,7 @@ class SetupController:
     def _close_window_setup(self, window_name: str, strict: bool = False, by_class: bool = False):
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         if not window_name:
             raise Exception(f"Setup Open - Invalid path ({window_name}).")
 
@@ -749,7 +752,7 @@ class SetupController:
     async def _chrome_open_tabs_setup(self, urls_to_open: List[str]):
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         host = self.vm_ip
         port = self.chromium_port  # fixme: this port is hard-coded, need to be changed from config file
 
@@ -801,7 +804,7 @@ class SetupController:
     async def _chrome_close_tabs_setup(self, urls_to_close: List[str]):
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         time.sleep(5)  # Wait for Chrome to finish launching
 
         host = self.vm_ip
@@ -863,7 +866,7 @@ class SetupController:
         """
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         settings_file = config.get('settings_file', 'evaluation_examples/settings/googledrive/settings.yml')
         gauth = GoogleAuth(settings_file=settings_file)
         drive = GoogleDrive(gauth)
@@ -940,7 +943,7 @@ class SetupController:
         """
         if not self.runtime:
             raise Exception("Runtime is required for SetupController. Please provide a runtime object.")
-        
+
         host = self.vm_ip
         port = self.chromium_port
 

@@ -10,13 +10,13 @@ from typing import Optional, Dict, Any
 
 import ipdb
 
-from cua.modules.module_openai_wrapper import OpenAIWrapper
+from cua.modules.module_openai_controller import OpenAIController
+from cua.modules.module_parser_controller import ParserController
 from openhands.core.logger import openhands_logger
 from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWorldSingularityRuntime
 
 from cua.modules.debug_env_controller import EnvController
-from cua.modules.util import load_persona_dataset, load_osworld_setup_list
-
+from cua.modules.util import load_persona_dataset, load_osworld_setup_list, save_image, bytes_to_image
 
 # Create a child logger
 logger = openhands_logger.getChild('data_controller')
@@ -44,7 +44,8 @@ class DataCollector:
     Excluded asyncio / threading for debugging purposes.
     """
     def __init__(self, args: Namespace):
-        self.openai_wrapper = OpenAIWrapper(args)
+        self.openai_controller = OpenAIController(args)
+        self.parser_controller = ParserController(args)
 
         self.vm_image_path = args.vm_image_path
         self.os_type = 'linux' if 'Ubuntu' in self.vm_image_path else 'windows'
@@ -84,23 +85,29 @@ class DataCollector:
 
         # Randomly select a dataframe (weighted by number of records)
         selected_df = random.choices(self.persona_dfs, weights=self.persona_df_weights, k=1)[0]
+        age = 1
 
-        # Sample random persona from the selected dataframe
-        persona_record = selected_df.sample(n=1).iloc[0].to_dict()
+        persona_info = None
 
-        # Extract key fields for goal generation
-        persona_info = {
-            'professional': persona_record.get('professional_persona', ''),
-            'hobbies': persona_record.get('hobbies_and_interests', ''),
-            'occupation': persona_record.get('occupation', ''),
-            'age': persona_record.get('age', ''),
-            'education': persona_record.get('education_level', ''),
-            'city': persona_record.get('city', ''),
-            'state': persona_record.get('state', ''),
-            'skills': persona_record.get('skills_and_expertise', ''),
-            'interests_list': eval(persona_record.get('hobbies_and_interests_list', '')),  # should be a list
-            'career_goals': persona_record.get('career_goals_and_ambitions', ''),
-        }
+        while age < 18:
+            # Sample random persona from the selected dataframe
+            persona_record = selected_df.sample(n=1).iloc[0].to_dict()
+
+            # Extract key fields for goal generation
+            persona_info = {
+                'professional': persona_record.get('professional_persona', ''),
+                'hobbies': persona_record.get('hobbies_and_interests', ''),
+                'occupation': persona_record.get('occupation', ''),
+                'age': persona_record.get('age', ''),
+                'education': persona_record.get('education_level', ''),
+                'city': persona_record.get('city', ''),
+                'state': persona_record.get('state', ''),
+                'skills': persona_record.get('skills_and_expertise', ''),
+                'interests_list': eval(persona_record.get('hobbies_and_interests_list', '')),  # should be a list
+                'career_goals': persona_record.get('career_goals_and_ambitions', ''),
+            }
+
+            age = persona_record['age']
 
         return persona_info
 
@@ -138,22 +145,32 @@ class DataCollector:
             'trajectory_id': trajectory_id,
             'metadata': {
                 'vm_image': self.vm_image_path,
-                'agent_model': self.explorer_model_name,
-                'parser_model': self.parser_model_name,
+                'explorer_model': self.explorer_model_name,
                 'screen_size': f"{self.screen_width}x{self.screen_height}",
                 'persona': persona
             },
             'steps': [],
         }
 
+        goals, intents = [], []
         for step_idx in range(self.max_steps_per_trajectory):
             # get screenshot and save it
-            image_path = trajectory_save_dir / f"{step_idx}.png"
-            screenshot_bytes = EnvController.get_and_save_screenshot(job_details.runtime, image_path)
+            screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
+            save_image(screenshot_bytes, trajectory_save_dir / f"{step_idx}.png", logger)
 
-            # todo use parser to parse the screenshot
+            parsed_screenshot_bytes = self.parser_controller.parse_screenshot(screenshot_bytes)
+            # todo remove this when not debugging
+            save_image(parsed_screenshot_bytes, trajectory_save_dir / f"{step_idx}-parsed.png", logger)
 
+            # todo generate goal
+            intent, goal = self.openai_controller.generate_goal_with_persona(parsed_screenshot_bytes, persona,
+                                                                             goals, intents)
+
+            actions_for_this_goal, thoughts_for_this_goal = [], []
             # todo utilize screenshot to generate actions
+            thought, action_dict = self.openai_controller.generate_action(parsed_screenshot_bytes, goal,
+                                                                          actions_for_this_goal, thoughts_for_this_goal)
+
             ipdb.set_trace()
             pass
 
