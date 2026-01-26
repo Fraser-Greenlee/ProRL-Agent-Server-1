@@ -43,7 +43,8 @@ def parse_args():
         "--osworld_setup_path", type=str,
         default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json"
     )
-    parser.add_argument("--max_steps_per_trajectory", type=int, default=20)
+    parser.add_argument("--max_steps_per_trajectory", type=int, default=100)
+    parser.add_argument("--max_steps_per_goal", type=int, default=5)
 
     # OpenAIWrapper
     parser.add_argument("--model_name", type=str)
@@ -64,6 +65,12 @@ async def main(args):
 
 
 if __name__ == "__main__":
+    # for debugging purposes, re-create "./trajectories" folder
+    import os, shutil
+    trajectory_dir = "./trajectories"
+    shutil.rmtree(trajectory_dir)
+    os.makedirs(trajectory_dir)
+
     args = parse_args()
     asyncio.run(main(args))
 

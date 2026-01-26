@@ -8,8 +8,10 @@ from PIL import Image
 
 from openai import OpenAI, OpenAIError
 
+from cua.modules.module_parser_controller import ParserController
 from cua.modules.util import build_messages, bytes_to_image
 from openhands.core.logger import openhands_logger
+from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWorldSingularityRuntime
 
 # Create a child logger
 logger = openhands_logger.getChild('openai_wrapper')
@@ -60,11 +62,11 @@ class OpenAIController:
 
         return responses, reasons
 
-    def generate_goal_with_persona(self, screenshot: bytes, persona: Dict, previous_goals: List[str],
-                                   previous_intents: List[str]) -> Tuple[str, str]:
+    def generate_goal_with_persona(self, screenshot: bytes, persona: Dict, previous_intents: List[str],
+                                   previous_goals: List[str],) -> Tuple[str, str]:
         # todo similar to SyntheticDataGenerator.generate_goal, generate high-level sub-goal to pick random actions
         messages = self.prepare_generate_goal_messages(
-            screenshot, persona, previous_goals, previous_intents,
+            screenshot, persona, previous_intents, previous_goals,
         )
 
         intent, goal, num_generation = None, None, 0
@@ -85,29 +87,29 @@ class OpenAIController:
 
         return intent, goal
 
-    def generate_action(self, screenshot: bytes, goal: str, previous_actions: List[str],
-                        previous_thoughts: List[str]) -> Tuple[str, Dict]:
-        messages = self.prepare_generate_action_messages(
-            screenshot, goal, previous_actions, previous_thoughts
+    def generate_cursor_moving_action(self, screenshot_with_cursor: bytes, goal: str, current_cursor_x: int,
+                                      current_cursor_y: int, screenshot_len_x: int, screenshot_len_y: int) -> Tuple[int, int]:
+        cursor_moving_messages = self.prepare_cursor_moving_messages(
+            screenshot_with_cursor, goal, current_cursor_x, current_cursor_y, screenshot_len_x, screenshot_len_y,
         )
+        responses, reasons = self.prompt_vlm_with_reason(
+            cursor_moving_messages, n=1, temperature=0.7, max_tokens=8192,
+        )
+        response, reason = responses[0], reasons[0]
 
-        thought, action_dict, num_generation = None, None, 0
-        while num_generation < self.max_retry_for_action_generation:
-            responses, reasons = self.prompt_vlm_with_reason(
-                messages, n=1, temperature=0.7, max_tokens=8192,
-            )
-            response, reason = responses[0], reasons[0]
+        # parse cursor x, cursor y
+        generation = response.split("</think>")[-1]
+        pattern = r"x\s*:\s*(-?\d+)\s+y\s*:\s*(-?\d+)"
+        match = re.search(pattern, generation, re.IGNORECASE)
 
-            thought, action_dict = self.parse_thought_and_action_dict(response)
-            if reason == "stop" and thought is not None and action_dict is not None:
-                break
+        if match:
+            move_x, move_y = int(match.group(1)), int(match.group(2))
+        else:
+            move_x, move_y = -1, -1
 
-            num_generation += 1
+        print(generation)
 
-        if num_generation == self.max_retry_for_goal_generation:
-            raise OpenAIError("Goal Generation was not successful.")
-
-        return thought, action_dict
+        return move_x, move_y
 
     @staticmethod
     def parse_intent_and_goal(generation: str) -> Tuple:
@@ -126,107 +128,12 @@ class OpenAIController:
         return intent.strip(), goal.strip()
 
     @staticmethod
-    def parse_thought_and_action_dict(generation: str) -> Tuple:
-        # 1. Extract Thought
-        thought_match = re.search(r'Thought:(.*?)(?=Action:|$)', generation, re.DOTALL | re.IGNORECASE)
-        thought = thought_match.group(1).strip() if thought_match else "No reasoning provided."
-
-        # 2. Extract JSON Action
-        # This regex looks for the JSON structure starting after "Action:"
-        json_match = re.search(r'Action:\s*(\{.*\})', generation, re.DOTALL | re.IGNORECASE)
-
-        if json_match:
-            json_str = json_match.group(1).strip()
-            try:
-                action_dict = json.loads(json_str)
-                OpenAIController.validate_action(action_dict)
-            except json.JSONDecodeError as e:
-                logger.debug(f"Error in json decoding: {e}")
-                thought, action_dict = None, None
-            except ValueError as e:
-                logger.debug(f"Error in parse_thought_and_action_dict: {e}")
-                thought, action_dict = None, None
+    def prepare_generate_goal_messages(screenshot: bytes | Image.Image, persona: Dict, prev_intents: List[str],
+                                       prev_goals: List[str]) -> List:
+        if prev_goals:
+            history_str = "\n".join([f"- Intent: {i} | Goal: {g}" for i, g in zip(prev_intents, prev_goals)])
         else:
-            thought, action_dict = None, None
-
-        return thought, action_dict
-
-    @staticmethod
-    def validate_action(action_dict: dict):
-        """
-        Validates that the action_dict adheres to the action schema.
-        """
-
-        # 1. Check basic structure
-        if not isinstance(action_dict, dict):
-            raise ValueError("Action must be a JSON object (dictionary).")
-
-        if "action" not in action_dict:
-            raise ValueError("Missing required key: 'action'.")
-
-        action_type = action_dict["action"]
-        valid_actions = {
-            "click", "double_click", "right_click",
-            "scroll", "type", "hotkey", "wait", "done"
-        }
-
-        if action_type not in valid_actions:
-            raise ValueError(f"Unknown action type: '{action_type}'. Must be one of {valid_actions}")
-
-        # Ensure parameters dict exists (default to empty if missing for wait/done)
-        parameters = action_dict.get("parameters", {})
-        if not isinstance(parameters, dict):
-            raise ValueError("'parameters' must be a dictionary.")
-
-        # 2. Validate specifics based on action type
-
-        # --- Case A: Pointing Actions (Click variants) ---
-        if action_type in ["click", "double_click", "right_click"]:
-            if "object_idx" not in parameters:
-                raise ValueError(f"Action '{action_type}' requires parameter 'object_idx'.")
-
-            if not isinstance(parameters["object_idx"], int):
-                raise ValueError(f"'{action_type}' parameter 'object_idx' must be an integer.")
-
-        # --- Case B: Scroll ---
-        elif action_type == "scroll":
-            required_keys = ["object_idx", "amount_to_scroll"]
-            for key in required_keys:
-                if key not in parameters:
-                    raise ValueError(f"Action 'scroll' requires parameter '{key}'.")
-                if not isinstance(parameters[key], int):
-                    raise ValueError(f"'scroll' parameter '{key}' must be an integer.")
-
-        # --- Case C: Keyboard Actions (Type / Hotkey) ---
-        elif action_type in ["type", "hotkey"]:
-            if "type_list" not in parameters:
-                raise ValueError(f"Action '{action_type}' requires parameter 'type_list'.")
-
-            type_list = parameters["type_list"]
-
-            # Check if it is a list
-            if not isinstance(type_list, list):
-                raise ValueError(f"'{action_type}' parameter 'type_list' must be a list.")
-
-            # Check if all items in list are strings
-            if not all(isinstance(item, str) for item in type_list):
-                raise ValueError(f"'{action_type}' parameter 'type_list' must contain only strings.")
-
-        # --- Case D: Wait / Done ---
-        elif action_type in ["wait", "done"]:
-            # These actions require no parameters, so we can ignore extra keys or ensure it's empty.
-            # Strict version: ensure no parameters are passed?
-            # Usually it's safer to just ignore extra parameters.
-            pass
-
-    @staticmethod
-    def prepare_generate_goal_messages(screenshot: bytes | Image.Image, persona: Dict, previous_goals: List[str],
-                                       previous_intents: List[str]) -> List:
-        if previous_goals:
             history_str = "None (Session Start)"
-        else:
-            # Format previous goals for better readability in the prompt
-            history_str = "\n".join([f"- Intent: {i} | Goal: {g}" for i, g in zip(previous_intents, previous_goals)])
 
         # Format persona details
         persona_str = "\n".join(f"- {key.capitalize()}: {value}" for key, value in persona.items())
@@ -265,11 +172,7 @@ class OpenAIController:
             f"make sure to not to conflate the words describing each action. Particularly, you need to be careful not "
             f"to conflate click, double-click, right-click. For example, it's better to say `double-click` a file on a "
             f"desktop to open it, rather than just `click` it (because clicking it wouldn't open a file on a "
-            f"desktop).\n"
-            f"8. **Element Consideration**: In the screenshot, you will see many bounding boxes that denote "
-            f"interactive elements. Make sure that your action starts off one of those elements with bounding boxes, "
-            f"not those without bounding boxes. For example, if the image shows a button without a bounding box "
-            f"surrounding it, you should not set your goal to involve an immediate action with that button.\n\n"
+            f"desktop).\n\n"
 
             f"Your final response should be formatted as follows:\n"
             f"Intent: [A brief sentence - What is the long-term plan and what step are we on?]\n"
@@ -292,86 +195,103 @@ class OpenAIController:
         return messages
 
     @staticmethod
-    def prepare_generate_action_messages(screenshot: bytes | Image.Image, goal: str, previous_actions: List[str],
-                                         previous_thoughts: List[str]) -> List:
-        # 1. Format History (Pairing Intents with Actions)
-        if previous_actions:
-            zipped_history = list(zip(previous_thoughts, previous_actions))[-10:]  # take recent 10
-            history_lines = []
-            for thought, action in zipped_history:
-                history_lines.append(f"- Thought: {thought} | Action: {action}")
-            history_str = "\n".join(history_lines)
-        else:
-            history_str = "None (Start of action sequence for the current goal)"
+    def prepare_cursor_moving_messages(screenshot: bytes | Image.Image, goal: str,
+                                       current_cursor_x: int, current_cursor_y: int,
+                                       screenshot_len_x: int, screenshot_len_y: int) -> List:
+        # instruction_prompt = (
+        #     f"You are an AI agent controlling a mouse cursor. Your task is to calculate the precise relative movement "
+        #     f"needed to move the cursor tip from its current position to the target UI element required by the goal.\n\n"
+        #
+        #     f"### CONTEXT\n"
+        #     f"1. **Screen Resolution**: {screenshot_len_x} pixels wide (x), {screenshot_len_y} pixels tall (y).\n"
+        #     f"2. **Coordinate System**: (0, 0) is the top-left corner. X increases to the right, Y increases downwards.\n"
+        #     f"3. **Current Cursor Position**: (x={current_cursor_x}, y={current_cursor_y}), the position is surrounded by "
+        #     f"a bounding box in the image to help its location.\n"
+        #     f"4. **Current Goal**: \"{goal}\"\n\n"
+        #
+        #     f"### INSTRUCTIONS\n"
+        #     f"1. **Identify Target**: Locate the center of the UI element that you have to interact with in the current "
+        #     f"screenshot, to achieve the given goal.\n"
+        #     f"2. **Estimate Coordinates**: Estimate the absolute (x, y) pixel coordinates of that target's center.\n"
+        #     f"3. **Calculate Delta**: Calculate the relative distance to move.\n"
+        #     f"   - Move X = Target X - Current Cursor X\n"
+        #     f"   - Move Y = Target Y - Current Cursor Y\n"
+        #     f"   - Example: If cursor is at 100 and target is at 150, Move X is 50. If target is at 50, Move X is -50.\n"
+        #     f"4. If you do not need to move the cursor to achieve the goal (e.g., you want to type on an element and "
+        #     f"the element is already on focus, or the cursor is already on the button you want to press), just output "
+        #     f"x: 0, y: 0.\n"
+        #     f"5 You do not have to locate the cursor on the exact center point; If the cursor is in the "
+        #     f"enough position to interact with the target element, output x: 0, y: 0.\n"
+        #     f"6. **Output Format**: Return the result as a JSON object.\n\n"
+        #
+        #     f"### EXAMPLES\n"
+        #     f"**Example 1**\n"
+        #     f"Goal: 'Click the Start Menu icon (bottom left)'\n"
+        #     f"Current Cursor: (1000, 500)\n"
+        #     f"Thought: The Start icon is at roughly (20, 1060). \n"
+        #     f"   Move X: 20 - 1000 = -980\n"
+        #     f"   Move Y: 1060 - 500 = 560\n"
+        #     f"Your response: x: -980, y: 560\n\n"
+        #
+        #     f"**Example 2**\n"
+        #     f"Goal: 'Close the window (X icon top right)'\n"
+        #     f"Current Cursor: (500, 500)\n"
+        #     f"Thought: The X icon is at roughly (1900, 20). \n"
+        #     f"   Move X: 1900 - 500 = 1400\n"
+        #     f"   Move Y: 20 - 500 = -480\n"
+        #     f"Your response: x: 1400, y: -480\n\n"
+        #
+        #     f"Your final response should be formatted as follows:\n"
+        #     f"x: [amount to move in x axis]\n"
+        #     f"y: [amount to move in y axis]"
+        # )
 
         instruction_prompt = (
-            f"You are an AI agent operating a computer. Your task is to generate a SINGLE JSON action object "
-            f"to move closer to the current goal.\n\n"
+            f"You are an AI agent controlling a mouse cursor. Your task is to calculate the precise relative movement "
+            f"needed to move the cursor tip from its current position to the target UI element required by the goal.\n\n"
 
-            f"### CURRENT GOAL\n"
-            f"\"{goal}\"\n\n"
-
-            f"### HISTORY (Recent thoughts and actions)\n"
-            f"{history_str}\n\n"
+            f"### CONTEXT\n"
+            f"1. **Screen Resolution**: {screenshot_len_x} pixels wide (x), {screenshot_len_y} pixels tall (y).\n"
+            f"2. **Coordinate System**: (0, 0) is the top-left corner. X increases to the right, Y increases downwards.\n"
+            f"3. **Current Cursor Position**: (x={current_cursor_x}, y={current_cursor_y}), the position is surrounded by "
+            f"a bounding box in the image to help its location.\n"
+            f"4. **Current Goal**: \"{goal}\"\n\n"
 
             f"### INSTRUCTIONS\n"
-            f"1. **Analyze the Screenshot**: Look for the specific UI elements needed for your goal. Identify the index number (object_idx) on the element.\n"
-            f"2. **Reason First**: Before generating the JSON, explicitly state your immediate intent (e.g., 'The File menu is at index 5, I need to click it').\n"
-            f"3. **Loop Detection**: Review the History. If you see repeated actions (e.g., clicking index 12 multiple times) with the same intent, "
-            f"you are stuck. Change your strategy (e.g., try scrolling, searching, or using a hotkey).\n"
-            f"4. **Output Format**: You must output two lines:\n"
-            f"   - A 'Thought' line explaining your move.\n"
-            f"   - An 'Action' line containing ONLY the valid JSON object.\n\n"
+            f"1. **Identify Target**: Locate the center of the UI element that you have to interact with in the current "
+            f"screenshot, to achieve the given goal.\n"
+            f"2. **Estimate Distance**: Estimate the pixel distance in x, y axis between the target element's center and the cursor bounding box.\n"
+            f"3. **Determine X, Y**: Based on the estimated distance, determine the movement of cursor in x, y axis. "
+            f"If the cursor is currently located left of the target, you should move the cursor to the right, thus the "
+            f"movement needed is exactly the pixel distance. If the cursor is located right of the target, you should move "
+            f"the cursor to the left, thus the movement needed is exactly pixel distance * -1."
+            f"4. If you do not need to move the cursor to achieve the goal (e.g., you want to type on an element and "
+            f"the element is already on focus, or the cursor is already on the button you want to press), just output "
+            f"x: 0, y: 0.\n"
+            f"5 You do not have to locate the cursor on the exact center point; If the cursor is in the "
+            f"enough position to interact with the target element, output x: 0, y: 0.\n"
+            f"6. **Output Format**: Return the result as a JSON object.\n\n"
 
-            f"### ACTION SPACE & EXAMPLES\n"
-            f"Choose exactly one of the following actions. object_idx is the integer index of the UI element in the "
-            f"screenshot. The index is located at the bottom-left of each bounding box.\n\n"
+            f"### EXAMPLES\n"
+            f"**Example 1**\n"
+            f"Goal: 'Click the Start Menu icon (bottom left cursor)'\n"
+            f"Current Cursor: (1000, 500)\n"
+            f"The Start icon is about 980 pixel away from the cursor in x-axis, 560 pixel away in y-axis.\n"
+            f"   Move X: The cursor is located right of the start icon, thus we multiply -1 * 980 = -980\n"
+            f"   Move Y: The cursor is located above the start icon, thus Move Y = 560"
+            f"Your response: x: -980, y: 560\n\n"
 
-            f"**1. Click / Double Click / Right Click**\n"
-            f"Use to click on an element\n"
-            f"Example:\n"
-            f"Action: {{\"action\": \"click\", \"parameters\": {{\"object_idx\": 12}}}}\n"
+            f"**Example 2**\n"
+            f"Goal: 'Close the window by clicking top-right X button'\n"
+            f"Current Cursor: (500, 500)\n"
+            f"Thought: The X icon is at roughly 1400 pixel away from the cursor in x-axis, 485 pixel away in y-axis. \n"
+            f"   Move X: The cursor is located left of the X icon, thus Move X = 1400\n"
+            f"   Move Y: The cursor is located below the X icon, thus Move Y = -1 * 485 = -485\n"
+            f"Your response: x: 1400, y: -485\n\n"
 
-            f"**2. Double Click**"
-            f"Use to double-click on an element.\n"
-            f"Example:\n"
-            f"Action: {{\"action\": \"double_click\", \"parameters\": {{\"object_idx\": 0}}}}\n"
-
-            f"**3. Right Click**\n"
-            f"Use to right-click on top of an element.\n"
-            f"Example:\n"
-            f"Action: {{\"action\": \"right_click\", \"parameters\": {{\"object_idx\": 50}}}}\n\n"
-
-            f"**2. Scroll**\n"
-            f"Use if the target is off-screen. 'object_idx' is the region to scroll. 'amount_to_scroll' "
-            f"is positive (down) or negative (up).\n"
-            f"Example:\n"
-            f"Action: {{\"action\": \"scroll\", \"parameters\": {{\"object_idx\": 3, \"amount_to_scroll\": 2}}}}\n\n"
-
-            f"**3. Type**\n"
-            f"Use for entering text. 'type_list' is a list of characters or special keys.\n"
-            f"Example:\n"
-            f"Action: {{\"action\": \"type\", \"parameters\": {{\"type_list\": [\"hello\", \"enter\"]}}}}\n\n"
-
-            f"**4. Hotkey**\n"
-            f"Use for keyboard shortcuts.\n"
-            f"Example:\n"
-            f"Action: {{\"action\": \"hotkey\", \"parameters\": {{\"type_list\": [\"ctrl\", \"c\"]}}}}\n\n"
-
-            f"**5. Wait**\n"
-            f"Use if the screen is loading or processing.\n"
-            f"Example:\n"
-            f"Action: {{\"action\": \"wait\"}}\n\n"
-
-            f"**6. Done**\n"
-            f"Use ONLY when the specific goal described above is fully completed.\n"
-            f"Example:\n"
-            f"Action: {{\"action\": \"done\"}}\n\n"
-
-            f"### YOUR RESPONSE\n"
             f"Your final response should be formatted as follows:\n"
-            f"Thought: [A brief sentence explaining your action choice]\n"
-            f"Action: [JSON object]"
+            f"x: [amount to move in x axis]\n"
+            f"y: [amount to move in y axis]"
         )
 
         if isinstance(screenshot, bytes):

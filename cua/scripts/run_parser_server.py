@@ -53,7 +53,7 @@ class RFDETRDeployment:
         images = [Image.open(io.BytesIO(b)).convert("RGB") for b in image_bytes_list]
 
         # 2. Run Batch Inference (GPU Bound)
-        detections_list = self.model.predict(images, threshold=0.24)
+        detections_list = self.model.predict(images, threshold=0.15)
 
         # if the request was single image, detections_list is not a list but a single Detections object
         if isinstance(detections_list, Detections):

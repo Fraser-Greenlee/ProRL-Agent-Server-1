@@ -779,8 +779,16 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         elif action_type == "TYPING":
             text = parameters.get('text', '')
             interval = parameters.get('interval', 0.01)
-            # Use repr() to properly escape the text (same as OSWorld)
-            return f"pyautogui.typewrite({repr(text)}, interval={interval}); time.sleep(0.5)"
+
+            if isinstance(text, list):
+                command = " ".join([f"pyautogui.typewrite({type_element}, interval={interval});"
+                                    for type_element in text])
+                command += " time.sleep(0.5)"
+                return command
+
+            else:
+                # Use repr() to properly escape the text (same as OSWorld)
+                return f"pyautogui.typewrite({repr(text)}, interval={interval}); time.sleep(0.5)"
 
         elif action_type == "PRESS":
             key = parameters.get('key', '')
