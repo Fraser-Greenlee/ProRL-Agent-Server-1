@@ -12,8 +12,8 @@ from typing import Optional, Dict, Any
 
 import ipdb
 
-# from cua.modules.module_openai_controller import OpenAIController
-from cua.modules.prev_openai_controller import OpenAIController
+from cua.modules.module_openai_controller import OpenAIController
+# from cua.modules.prev_openai_controller import OpenAIController
 from cua.modules.module_parser_controller import ParserController
 from openhands.core.logger import openhands_logger
 from openhands.events.action.os import OSWorldInteractiveAction
@@ -168,70 +168,70 @@ class DataCollector:
         #   "action_thought": str,
         #   ],
         # }
-        # time.sleep(3.0)
-        # screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
-        # image_filename = trajectory_save_dir / f"0-0.png"
-        # save_image(screenshot_bytes, image_filename, logger)
-        #
-        # cursor_x, cursor_y = EnvController.get_cursor_position(job_details.runtime)
-        #
-        # while sum(len(g['actions']) for g in trajectory['steps']) < self.max_steps_per_trajectory:
-        #     goal_idx = len(trajectory['steps'])
-        #     prev_goal_intents = [g['goal_intent'] for g in trajectory['steps']]
-        #     prev_goals = [g['goal'] for g in trajectory['steps']]
-        #
-        #     # generate goal
-        #     goal_intent, goal = self.openai_controller.generate_goal_with_persona(
-        #         screenshot_bytes, persona, prev_goal_intents, prev_goals
-        #     )
-        #
-        #     steps_for_this_goal = {
-        #         "goal_intent": goal_intent,
-        #         "goal": goal,
-        #         "actions": []
-        #     }
-        #     while len(steps_for_this_goal['actions']) < self.max_steps_per_goal:
-        #         # todo first perform cursor actions
-        #         num_move_generation = 0
-        #         while num_move_generation < 10:
-        #             num_move_generation += 1
-        #             logger.debug(f"num_move_generation for goal {goal_idx}, action {len(steps_for_this_goal['actions'])}: {num_move_generation}")
-        #
-        #             # generate and perform cursor-moving actions here
-        #             # draw cursor bbox on the screenshot
-        #             cursor_bbox = [cursor_x - 5, cursor_y - 5, cursor_x + 5, cursor_y + 5]
-        #             screenshot_with_cursor = ParserController.prepare_image_with_som(
-        #                 screenshot_bytes, [cursor_bbox], False
-        #             )
-        #             # todo remove this - for debugging, save screenshot
-        #             image_filename = trajectory_save_dir / f"{goal_idx}-{len(steps_for_this_goal['actions'])}-{num_move_generation}-cursor.png"
-        #             save_image(screenshot_with_cursor, image_filename, logger)
-        #
-        #             move_x, move_y = self.openai_controller.generate_cursor_moving_action(
-        #                 screenshot_with_cursor, goal, cursor_x, cursor_y, self.screen_width, self.screen_height,
-        #             )
-        #
-        #             # todo if move_x == 0 and move_y == 0, break without updating anything
-        #             if move_x == 0 and move_y == 0:
-        #                 break
-        #             else:
-        #                 # update cursor position
-        #                 job_details.runtime.execute_vm_action({
-        #                     "action_type": "MOVE_TO",
-        #                     "parameters": {"x": cursor_x + move_x, "y": cursor_y + move_y}
-        #                 })
-        #                 time.sleep(0.5)
-        #                 cursor_x, cursor_y = EnvController.get_cursor_position(job_details.runtime)
-        #
-        #                 # update screenshot
-        #                 screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
-        #
-        #             ipdb.set_trace()
-        #             pass
-        #
-        #         print(f"Movement done!")
-        #         ipdb.set_trace()
-        #         pass
+        time.sleep(3.0)
+        screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
+        image_filename = trajectory_save_dir / f"0-0.png"
+        save_image(screenshot_bytes, image_filename, logger)
+
+        cursor_x, cursor_y = EnvController.get_cursor_position(job_details.runtime)
+
+        while sum(len(g['actions']) for g in trajectory['steps']) < self.max_steps_per_trajectory:
+            goal_idx = len(trajectory['steps'])
+            prev_goal_intents = [g['goal_intent'] for g in trajectory['steps']]
+            prev_goals = [g['goal'] for g in trajectory['steps']]
+
+            # generate goal
+            goal_intent, goal = self.openai_controller.generate_goal_with_persona(
+                screenshot_bytes, persona, prev_goal_intents, prev_goals
+            )
+
+            steps_for_this_goal = {
+                "goal_intent": goal_intent,
+                "goal": goal,
+                "actions": []
+            }
+            while len(steps_for_this_goal['actions']) < self.max_steps_per_goal:
+                # todo first perform cursor actions
+                num_move_generation = 0
+                while num_move_generation < 10:
+                    num_move_generation += 1
+                    logger.debug(f"num_move_generation for goal {goal_idx}, action {len(steps_for_this_goal['actions'])}: {num_move_generation}")
+
+                    # generate and perform cursor-moving actions here
+                    # draw cursor bbox on the screenshot
+                    cursor_bbox = [cursor_x - 5, cursor_y - 5, cursor_x + 5, cursor_y + 5]
+                    screenshot_with_cursor = ParserController.prepare_image_with_som(
+                        screenshot_bytes, [cursor_bbox], False
+                    )
+                    # todo remove this - for debugging, save screenshot
+                    image_filename = trajectory_save_dir / f"{goal_idx}-{len(steps_for_this_goal['actions'])}-{num_move_generation}-cursor.png"
+                    save_image(screenshot_with_cursor, image_filename, logger)
+
+                    move_x, move_y = self.openai_controller.generate_cursor_moving_action(
+                        screenshot_with_cursor, goal, cursor_x, cursor_y, self.screen_width, self.screen_height,
+                    )
+
+                    # todo if move_x == 0 and move_y == 0, break without updating anything
+                    if move_x == 0 and move_y == 0:
+                        break
+                    else:
+                        # update cursor position
+                        job_details.runtime.execute_vm_action({
+                            "action_type": "MOVE_TO",
+                            "parameters": {"x": cursor_x + move_x, "y": cursor_y + move_y}
+                        })
+                        time.sleep(0.5)
+                        cursor_x, cursor_y = EnvController.get_cursor_position(job_details.runtime)
+
+                        # update screenshot
+                        screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
+
+                    ipdb.set_trace()
+                    pass
+
+                print(f"Movement done!")
+                ipdb.set_trace()
+                pass
 
 
 

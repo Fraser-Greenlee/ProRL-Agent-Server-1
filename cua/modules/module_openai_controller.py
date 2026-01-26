@@ -268,7 +268,7 @@ class OpenAIController:
             f"4. If you do not need to move the cursor to achieve the goal (e.g., you want to type on an element and "
             f"the element is already on focus, or the cursor is already on the button you want to press), just output "
             f"x: 0, y: 0.\n"
-            f"5 You do not have to locate the cursor on the exact center point; If the cursor is in the "
+            f"5. You do not have to locate the cursor on the exact center point; If the cursor is in the "
             f"enough position to interact with the target element, output x: 0, y: 0.\n"
             f"6. **Output Format**: Return the result as a JSON object.\n\n"
 
