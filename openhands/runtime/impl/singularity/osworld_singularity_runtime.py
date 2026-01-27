@@ -208,7 +208,7 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         # Check if KVM is available
         kvm_available = self._check_kvm_available()
         if kvm_available:
-            self.log('info', 'KVM is available, enabling hardware acceleration')
+            self.log('warning', 'KVM is available, enabling hardware acceleration')
         else:
             self.log('warning', 'KVM is not available, running QEMU in emulation mode (slower)')
 

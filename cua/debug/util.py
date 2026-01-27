@@ -77,6 +77,11 @@ def image_to_bytes(image: Image.Image) -> bytes:
     return output_buffer.getvalue()
 
 
+def bytes_to_base64(image_bytes: bytes) -> str:
+    encoded_image_str = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:image;base64,{encoded_image_str}"
+
+
 def image_to_base64(image: Image.Image) -> str:
     encoded_image_str = base64.b64encode(image_to_bytes(image)).decode("utf-8")
     return f"data:image;base64,{encoded_image_str}"

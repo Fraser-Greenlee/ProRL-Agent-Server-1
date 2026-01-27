@@ -10,39 +10,41 @@
 #SBATCH --exclusive
 #SBATCH --output=/dev/null
 
-PARSER_CONTAINER_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_parser.sqsh"
 VLLM_CONTAINER_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/vllm-0.13.0.sqsh"
-SCRIPT_DIR="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/cua/scripts"
 
 # 1. Get Node List and Assign Roles
 ALL_NODES=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
-PARSER_NODE=$(echo "$ALL_NODES" | head -n 1)
-VLLM_NODE=$(echo "$ALL_NODES" | head -n 2 | tail -n 1)
+UITARS_NODE=$(echo "$ALL_NODES" | head -n 1)
+EXPLORER_NODE=$(echo "$ALL_NODES" | head -n 2 | tail -n 1)
 
 # 2. Launch Server (Parser)
 # Added: --nodes=1 --ntasks=1 --exclusive
-srun -w "$PARSER_NODE" \
+srun -w "$UITARS_NODE" \
      --nodes=1 \
      --ntasks=1 \
-     --container-image="$PARSER_CONTAINER_IMAGE" \
+     --container-image="$VLLM_CONTAINER_IMAGE" \
      --container-mounts=/lustre:/lustre \
-     --output=logs/parser.out \
+     --output=logs/uitars.out \
      bash -c "
-      cd $SCRIPT_DIR
-      echo \"Launching parser model at $PARSER_NODE\"
-      python run_parser_server.py
+      echo \"Launching UI-TARS model at $UITARS_NODE\"
+      vllm serve ByteDance-Seed/UI-TARS-1.5-7B \
+        --api-key gen \
+        --tensor-parallel-size 4 \
+        --limit-mm-per-prompt.image 5 \
+        --limit-mm-per-prompt.video 0 \
+        --max-model-len 65536
      " &
 
 # 3. Launch Server (vLLM/Explorer)
 # Added: --nodes=1 --ntasks=1 --exclusive
-srun -w "$VLLM_NODE" \
+srun -w "$EXPLORER_NODE" \
      --nodes=1 \
      --ntasks=1 \
      --container-image="$VLLM_CONTAINER_IMAGE" \
      --container-mounts=/lustre:/lustre \
      --output=logs/explorer.out \
      bash -c "
-      echo \"Launching explorer model at $VLLM_NODE\"
+      echo \"Launching explorer model at $EXPLORER_NODE\"
       vllm serve /lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/models/Qwen3-VL-235B-A22B-Thinking \
         --api-key gen \
         --tensor-parallel-size 8 \

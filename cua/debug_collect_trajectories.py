@@ -24,8 +24,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     # Set Explorer / Parser nodes
-    parser.add_argument("--explorer_node", type=str)
-    parser.add_argument("--parser_node", type=str, required=True)
+    parser.add_argument("--explorer_node", type=str, required=True)
+    parser.add_argument("--uitars_node", type=str, required=True)
     parser.add_argument(
         "--explorer_model_name", type=str,
         default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/models/Qwen3-VL-235B-A22B-Thinking")
@@ -49,7 +49,7 @@ def parse_args():
     # OpenAIWrapper
     parser.add_argument("--model_name", type=str)
     parser.add_argument("--min_pixels", type=int, default=4 * 28 * 28)
-    parser.add_argument("--max_pixels", type=int, default=-5120 * 28 * 28)
+    parser.add_argument("--max_pixels", type=int, default=5120 * 28 * 28)
     parser.add_argument("--max_retry_for_goal_generation", type=int, default=1)
     parser.add_argument("--max_retry_for_action_generation", type=int, default=3)
 

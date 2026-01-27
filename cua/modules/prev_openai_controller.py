@@ -12,7 +12,7 @@ from cua.modules.util import build_messages, bytes_to_image
 from openhands.core.logger import openhands_logger
 
 # Create a child logger
-logger = openhands_logger.getChild('openai_wrapper')
+logger = openhands_logger.getChild('openai_controller')
 
 
 class OpenAIController:
@@ -63,7 +63,6 @@ class OpenAIController:
 
     def generate_goal_with_persona(self, screenshot: bytes, persona: Dict, previous_intents: List[str],
                                    previous_goals: List[str],) -> Tuple[str, str]:
-        # todo similar to SyntheticDataGenerator.generate_goal, generate high-level sub-goal to pick random actions
         messages = self.prepare_generate_goal_messages(
             screenshot, persona, previous_intents, previous_goals,
         )

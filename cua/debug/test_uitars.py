@@ -570,9 +570,6 @@ class UITarsController:
             current_screenshot: The latest screen observation.
             history_images: List of previous screenshots (excluding current).
             history_responses: List of previous model text responses.
-            prompt_template: The UITARS prompt template (e.g., UITARS_USR_PROMPT_THOUGHT).
-            action_space_str: The definition of available actions (e.g., UITARS_ACTION_SPACE).
-            language: Language for the system prompt (default 'Chinese' per source).
             history_n: Max number of past images to include.
             min_pixels: Minimum pixel count for resizing (Qwen2-VL requirement).
             max_pixels: Maximum pixel count for resizing (Qwen2-VL requirement).
@@ -584,7 +581,6 @@ class UITarsController:
         """
 
         # 1. Format the Text Prompt
-        # This corresponds to the user_prompt logic in the original predict method
         instruction_prompt = (
             # new
             f"You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform "
@@ -624,7 +620,6 @@ class UITarsController:
         )
 
         # 2. Prepare Image List (History + Current)
-        # We combine them to apply uniform resizing logic, then separate them for message construction
         full_image_list = history_images + [current_screenshot]
 
         # Apply history_n limit
