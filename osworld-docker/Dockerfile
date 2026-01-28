@@ -3,7 +3,13 @@
 # for OSWorld benchmark tasks
 #
 # Build: docker build -t osworld-linux .
-# Run:   docker run -d --name osworld --privileged --shm-size=2g -p 5000:5000 -p 5900:5900 -p 5910:5910 osworld-linux
+# Run:   docker run -d --name osworld --privileged --shm-size=2g -p 8000:8000 -p 9222:9222 osworld-linux
+#
+# Access via Caddy reverse proxy on port 8000:
+#   - noVNC:       http://localhost:8000/vnc.html (or root)
+#   - OSWorld API: http://localhost:8000/api/
+#   - VLC HTTP:    http://localhost:8000/vlc/
+#   - Chrome CDP:  http://localhost:8000/chrome/json
 
 FROM ubuntu:22.04
 
@@ -30,7 +36,8 @@ ENV OSWORLD_SERVER_PORT=5000
 ENV VNC_PORT=5900
 ENV NOVNC_PORT=5910
 ENV CHROME_DEBUG_PORT=9222
-ENV VLC_HTTP_PORT=8080
+ENV VLC_HTTP_PORT=8100
+ENV CADDY_PORT=8000
 
 # ============================================
 # STAGE 1: Base System
@@ -122,7 +129,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================
-# STAGE 4: Install Google Chrome
+# STAGE 4: Install Caddy Web Server
+# ============================================
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    debian-keyring debian-archive-keyring apt-transport-https \
+    && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
+    && curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list \
+    && apt-get update \
+    && apt-get install -y caddy \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================
+# STAGE 5: Install Google Chrome
 # ============================================
 
 RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add - \
@@ -132,7 +151,7 @@ RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================
-# STAGE 5: Install LibreOffice 7.3.7.2
+# STAGE 6: Install LibreOffice 7.3.7.2
 # ============================================
 
 RUN apt-get update && apt-get remove -y libreoffice* || true
@@ -150,20 +169,20 @@ RUN mkdir -p /tmp/libreoffice && cd /tmp/libreoffice \
     && ln -sf /opt/libreoffice7.3/program/soffice /usr/local/bin/loimpress
 
 # ============================================
-# STAGE 6: Install GIMP
+# STAGE 7: Install GIMP
 # ============================================
 
 RUN apt-get update && apt-get install -y --no-install-recommends gimp && rm -rf /var/lib/apt/lists/*
 
 # ============================================
-# STAGE 7: Install VLC Media Player
+# STAGE 8: Install VLC Media Player
 # ============================================
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     vlc vlc-plugin-access-extra && rm -rf /var/lib/apt/lists/*
 
 # ============================================
-# STAGE 8: Install Visual Studio Code
+# STAGE 9: Install Visual Studio Code
 # ============================================
 
 RUN wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor > /tmp/packages.microsoft.gpg \
@@ -174,13 +193,13 @@ RUN wget -qO- https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor 
     && rm -rf /var/lib/apt/lists/* /tmp/packages.microsoft.gpg
 
 # ============================================
-# STAGE 9: Install Thunderbird
+# STAGE 10: Install Thunderbird
 # ============================================
 
 RUN apt-get update && apt-get install -y --no-install-recommends thunderbird && rm -rf /var/lib/apt/lists/*
 
 # ============================================
-# STAGE 10: Install Python Dependencies
+# STAGE 11: Install Python Dependencies
 # ============================================
 
 RUN pip3 install --no-cache-dir \
@@ -195,7 +214,7 @@ RUN pip3 install --no-cache-dir \
     pygame
 
 # ============================================
-# STAGE 11: Install Fonts for LibreOffice
+# STAGE 12: Install Fonts for LibreOffice
 # ============================================
 
 RUN mkdir -p /tmp/fonts && cd /tmp/fonts \
@@ -207,7 +226,7 @@ RUN mkdir -p /tmp/fonts && cd /tmp/fonts \
     && cd / && rm -rf /tmp/fonts
 
 # ============================================
-# STAGE 12: Create User Account
+# STAGE 13: Create User Account
 # ============================================
 
 RUN groupadd -g ${USER_GID} ${USER_NAME} \
@@ -229,7 +248,7 @@ RUN mkdir -p /home/${USER_NAME}/server \
     && chown ${USER_NAME}:${USER_NAME} /run/user/${USER_UID}
 
 # ============================================
-# STAGE 13: Copy OSWorld Server Files
+# STAGE 14: Copy OSWorld Server Files
 # ============================================
 
 COPY server/main.py /home/${USER_NAME}/server/main.py
@@ -237,7 +256,7 @@ COPY server/pyxcursor.py /home/${USER_NAME}/server/pyxcursor.py
 RUN mkdir -p /home/${USER_NAME}/server/screenshots
 
 # ============================================
-# STAGE 14: Create Desktop Shortcut for Home
+# STAGE 15: Create Desktop Shortcut for Home
 # ============================================
 
 RUN mkdir -p /home/${USER_NAME}/Desktop \
@@ -252,7 +271,7 @@ EOF
 RUN chmod +x /home/${USER_NAME}/Desktop/Home.desktop
 
 # ============================================
-# STAGE 15: Configure Unity Compiz Settings
+# STAGE 16: Configure Unity Compiz Settings
 # ============================================
 
 # Create compizconfig directory and configuration file
@@ -307,7 +326,7 @@ UNITYSCRIPT
 RUN chmod +x /usr/local/bin/configure-unity.sh
 
 # ============================================
-# STAGE 16: Configure Chrome with remote debugging
+# STAGE 17: Configure Chrome with remote debugging
 # ============================================
 
 RUN mkdir -p /etc/opt/chrome/policies/managed \
@@ -345,14 +364,14 @@ EOF
 RUN mkdir -p /home/${USER_NAME}/.config/google-chrome-debug
 
 # ============================================
-# STAGE 17: Configure VLC
+# STAGE 18: Configure VLC
 # ============================================
 
 RUN mkdir -p /home/${USER_NAME}/.config/vlc \
     && cat > /home/${USER_NAME}/.config/vlc/vlcrc << 'EOF'
 [http]
-http-host=0.0.0.0
-http-port=8080
+http-host=127.0.0.1
+http-port=8100
 http-password=password
 
 [core]
@@ -360,7 +379,7 @@ extraintf=http
 EOF
 
 # ============================================
-# STAGE 18: Configure VS Code
+# STAGE 19: Configure VS Code
 # ============================================
 
 RUN mkdir -p /home/${USER_NAME}/.config/Code/User \
@@ -375,7 +394,7 @@ RUN mkdir -p /home/${USER_NAME}/.config/Code/User \
 EOF
 
 # ============================================
-# STAGE 19: Configure LibreOffice
+# STAGE 20: Configure LibreOffice
 # ============================================
 
 RUN mkdir -p /home/${USER_NAME}/.config/libreoffice/4/user \
@@ -389,7 +408,7 @@ RUN mkdir -p /home/${USER_NAME}/.config/libreoffice/4/user \
 EOF
 
 # ============================================
-# STAGE 20: Create LibreOffice desktop files
+# STAGE 21: Create LibreOffice desktop files
 # ============================================
 
 RUN cat > /usr/share/applications/libreoffice-writer.desktop << 'EOF'
@@ -432,7 +451,55 @@ MimeType=application/vnd.oasis.opendocument.presentation;
 EOF
 
 # ============================================
-# STAGE 21: Create Entrypoint Script
+# STAGE 22: Configure Caddy Reverse Proxy
+# ============================================
+
+RUN cat > /etc/caddy/Caddyfile << 'CADDYFILE'
+:8000 {
+    # VNC websocket - must be before /vnc/* to match first
+    # noVNC client connects here for the actual VNC stream
+    handle /websockify {
+        reverse_proxy 127.0.0.1:5910
+    }
+
+    # OSWorld API
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy 127.0.0.1:5000
+    }
+
+    # noVNC web interface (HTML/JS/CSS files)
+    handle /vnc/* {
+        uri strip_prefix /vnc
+        reverse_proxy 127.0.0.1:5910
+    }
+
+    # VLC HTTP interface
+    handle /vlc/* {
+        uri strip_prefix /vlc
+        reverse_proxy 127.0.0.1:8100
+    }
+
+    # Chrome DevTools Protocol (CDP)
+    handle /chrome/* {
+        uri strip_prefix /chrome
+        reverse_proxy 127.0.0.1:9222
+    }
+
+    # Default fallback to noVNC
+    handle {
+        reverse_proxy 127.0.0.1:5910
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}
+CADDYFILE
+
+# ============================================
+# STAGE 23: Create Entrypoint Script
 # ============================================
 
 RUN cat > /usr/local/bin/entrypoint.sh << 'ENTRYPOINT_EOF'
@@ -485,11 +552,13 @@ su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && expo
 sleep 10
 
 # Start x11vnc
+# -noshm: Disable MIT-SHM (required for Docker due to memory isolation)
+# -noxdamage: Disable X DAMAGE extension (compiz/Unity interferes with it)
 echo "Starting x11vnc..."
-su - user -c "x11vnc -display :0 -rfbport 5900 -forever -shared -nopw -xkb &"
-sleep 1
+su - user -c "x11vnc -display :0 -rfbport 5900 -forever -shared -nopw -xkb -noshm -noxdamage &"
+sleep 2
 
-# Start noVNC
+# Start noVNC/websockify (bridges websocket to VNC)
 echo "Starting noVNC..."
 su - user -c "websockify --web=/usr/share/novnc 5910 localhost:5900 &"
 sleep 1
@@ -504,6 +573,11 @@ echo "Starting OSWorld server..."
 su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && cd /home/user/server && python3 main.py" &
 sleep 2
 
+# Start Caddy reverse proxy
+echo "Starting Caddy reverse proxy..."
+caddy start --config /etc/caddy/Caddyfile &
+sleep 1
+
 # Restart compiz after everything is running to ensure Unity shell loads
 echo "Restarting compiz to load Unity shell..."
 su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && export XDG_CURRENT_DESKTOP=Unity && export COMPIZ_CONFIG_PROFILE=unity && pkill compiz; sleep 3; compiz --replace ccp &" 2>/dev/null || true
@@ -516,9 +590,17 @@ echo ""
 echo "============================================"
 echo "OSWorld Docker Container Started"
 echo "============================================"
-echo "OSWorld Server: http://localhost:5000"
-echo "noVNC Web Access: http://localhost:5910/vnc.html"
-echo "VNC Direct: localhost:5900"
+echo "Caddy Proxy: http://localhost:8000"
+echo "  - noVNC (root): http://localhost:8000/vnc.html"
+echo "  - noVNC (path): http://localhost:8000/vnc/vnc.html"
+echo "  - OSWorld API:  http://localhost:8000/api/"
+echo "  - VLC HTTP:     http://localhost:8000/vlc/"
+echo "  - Chrome CDP:   http://localhost:8000/chrome/json"
+echo "Direct Access (internal):"
+echo "  - OSWorld Server: http://localhost:5000"
+echo "  - noVNC: http://localhost:5910/vnc.html"
+echo "  - VNC: localhost:5900"
+echo "  - VLC HTTP: http://localhost:8100"
 echo "============================================"
 
 # Keep container running
@@ -528,16 +610,19 @@ ENTRYPOINT_EOF
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # ============================================
-# STAGE 22: Set Ownership
+# STAGE 24: Set Ownership
 # ============================================
 
 RUN chown -R ${USER_NAME}:${USER_NAME} /home/${USER_NAME}
 
 # ============================================
-# STAGE 23: Expose Ports
+# STAGE 25: Expose Ports
 # ============================================
 
-EXPOSE 5000 5900 5910 9222 8080
+# Primary: Caddy proxy (8000)
+# Internal services also exposed for direct access if needed:
+#   5000 - OSWorld API, 5900 - VNC, 5910 - noVNC, 9222 - Chrome debug, 8100 - VLC HTTP
+EXPOSE 8000 5000 5900 5910 9222 8100
 
 WORKDIR /home/${USER_NAME}
 

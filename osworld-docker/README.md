@@ -14,13 +14,20 @@ This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with Un
 - **Display**: 1920x1080 resolution via Xvfb (headless)
 - **VNC Access**: x11vnc + noVNC for remote desktop access
 - **OSWorld Server**: Flask-based API server for automation
+- **Caddy Reverse Proxy**: Unified access to all services on port 8000
+
+### Available Images
+
+| Image | Dockerfile | Description |
+|-------|------------|-------------|
+| `osworld-linux` | `Dockerfile` | English UI (default) |
+| `osworld-linux-zh` | `Dockerfile.chinese` | Simplified Chinese UI (简体中文) |
 
 ### Installed Applications
 
 | Application | Version | Purpose |
 |-------------|---------|---------|
 | Google Chrome | Latest stable | Web browser tasks (46 benchmark tasks) |
-| Chromium | Latest | Alternative for ARM systems |
 | LibreOffice | 7.3.7.2 | Office suite tasks |
 | GIMP | 2.10.x | Image editing tasks (26 benchmark tasks) |
 | VLC Media Player | 3.0.x | Media playback tasks (17 benchmark tasks) |
@@ -38,7 +45,12 @@ This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with Un
 
 ```bash
 cd osworld-docker
+
+# English version
 docker build -t osworld-linux .
+
+# Chinese version
+docker build -t osworld-linux-zh -f Dockerfile.chinese .
 ```
 
 ### Run with Docker Compose (Recommended)
@@ -51,76 +63,116 @@ docker-compose up -d
 
 ```bash
 docker run -d \
-  --name osworld-linux \
+  --name osworld \
   --privileged \
   --shm-size=2g \
-  -p 5000:5000 \
-  -p 5900:5900 \
-  -p 5910:5910 \
+  -p 8000:8000 \
   -p 9222:9222 \
-  -p 8080:8080 \
   osworld-linux
+```
+
+For the Chinese version:
+```bash
+docker run -d \
+  --name osworld-zh \
+  --privileged \
+  --shm-size=2g \
+  -p 8000:8000 \
+  -p 9222:9222 \
+  osworld-linux-zh
 ```
 
 ## Accessing the Environment
 
+All services are accessible through the Caddy reverse proxy on port 8000:
+
 ### Web-based VNC (noVNC)
 Open your browser and navigate to:
 ```
-http://localhost:5910/vnc.html
+http://localhost:8000/vnc.html
 ```
-
-### Direct VNC Connection
-Use any VNC client to connect to:
+Or simply:
 ```
-localhost:5900
+http://localhost:8000
 ```
 
 ### OSWorld API Server
 The REST API server is available at:
 ```
-http://localhost:5000
+http://localhost:8000/api/
+```
+
+### VLC HTTP Interface
+```
+http://localhost:8000/vlc/
+```
+
+### Chrome DevTools Protocol (CDP)
+```
+http://localhost:8000/chrome/json
+```
+Or directly via port 9222:
+```
+http://localhost:9222/json
 ```
 
 ## Port Configuration
+
+### Caddy Proxy (Primary Access)
+
+| Path | Internal Service | Description |
+|------|------------------|-------------|
+| `/` or `/vnc.html` | noVNC (5910) | Web-based VNC access |
+| `/api/*` | OSWorld Server (5000) | Main API server |
+| `/vlc/*` | VLC HTTP (8100) | VLC media player control |
+| `/chrome/*` | Chrome CDP (9222) | Chrome DevTools Protocol |
+| `/websockify` | websockify (5910) | VNC WebSocket connection |
+
+### Exposed Ports
+
+| Port | Service | Description |
+|------|---------|-------------|
+| 8000 | Caddy | Reverse proxy (primary access point) |
+| 9222 | Chrome DevTools | Chrome remote debugging (direct access) |
+
+### Internal Ports (not exposed by default)
 
 | Port | Service | Description |
 |------|---------|-------------|
 | 5000 | OSWorld Server | Main API server (Flask) |
 | 5900 | x11vnc | VNC server |
-| 5910 | noVNC | Web-based VNC access |
-| 9222 | Chrome DevTools | Chrome remote debugging |
-| 8080 | VLC HTTP | VLC media player control |
+| 5910 | noVNC/websockify | Web-based VNC |
+| 8100 | VLC HTTP | VLC media player control |
 
 ## API Endpoints
 
 ### Server Status
 ```bash
-curl http://localhost:5000/version
+curl http://localhost:8000/api/version
 ```
 
 ### Screenshot
 ```bash
-curl http://localhost:5000/screenshot --output screenshot.png
+curl http://localhost:8000/api/screenshot --output screenshot.png
 ```
 
 ### Execute Command
 ```bash
-curl -X POST http://localhost:5000/execute \
+curl -X POST http://localhost:8000/api/execute \
   -H "Content-Type: application/json" \
   -d '{"command": "ls -la", "shell": true}'
 ```
 
 ### Get Accessibility Tree
 ```bash
-curl http://localhost:5000/accessibility
+curl http://localhost:8000/api/accessibility
 ```
 
 ### Launch Application
 ```bash
-curl -X POST http://localhost:5000/setup/launch \
+curl -X POST http://localhost:8000/api/setup/launch \
   -H "Content-Type: application/json" \
-  -d '{"command": ["google-chrome", "--remote-debugging-port=9222"]}'
+  -d '{"command": ["google-chrome", "--no-sandbox"]}'
 ```
 
 ## Verification
@@ -134,7 +186,7 @@ chmod +x verify.sh
 
 Or run inside the container:
 ```bash
-docker exec osworld-linux /usr/local/bin/verify-apps.sh
+docker exec osworld /usr/local/bin/verify-apps.sh
 ```
 
 ## Credentials
@@ -150,7 +202,8 @@ docker exec osworld-linux /usr/local/bin/verify-apps.sh
 - Ubuntu Jammy Jellyfish wallpaper
 
 ### Chrome Configuration
-- Remote debugging enabled on port 9222
+- Remote debugging enabled (internal port 9223, forwarded to 0.0.0.0:9222 via socat)
+- `--no-sandbox` flag required for Docker containers
 - Password manager disabled
 - Autofill disabled
 - Sync disabled
@@ -158,7 +211,7 @@ docker exec osworld-linux /usr/local/bin/verify-apps.sh
 ### VLC Configuration
 - HTTP interface enabled
 - HTTP password: `password`
-- HTTP port: 8080
+- HTTP port: 8100 (internal), accessible via `/vlc/` path on port 8000
 
 ### VS Code Configuration
 - Workspace trust disabled
@@ -169,6 +222,27 @@ docker exec osworld-linux /usr/local/bin/verify-apps.sh
 
 ### Thunderbird Configuration
 - Accessibility tree enabled via: `gsettings set org.gnome.desktop.interface toolkit-accessibility true`
+
+## Chinese Version (Dockerfile.chinese)
+
+The Chinese version includes:
+
+- **System locale**: Simplified Chinese (zh_CN.UTF-8)
+- **Timezone**: Asia/Shanghai
+- **Chinese fonts**: Noto Sans CJK, WenQuanYi fonts
+- **Chinese user directories**: 桌面, 文档, 下载, 图片, 视频, 音乐
+
+### Chinese UI Status
+
+| Application | Chinese UI |
+|-------------|------------|
+| Ubuntu/Unity Desktop | ✅ Chinese |
+| LibreOffice | ✅ Chinese |
+| Google Chrome | ✅ Chinese |
+| GIMP | ✅ Chinese |
+| VS Code | ✅ Chinese (extension auto-installed) |
+| Thunderbird | ✅ Chinese |
+| VLC | ⚠️ English (known locale issues in Docker) |
 
 ## Comparison with QEMU-based OSWorld
 
@@ -188,49 +262,47 @@ This Docker image provides a similar environment to the QEMU-based OSWorld but w
 ### VNC not connecting
 ```bash
 # Check if Xvfb is running
-docker exec osworld-linux pgrep Xvfb
+docker exec osworld pgrep Xvfb
 
 # Check if x11vnc is running
-docker exec osworld-linux pgrep x11vnc
+docker exec osworld pgrep x11vnc
 
 # Restart services
-docker exec osworld-linux /usr/local/bin/entrypoint.sh
+docker exec osworld /usr/local/bin/entrypoint.sh
 ```
 
 ### Unity launcher not showing
 ```bash
 # Restart compiz to reload Unity shell
-docker exec -u user osworld-linux bash -c "export DISPLAY=:0 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && pkill compiz; sleep 2; compiz --replace ccp &"
+docker exec -u user osworld bash -c "export DISPLAY=:0 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && pkill compiz; sleep 2; compiz --replace ccp &"
 ```
 
 ### OSWorld server not responding
 ```bash
 # Check server logs
-docker exec osworld-linux cat /home/user/server/server.log
+docker exec osworld cat /home/user/server/server.log
 
 # Restart server
-docker exec osworld-linux pkill -f "python3 main.py"
-docker exec osworld-linux su - user -c "cd /home/user/server && python3 main.py &"
+docker exec osworld pkill -f "python3 main.py"
+docker exec osworld su - user -c "cd /home/user/server && python3 main.py &"
 ```
 
 ### Applications not launching
 ```bash
 # Check DISPLAY variable
-docker exec osworld-linux echo $DISPLAY
+docker exec osworld echo $DISPLAY
 
 # Test X server
-docker exec -u user osworld-linux xdotool getmouselocation
+docker exec -u user osworld xdotool getmouselocation
 ```
 
-## Building for ARM (Apple Silicon)
+### Chrome debug port not accessible
+```bash
+# Check if socat is forwarding the port
+docker exec osworld pgrep socat
 
-For ARM-based systems, modify the Dockerfile:
-1. Replace Google Chrome with Chromium
-2. Use ARM-compatible LibreOffice packages
-
-```dockerfile
-# Replace Chrome installation with:
-RUN apt-get update && apt-get install -y chromium-browser
+# Test Chrome CDP directly
+curl http://localhost:9222/json
 ```
 
 ## License
