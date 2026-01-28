@@ -116,11 +116,9 @@ def get_instruction(instance: pd.Series | dict, metadata: EvalMetadata, runtime:
 
     include_screenshot = True #runtime.config.agents['agent'].enable_vision
     include_a11y_tree = True #runtime.config.agents['agent'].enable_a11y_tree
-    instruction = f"""Work on the following task accourding to the UI screenshot.
+    instruction = f"""Work on the following task according to the UI screenshot.
 
 Instruction: {instance['instruction']}
-
-First describe the screenshot in detail, think step by step, then generate the next move.
 """
     
     if include_a11y_tree:

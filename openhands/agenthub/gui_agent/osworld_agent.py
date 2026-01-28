@@ -339,6 +339,9 @@ class OSWorldAgent(Agent):
         }
         params['tools'] = self.tools
         params['extra_body'] = {'metadata': state.to_llm_metadata(agent_name=self.name)}
+        for msg in params['messages']:
+            if msg.get('role') == 'tool':
+                msg['role'] = 'user'
         response = self.llm.completion(**params)
         logger.debug(f'Response from LLM: {response}')
         actions = codeact_function_calling.response_to_actions(response, timeout=self.config.action_timeout)
