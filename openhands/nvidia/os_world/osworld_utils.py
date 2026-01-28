@@ -67,7 +67,7 @@ def get_config(
 
     sandbox_config = SandboxConfig(
         base_container_image='ubuntu:24.04',
-        run_as_fakeroot=True,
+        run_as_fakeroot=False,
     )
 
     config = OpenHandsConfig(
