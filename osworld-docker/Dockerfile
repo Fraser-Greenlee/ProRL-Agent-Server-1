@@ -129,6 +129,10 @@ RUN cat > /usr/local/bin/gnome-terminal-wrapper << 'TERMWRAP'
 export DISPLAY=:0
 export XDG_RUNTIME_DIR=/run/user/1000
 export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+# Locale is required for gnome-terminal-server (non-UTF8 locale is not supported)
+export LANG=en_US.UTF-8
+export LANGUAGE=en_US:en
+export LC_ALL=en_US.UTF-8
 
 # Start server if not running
 if ! pgrep -x gnome-terminal-server > /dev/null; then
@@ -148,7 +152,9 @@ TERMWRAP
 RUN chmod +x /usr/local/bin/gnome-terminal-wrapper
 
 # Update desktop file to use wrapper
-RUN sed -i 's|Exec=gnome-terminal|Exec=/usr/local/bin/gnome-terminal-wrapper|g' /usr/share/applications/org.gnome.Terminal.desktop
+# Update desktop file to use wrapper for both Exec and TryExec
+RUN sed -i 's|Exec=gnome-terminal|Exec=/usr/local/bin/gnome-terminal-wrapper|g' /usr/share/applications/org.gnome.Terminal.desktop && \
+    sed -i 's|TryExec=gnome-terminal|TryExec=/usr/local/bin/gnome-terminal-wrapper|g' /usr/share/applications/org.gnome.Terminal.desktop
 
 # ============================================
 # STAGE 3: Install noVNC
@@ -277,6 +283,12 @@ RUN mkdir -p /home/${USER_NAME}/server \
     && mkdir -p /run/user/${USER_UID} \
     && chmod 700 /run/user/${USER_UID} \
     && chown ${USER_NAME}:${USER_NAME} /run/user/${USER_UID}
+
+# Set locale in user profile so all user processes get correct locale
+# This is required for gnome-terminal-server which requires UTF-8 locale
+RUN echo 'export LANG=en_US.UTF-8' >> /home/${USER_NAME}/.profile && \
+    echo 'export LANGUAGE=en_US:en' >> /home/${USER_NAME}/.profile && \
+    echo 'export LC_ALL=en_US.UTF-8' >> /home/${USER_NAME}/.profile
 
 # ============================================
 # STAGE 14: Copy OSWorld Server Files
@@ -617,7 +629,10 @@ sleep 10
 # Close the Keyboard Shortcuts dialog that appears on first launch
 su - user -c "export DISPLAY=:0 && xdotool key Escape" 2>/dev/null || true
 
-# gnome-terminal-server will be started by dbus activation when needed
+# Pre-start gnome-terminal-server so terminal icon works on first click
+echo "Starting gnome-terminal-server..."
+setsid su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && exec /usr/libexec/gnome-terminal-server" < /dev/null > /dev/null 2>&1 &
+sleep 3
 
 echo ""
 echo "============================================"
