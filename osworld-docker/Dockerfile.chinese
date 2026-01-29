@@ -152,6 +152,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================
+# Fix gnome-terminal dbus service to not require systemd (for Docker)
+RUN sed -i '/SystemdService/d' /usr/share/dbus-1/services/org.gnome.Terminal.service
+
+# Create a wrapper script for gnome-terminal that ensures server is running
+RUN cat > /usr/local/bin/gnome-terminal-wrapper << 'TERMWRAP'
+#!/bin/bash
+export DISPLAY=${DISPLAY:-:0}
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}
+
+# Start server if not running
+if ! pgrep -x gnome-terminal-server > /dev/null; then
+    /usr/libexec/gnome-terminal-server &
+    sleep 1
+fi
+
+# Run gnome-terminal
+exec /usr/bin/gnome-terminal "$@"
+TERMWRAP
+RUN chmod +x /usr/local/bin/gnome-terminal-wrapper
+
+# Update desktop file to use wrapper
+RUN sed -i 's|Exec=gnome-terminal|Exec=/usr/local/bin/gnome-terminal-wrapper|g' /usr/share/applications/org.gnome.Terminal.desktop
+
 # STAGE 4: Install noVNC
 # ============================================
 
@@ -760,6 +784,8 @@ sleep 10
 
 # Close any dialogs that appear on first launch
 su - user -c "export DISPLAY=:0 && xdotool key Escape" 2>/dev/null || true
+
+# gnome-terminal-server will be started by dbus activation when needed
 
 echo ""
 echo "============================================"
