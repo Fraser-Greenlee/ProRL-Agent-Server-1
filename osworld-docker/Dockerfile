@@ -125,14 +125,21 @@ RUN sed -i '/SystemdService/d' /usr/share/dbus-1/services/org.gnome.Terminal.ser
 # Create a wrapper script for gnome-terminal that ensures server is running
 RUN cat > /usr/local/bin/gnome-terminal-wrapper << 'TERMWRAP'
 #!/bin/bash
-export DISPLAY=${DISPLAY:-:0}
-export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
-export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}
+# Force environment variables for Docker container
+export DISPLAY=:0
+export XDG_RUNTIME_DIR=/run/user/1000
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 
 # Start server if not running
 if ! pgrep -x gnome-terminal-server > /dev/null; then
     /usr/libexec/gnome-terminal-server &
-    sleep 1
+    # Wait for server to be ready (up to 3 seconds)
+    for i in 1 2 3 4 5 6; do
+        sleep 0.5
+        if pgrep -x gnome-terminal-server > /dev/null; then
+            break
+        fi
+    done
 fi
 
 # Run gnome-terminal
