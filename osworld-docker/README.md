@@ -1,34 +1,36 @@
 # OSWorld Linux Docker Environment
 
-This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with Unity desktop) for benchmark tasks. It includes all required applications and configurations as specified in the OSWorld setup documentation.
+This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with GNOME Shell desktop) for benchmark tasks. It includes all required applications and configurations to match the original OSWorld QEMU VM exactly.
 
 ## Screenshot
 
-![Ubuntu Unity Desktop](screenshot_unity_desktop.png)
+![Ubuntu GNOME Shell Desktop](screenshot_gnome_desktop.png)
 
-*Ubuntu 22.04 with Unity desktop environment - matching the OSWorld QEMU VM appearance*
+*Ubuntu 22.04 with GNOME Shell desktop environment - matching the original OSWorld QEMU VM*
 
 ## Features
 
-- **Base OS**: Ubuntu 22.04 LTS with Unity desktop environment
+- **Base OS**: Ubuntu 22.04 LTS with GNOME Shell 42.9 (same as original OSWorld VM)
 - **Display**: 1920x1080 resolution via Xvfb (headless)
 - **VNC Access**: x11vnc + noVNC for remote desktop access
 - **OSWorld Server**: Flask-based API server for automation
 - **Caddy Reverse Proxy**: Unified access to all services on port 8000
+- **Systemd Init**: Full systemd support for GNOME Shell compatibility
 
 ### Available Images
 
 | Image | Dockerfile | Description |
 |-------|------------|-------------|
-| `osworld-linux` | `Dockerfile` | English UI (default) |
+| `osworld-linux` | `Dockerfile` | GNOME Shell (English UI) - matches original OSWorld VM |
 | `osworld-linux-zh` | `Dockerfile.chinese` | Simplified Chinese UI (简体中文) |
+| `osworld-linux-unity` | `Dockerfile.unity` | Legacy Unity desktop (not recommended) |
 
 ### Installed Applications
 
 | Application | Version | Purpose |
 |-------------|---------|---------|
 | Google Chrome | Latest stable | Web browser tasks (46 benchmark tasks) |
-| LibreOffice | 7.3.7.2 | Office suite tasks |
+| LibreOffice | 7.x | Office suite tasks |
 | GIMP | 2.10.x | Image editing tasks (26 benchmark tasks) |
 | VLC Media Player | 3.0.x | Media playback tasks (17 benchmark tasks) |
 | Visual Studio Code | Latest | Code editing tasks (23 benchmark tasks) |
@@ -46,40 +48,33 @@ This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with Un
 ```bash
 cd osworld-docker
 
-# English version
+# Build the GNOME Shell image (recommended - matches original OSWorld VM)
 docker build -t osworld-linux .
 
-# Chinese version
+# Chinese version (coming soon)
 docker build -t osworld-linux-zh -f Dockerfile.chinese .
 ```
 
-### Run with Docker Compose (Recommended)
-
-```bash
-docker-compose up -d
-```
-
 ### Run with Docker
+
+The GNOME Shell image requires systemd, which needs additional Docker flags:
 
 ```bash
 docker run -d \
   --name osworld \
   --privileged \
+  --cgroupns=host \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
   --shm-size=2g \
   -p 8000:8000 \
   -p 9222:9222 \
   osworld-linux
 ```
 
-For the Chinese version:
+### Run with Docker Compose (Recommended)
+
 ```bash
-docker run -d \
-  --name osworld-zh \
-  --privileged \
-  --shm-size=2g \
-  -p 8000:8000 \
-  -p 9222:9222 \
-  osworld-linux-zh
+docker-compose up -d
 ```
 
 ## Accessing the Environment
@@ -102,209 +97,106 @@ The REST API server is available at:
 http://localhost:8000/api/
 ```
 
+Endpoints:
+- `GET /api/screenshot` - Get current desktop screenshot (PNG)
+- `POST /api/execute` - Execute a command
+- `POST /api/setup` - Setup configuration
+- `GET /api/info` - Get system information
+- `GET /api/accessibility_tree` - Get accessibility tree
+
+### Chrome DevTools Protocol
+Chrome is configured with remote debugging enabled:
+```
+http://localhost:8000/chrome/json
+```
+Or directly on port 9222:
+```
+http://localhost:9222
+```
+
 ### VLC HTTP Interface
 ```
 http://localhost:8000/vlc/
 ```
 
-### Chrome DevTools Protocol (CDP)
+## Architecture
+
 ```
-http://localhost:8000/chrome/json
-```
-Or directly via port 9222:
-```
-http://localhost:9222/json
-```
-
-## Port Configuration
-
-### Caddy Proxy (Primary Access)
-
-| Path | Internal Service | Description |
-|------|------------------|-------------|
-| `/` or `/vnc.html` | noVNC (5910) | Web-based VNC access |
-| `/api/*` | OSWorld Server (5000) | Main API server |
-| `/vlc/*` | VLC HTTP (8100) | VLC media player control |
-| `/chrome/*` | Chrome CDP (9222) | Chrome DevTools Protocol |
-| `/websockify` | websockify (5910) | VNC WebSocket connection |
-
-### Exposed Ports
-
-| Port | Service | Description |
-|------|---------|-------------|
-| 8000 | Caddy | Reverse proxy (primary access point) |
-| 9222 | Chrome DevTools | Chrome remote debugging (direct access) |
-
-### Internal Ports (not exposed by default)
-
-| Port | Service | Description |
-|------|---------|-------------|
-| 5000 | OSWorld Server | Main API server (Flask) |
-| 5900 | x11vnc | VNC server |
-| 5910 | noVNC/websockify | Web-based VNC |
-| 8100 | VLC HTTP | VLC media player control |
-
-## API Endpoints
-
-### Server Status
-```bash
-curl http://localhost:8000/api/version
+┌─────────────────────────────────────────────────────────────┐
+│                     Docker Container                         │
+│                        (systemd)                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                    Caddy :8000                       │    │
+│  │  ┌─────────┬────────┬────────┬─────────┬─────────┐  │    │
+│  │  │ /vnc/*  │ /api/* │/chrome/│  /vlc/* │    /    │  │    │
+│  │  └────┬────┴───┬────┴───┬────┴────┬────┴────┬────┘  │    │
+│  └───────┼────────┼────────┼─────────┼─────────┼───────┘    │
+│          │        │        │         │         │            │
+│          ▼        ▼        ▼         ▼         ▼            │
+│      ┌──────┐ ┌──────┐ ┌──────┐ ┌───────┐ ┌────────┐       │
+│      │noVNC │ │Server│ │Chrome│ │  VLC  │ │Redirect│       │
+│      │:5910 │ │:5000 │ │:9222 │ │ :8100 │ │→noVNC  │       │
+│      └──────┘ └──────┘ └──────┘ └───────┘ └────────┘       │
+│          │                                                  │
+│          ▼                                                  │
+│      ┌──────────────────────────────────────────────┐      │
+│      │              GNOME Shell Desktop             │      │
+│      │                   (mutter)                   │      │
+│      │  ┌──────┐ ┌──────┐ ┌──────┐ ┌──────────┐   │      │
+│      │  │Chrome│ │ VLC  │ │ GIMP │ │LibreOffice│   │      │
+│      │  └──────┘ └──────┘ └──────┘ └──────────┘   │      │
+│      └──────────────────────────────────────────────┘      │
+│                          │                                  │
+│                          ▼                                  │
+│      ┌──────────────────────────────────────────────┐      │
+│      │              Xvfb :0 (1920x1080)             │      │
+│      └──────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Screenshot
-```bash
-curl http://localhost:8000/api/screenshot --output screenshot.png
-```
+## Why GNOME Shell Instead of Unity?
 
-### Execute Command
-```bash
-curl -X POST http://localhost:8000/api/execute \
-  -H "Content-Type: application/json" \
-  -d '{"command": "ls -la", "shell": true}'
-```
+The original OSWorld QEMU VM runs Ubuntu 22.04 with **GNOME Shell 42.9**, not Unity. This Docker image now uses the same desktop environment to ensure:
 
-### Get Accessibility Tree
-```bash
-curl http://localhost:8000/api/accessibility
-```
+1. **Identical UI behavior** - Same dock, animations, and click responsiveness
+2. **Same application integration** - Ubuntu Dock extension matches the original
+3. **Better compatibility** - GNOME Shell is the standard Ubuntu 22.04 desktop
 
-### Launch Application
-```bash
-curl -X POST http://localhost:8000/api/setup/launch \
-  -H "Content-Type: application/json" \
-  -d '{"command": ["google-chrome", "--no-sandbox"]}'
-```
+## Systemd Requirement
 
-## Verification
+GNOME Shell requires systemd's logind service for session management. The Docker container runs systemd as PID 1, which requires:
 
-Run the verification script to ensure all components are working:
-
-```bash
-chmod +x verify.sh
-./verify.sh
-```
-
-Or run inside the container:
-```bash
-docker exec osworld /usr/local/bin/verify-apps.sh
-```
-
-## Credentials
-
-- **Username**: `user`
-- **Password**: `password`
-
-## Configuration Details
-
-### Unity Desktop
-- Unity launcher with pre-configured application shortcuts
-- Compiz window manager with Unity shell plugin
-- Ubuntu Jammy Jellyfish wallpaper
-
-### Chrome Configuration
-- Remote debugging enabled (internal port 9223, forwarded to 0.0.0.0:9222 via socat)
-- `--no-sandbox` flag required for Docker containers
-- Password manager disabled
-- Autofill disabled
-- Sync disabled
-
-### VLC Configuration
-- HTTP interface enabled
-- HTTP password: `password`
-- HTTP port: 8100 (internal), accessible via `/vlc/` path on port 8000
-
-### VS Code Configuration
-- Workspace trust disabled
-- Telemetry disabled
-
-### LibreOffice Configuration
-- Default save formats set to Microsoft Office formats (.docx, .xlsx, .pptx)
-
-### Thunderbird Configuration
-- Accessibility tree enabled via: `gsettings set org.gnome.desktop.interface toolkit-accessibility true`
-
-## Chinese Version (Dockerfile.chinese)
-
-The Chinese version includes:
-
-- **System locale**: Simplified Chinese (zh_CN.UTF-8)
-- **Timezone**: Asia/Shanghai
-- **Chinese fonts**: Noto Sans CJK, WenQuanYi fonts
-- **Chinese user directories**: 桌面, 文档, 下载, 图片, 视频, 音乐
-
-### Chinese UI Status
-
-| Application | Chinese UI |
-|-------------|------------|
-| Ubuntu/Unity Desktop | ✅ Chinese |
-| LibreOffice | ✅ Chinese |
-| Google Chrome | ✅ Chinese |
-| GIMP | ✅ Chinese |
-| VS Code | ✅ Chinese (extension auto-installed) |
-| Thunderbird | ✅ Chinese |
-| VLC | ⚠️ English (known locale issues in Docker) |
-
-## Comparison with QEMU-based OSWorld
-
-This Docker image provides a similar environment to the QEMU-based OSWorld but with some differences:
-
-| Feature | Docker | QEMU |
-|---------|--------|------|
-| Desktop Environment | Unity | Unity |
-| Startup time | Fast (~40s) | Slower (~60s) |
-| Resource usage | Lower | Higher |
-| Nested virtualization | Not required | Required (KVM) |
-| Snapshot support | Via Docker commits | Native QEMU snapshots |
-| Network isolation | Docker networking | QEMU user networking |
+- `--privileged` flag
+- `--cgroupns=host` for cgroup namespace
+- `-v /sys/fs/cgroup:/sys/fs/cgroup:rw` for cgroup filesystem access
 
 ## Troubleshooting
 
-### VNC not connecting
+### Container not starting
+Ensure you're using the correct Docker run flags with systemd requirements.
+
+### Black screen in VNC
+Wait a few seconds for GNOME Shell to fully initialize. Check logs with:
 ```bash
-# Check if Xvfb is running
-docker exec osworld pgrep Xvfb
-
-# Check if x11vnc is running
-docker exec osworld pgrep x11vnc
-
-# Restart services
-docker exec osworld /usr/local/bin/entrypoint.sh
+docker logs osworld
 ```
 
-### Unity launcher not showing
+### Services not running
+Check systemd service status:
 ```bash
-# Restart compiz to reload Unity shell
-docker exec -u user osworld bash -c "export DISPLAY=:0 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && pkill compiz; sleep 2; compiz --replace ccp &"
+docker exec osworld systemctl status gnome-session xvfb x11vnc novnc osworld caddy
 ```
 
-### OSWorld server not responding
-```bash
-# Check server logs
-docker exec osworld cat /home/user/server/server.log
+## Comparison with Original OSWorld VM
 
-# Restart server
-docker exec osworld pkill -f "python3 main.py"
-docker exec osworld su - user -c "cd /home/user/server && python3 main.py &"
-```
-
-### Applications not launching
-```bash
-# Check DISPLAY variable
-docker exec osworld echo $DISPLAY
-
-# Test X server
-docker exec -u user osworld xdotool getmouselocation
-```
-
-### Chrome debug port not accessible
-```bash
-# Check if socat is forwarding the port
-docker exec osworld pgrep socat
-
-# Test Chrome CDP directly
-curl http://localhost:9222/json
-```
+| Feature | Original QEMU VM | Docker Container |
+|---------|------------------|------------------|
+| Base OS | Ubuntu 22.04.3 LTS | Ubuntu 22.04 LTS |
+| Desktop | GNOME Shell 42.9 | GNOME Shell 42.9 |
+| Display Manager | GDM3 | systemd service |
+| Init System | systemd | systemd |
+| Hardware | QEMU/KVM | Docker/containerd |
 
 ## License
 
-This Docker configuration is provided as-is for OSWorld benchmark purposes.
+This project is for research and educational purposes.
