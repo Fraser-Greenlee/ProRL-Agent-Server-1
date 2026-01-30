@@ -44,7 +44,7 @@ def parse_args():
         default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json"
     )
     parser.add_argument("--max_steps_per_trajectory", type=int, default=100)
-    parser.add_argument("--max_steps_per_goal", type=int, default=5)
+    parser.add_argument("--max_steps_per_goal", type=int, default=10)
 
     # OpenAIWrapper
     parser.add_argument("--model_name", type=str)
@@ -74,15 +74,6 @@ if __name__ == "__main__":
     args = parse_args()
     asyncio.run(main(args))
 
-
-# How to run (interactive session)
-# 1. Run parser server (+ vLLM server)
-#   cd ~/lustre/cua/prorl-agent-server/cua/scripts; sbatch run_models.sbatch
-# 2. Check the parser server / vLLM server log to fetch node names
-# 3. Boot kvm-writable CPU node
-#   cd ~/lustre/cua/prorl-agent-server/cua/scripts; bash debug_interactive.sh
-# 4. Run data collection script with
-#   python debug_collect_trajectories.py --parser_node=pool0-02237 --explorer_node=pool0-03094
 
 
 

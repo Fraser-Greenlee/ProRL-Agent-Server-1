@@ -14,8 +14,8 @@ from typing import Optional, Dict, Any
 import ipdb
 
 from cua.debug.util import bytes_to_base64
-from cua.modules.module_uitars_controller import UITarsController
-from cua.modules.prev_openai_controller import OpenAIController
+from cua.modules.debug_uitars_controller import UITarsController
+from cua.modules.debug_openai_controller import OpenAIController
 # from cua.modules.module_parser_controller import ParserController
 from openhands.core.logger import openhands_logger
 from openhands.events.action.os import OSWorldInteractiveAction
@@ -188,10 +188,14 @@ class DataCollector:
             goal_idx = len(trajectory['goals'])
             prev_goal_intents = [g['goal_intent'] for g in trajectory['goals']]
             prev_goals = [g['goal'] for g in trajectory['goals']]
+            prev_actor_infos = [g["actions"][-1]["action_generation"]["thought"] for g in trajectory['goals']]
 
             # generate goal
-            goal_intent, goal = self.openai_controller.generate_goal_with_persona(
-                screenshot_bytes, persona, prev_goal_intents, prev_goals
+            # goal_intent, goal = self.openai_controller.generate_goal_with_persona(
+            #     screenshot_bytes, persona, prev_goal_intents, prev_goals
+            # )
+            goal_intent, goal = self.openai_controller.generate_goal_with_osworld_config(
+                screenshot_bytes, job_details.osworld_setup["config"], prev_goal_intents, prev_goals, prev_actor_infos
             )
 
             # initialize steps_for_this_goal: a container to store trajectory for this goal
@@ -215,7 +219,7 @@ class DataCollector:
                 EnvController.execute_pyautogui_command(job_details.runtime, pyautogui_command)
 
                 # wait for UI to update
-                time.sleep(4.5)
+                time.sleep(3.0)
 
                 # update steps_for_this_goal with the current screenshot & action_dict_list
                 steps_for_this_goal['actions'].append({
@@ -231,7 +235,7 @@ class DataCollector:
                 save_image(screenshot_bytes, image_filename, logger)
 
                 # if the executed action involves "finished", break the action generation loop
-                # we still need to save new screenshot since the pyautogui_command might involve actions other than
+                # we still need to save a new screenshot since the pyautogui_command might involve actions other than
                 # "finished".
                 if any(action_dict["action_type"] == "finished" for action_dict in action_generation["parsed_actions"]):
                     break
@@ -243,7 +247,7 @@ class DataCollector:
             import copy
             previous_steps = copy.deepcopy(steps_for_this_goal)
             previous_steps["actions"] = [{"screenshot": a['screenshot'], "pyautogui_command": a['pyautogui_command'], "action_generation": a['action_generation']} for a in previous_steps["actions"]]
-            ipdb.set_trace() # to print out results:
+            ipdb.set_trace()
             pass
 
 

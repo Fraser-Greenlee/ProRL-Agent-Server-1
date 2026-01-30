@@ -18,7 +18,7 @@ JOB_ID=$(sbatch --parsable \
     --error=/dev/null \
     --wrap="srun --container-image=$IMAGE --container-mounts=/lustre:/lustre sleep infinity")
 
-# for GPU reservation
+# for GPU reservation - note: the container image for GPU node is not ready yet
 #IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_vllm.sqsh"
 #JOB_ID=$(sbatch --parsable \
 #    --job-name=kvm_interactive \

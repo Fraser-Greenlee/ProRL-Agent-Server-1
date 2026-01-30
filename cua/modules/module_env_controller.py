@@ -7,6 +7,10 @@ from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWor
 from openhands.storage import get_file_store
 from openhands.core.logger import openhands_logger
 
+
+# NOTE: this is just a dummy class for now, plan to reuse them for parallel processing
+
+
 # Create a child logger
 logger = openhands_logger.getChild('env_controller')
 

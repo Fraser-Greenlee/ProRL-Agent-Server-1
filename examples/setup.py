@@ -1024,6 +1024,7 @@ class SetupController:
 
         logger.error("Failed to execute command.")
         return None
+
     def _update_browse_history_setup(self, **config):
         cache_path = os.path.join(self.cache_dir, "history_new.sqlite")
         db_url = "https://huggingface.co/datasets/xlangai/ubuntu_osworld_file_cache/resolve/main/chrome/44ee5668-ecd5-4366-a6ce-c1c9b8d4e938/history_empty.sqlite?download=true"

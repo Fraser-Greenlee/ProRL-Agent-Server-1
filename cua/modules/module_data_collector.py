@@ -1,5 +1,7 @@
 from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWorldSingularityRuntime
 
+# NOTE: this is just a dummy class for now, plan to reuse them for parallel processing
+
 
 class ModuleDataCollector:
     """
