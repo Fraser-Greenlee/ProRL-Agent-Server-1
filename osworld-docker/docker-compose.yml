@@ -9,8 +9,24 @@ services:
     container_name: osworld-linux
     hostname: osworld
     
-    # Required for X11 and desktop environment
-    privileged: true
+    # Required capabilities for systemd/GNOME Shell (replaces privileged: true)
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    cgroup: host
+    
+    # Tmpfs mounts required for systemd
+    tmpfs:
+      - /run
+      - /run/lock
+    
+    # Cgroup mount for systemd
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      # Mount for persistent data (optional)
+      - osworld-data:/home/user/Documents
+      # Mount for custom files (optional)
+      # - ./files:/home/user/files:rw
     
     # Environment variables
     environment:
@@ -22,27 +38,18 @@ services:
       - VNC_PORT=5900
       - NOVNC_PORT=5910
       - CHROME_DEBUG_PORT=9222
-      - VLC_HTTP_PORT=8080
+      - VLC_HTTP_PORT=8100
     
-    # Port mappings
+    # Port mappings - Caddy proxy on 8000
     ports:
-      # OSWorld Server API
-      - "5000:5000"
-      # VNC direct access
-      - "5900:5900"
-      # noVNC web interface
-      - "5910:5910"
+      # Caddy reverse proxy (primary access point)
+      - "8000:8000"
       # Chrome DevTools Protocol
       - "9222:9222"
-      # VLC HTTP interface
-      - "8080:8080"
-    
-    # Volume mounts (optional)
-    volumes:
-      # Mount for persistent data (optional)
-      - osworld-data:/home/user/Documents
-      # Mount for custom files (optional)
-      # - ./files:/home/user/files:rw
+      # Direct access (optional)
+      # - "5000:5000"   # OSWorld API
+      # - "5900:5900"   # VNC
+      # - "5910:5910"   # noVNC
     
     # Shared memory for Chrome
     shm_size: 2g
@@ -57,7 +64,7 @@ services:
     
     # Health check
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/version"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/screenshot"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -65,6 +72,32 @@ services:
     
     # Restart policy
     restart: unless-stopped
+
+  # Chinese version (optional - uncomment to use)
+  # osworld-zh:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.chinese-gnome
+  #   image: osworld-linux-zh:latest
+  #   container_name: osworld-linux-zh
+  #   hostname: osworld-zh
+  #   cap_add:
+  #     - SYS_ADMIN
+  #     - NET_ADMIN
+  #   cgroup: host
+  #   tmpfs:
+  #     - /run
+  #     - /run/lock
+  #   volumes:
+  #     - /sys/fs/cgroup:/sys/fs/cgroup:rw
+  #   environment:
+  #     - DISPLAY=:0
+  #     - TZ=Asia/Shanghai
+  #   ports:
+  #     - "8001:8000"
+  #     - "9223:9222"
+  #   shm_size: 2g
+  #   restart: unless-stopped
 
 volumes:
   osworld-data:

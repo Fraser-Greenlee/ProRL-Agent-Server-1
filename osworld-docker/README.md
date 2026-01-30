@@ -22,8 +22,7 @@ This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with GN
 | Image | Dockerfile | Description |
 |-------|------------|-------------|
 | `osworld-linux` | `Dockerfile` | GNOME Shell (English UI) - matches original OSWorld VM |
-| `osworld-linux-zh` | `Dockerfile.chinese` | Simplified Chinese UI (简体中文) |
-| `osworld-linux-unity` | `Dockerfile.unity` | Legacy Unity desktop (not recommended) |
+| `osworld-linux-zh` | `Dockerfile.chinese-gnome` | Simplified Chinese UI (简体中文) |
 
 ### Installed Applications
 
@@ -51,30 +50,45 @@ cd osworld-docker
 # Build the GNOME Shell image (recommended - matches original OSWorld VM)
 docker build -t osworld-linux .
 
-# Chinese version (coming soon)
-docker build -t osworld-linux-zh -f Dockerfile.chinese .
-```
-
-### Run with Docker
-
-The GNOME Shell image requires systemd, which needs additional Docker flags:
-
-```bash
-docker run -d \
-  --name osworld \
-  --privileged \
-  --cgroupns=host \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  --shm-size=2g \
-  -p 8000:8000 \
-  -p 9222:9222 \
-  osworld-linux
+# Chinese version
+docker build -t osworld-linux-zh -f Dockerfile.chinese-gnome .
 ```
 
 ### Run with Docker Compose (Recommended)
 
 ```bash
 docker-compose up -d
+```
+
+### Run with Docker
+
+```bash
+docker run -d --name osworld \
+  --cap-add SYS_ADMIN \
+  --cap-add NET_ADMIN \
+  --cgroupns=host \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  --tmpfs /run \
+  --tmpfs /run/lock \
+  --shm-size=2g \
+  -p 8000:8000 \
+  -p 9222:9222 \
+  osworld-linux
+```
+
+For the Chinese version:
+```bash
+docker run -d --name osworld-zh \
+  --cap-add SYS_ADMIN \
+  --cap-add NET_ADMIN \
+  --cgroupns=host \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  --tmpfs /run \
+  --tmpfs /run/lock \
+  --shm-size=2g \
+  -p 8000:8000 \
+  -p 9222:9222 \
+  osworld-linux-zh
 ```
 
 ## Accessing the Environment
@@ -162,18 +176,22 @@ The original OSWorld QEMU VM runs Ubuntu 22.04 with **GNOME Shell 42.9**, not Un
 2. **Same application integration** - Ubuntu Dock extension matches the original
 3. **Better compatibility** - GNOME Shell is the standard Ubuntu 22.04 desktop
 
-## Systemd Requirement
+## Container Requirements
 
-GNOME Shell requires systemd's logind service for session management. The Docker container runs systemd as PID 1, which requires:
+The container uses systemd as init system (required for GNOME Shell's logind dependency). This requires:
 
-- `--privileged` flag
-- `--cgroupns=host` for cgroup namespace
-- `-v /sys/fs/cgroup:/sys/fs/cgroup:rw` for cgroup filesystem access
+- `--cap-add SYS_ADMIN` - For systemd cgroup management
+- `--cap-add NET_ADMIN` - For network namespace operations
+- `--cgroupns=host` - For cgroup namespace access
+- `-v /sys/fs/cgroup:/sys/fs/cgroup:rw` - For cgroup filesystem access
+- `--tmpfs /run` and `--tmpfs /run/lock` - For systemd runtime directories
+
+**Note**: `--privileged` is NOT required.
 
 ## Troubleshooting
 
 ### Container not starting
-Ensure you're using the correct Docker run flags with systemd requirements.
+Ensure you're using the correct Docker run flags with the required capabilities.
 
 ### Black screen in VNC
 Wait a few seconds for GNOME Shell to fully initialize. Check logs with:

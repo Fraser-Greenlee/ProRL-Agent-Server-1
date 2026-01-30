@@ -2,8 +2,8 @@
 # Replicates Ubuntu 22.04 with GNOME Shell desktop (same as original OSWorld QEMU VM)
 # Uses systemd as init system to support GNOME Shell's logind requirements
 #
-# Build: docker build -t osworld-linux -f Dockerfile.gnome-systemd .
-# Run:   docker run -d --name osworld --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --shm-size=2g -p 8000:8000 -p 9222:9222 osworld-linux
+# Build: docker build -t osworld-linux .
+# Run:   docker run -d --name osworld --cap-add SYS_ADMIN --cap-add NET_ADMIN --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock --shm-size=2g -p 8000:8000 -p 9222:9222 osworld-linux
 
 FROM ubuntu:22.04
 
