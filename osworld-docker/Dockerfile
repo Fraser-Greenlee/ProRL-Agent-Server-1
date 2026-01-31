@@ -73,6 +73,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto \
     fonts-noto-cjk \
     fontconfig \
+    xfonts-base \
+    xfonts-100dpi \
+    xfonts-75dpi \
     git \
     unzip \
     zip \
@@ -576,6 +579,20 @@ RUN cat > /usr/share/dbus-1/services/org.gnome.Terminal.service << 'EOF'
 Name=org.gnome.Terminal
 Exec=/usr/local/bin/gnome-terminal-server-wrapper
 EOF
+
+# ============================================
+# Configure uxterm (fix font issue)
+# ============================================
+
+# uxterm needs TrueType fonts since bitmap fonts may not load
+RUN cat > /usr/local/bin/uxterm-wrapper << 'UXTERMWRAP'
+#!/bin/bash
+exec /usr/bin/uxterm -fa "DejaVu Sans Mono" -fs 10 "$@"
+UXTERMWRAP
+RUN chmod +x /usr/local/bin/uxterm-wrapper
+
+# Update desktop file if exists
+RUN sed -i 's|Exec=uxterm|Exec=/usr/local/bin/uxterm-wrapper|g' /usr/share/applications/debian-uxterm.desktop 2>/dev/null || true
 
 # ============================================
 # Configure other apps
