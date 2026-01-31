@@ -596,6 +596,14 @@ RUN mkdir -p /home/${USER_NAME}/.config/libreoffice/4/user \
 </oor:items>
 EOF
 
+# Configure GIMP to use Legacy icon theme (fixes red icon issue)
+RUN mkdir -p /home/${USER_NAME}/.config/GIMP/2.10 \
+    && cat > /home/${USER_NAME}/.config/GIMP/2.10/gimprc << 'EOF'
+# GIMP gimprc
+(icon-theme "Legacy")
+(icon-size medium)
+EOF
+
 # ============================================
 # Disable GNOME Keyring password prompt
 # ============================================
