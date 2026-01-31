@@ -22,7 +22,7 @@ from openhands.events.action.os import OSWorldInteractiveAction
 from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWorldSingularityRuntime
 
 from cua.modules.debug_env_controller import EnvController
-from cua.modules.util import load_persona_dataset, load_osworld_setup_list, save_image
+from cua.modules.util import load_persona_dataset, load_osworld_setup_list, save_image, load_example_instructions
 
 # Create a child logger
 logger = openhands_logger.getChild('data_controller')
@@ -77,7 +77,11 @@ class DataCollector:
         # load persona dataset if args.persona_dataset_path is set
         self.persona_dfs, self.persona_df_weights = load_persona_dataset(args.persona_dataset_path, logger)
 
+        # load osworld setup list
         self.osworld_setup_list = load_osworld_setup_list(args.osworld_setup_path, logger)
+
+        # load example instructions
+        self.example_instructions = load_example_instructions(args.example_instructions_path, logger)
 
 
     def sample_persona(self) -> Optional[Dict[str, Any]]:
@@ -156,14 +160,15 @@ class DataCollector:
                 'screen_size': f"{self.screen_width}x{self.screen_height}",
                 'persona': persona
             },
-            'goals': [],
+            'goal': None,
+            'steps': [],
         }
 
-        # -- "goals" will be a list of -- #
+        # -- "steps" will be a list of -- #
         # {
-        # "goal": str, "goal_intent": str,
-        # "actions": a list of
-        # {
+        #   "subgoal": str, "subgoal_intent": str,
+        #   "actions": a list of
+        #   {
         #       "screenshot": string filename of the image, screenshot before the action
         #       "screenshot_base64": str,
         #       "pyautogui_command": a string command to send to EnvController
@@ -175,7 +180,8 @@ class DataCollector:
         #               "action_type": str (e.g., "click"),
         #               "action_inputs": dict (e.g., {"start_box": "[0.089, 0.424]"}),
         #           },
-        #        }
+        #       },
+        #   },
         # }
 
         # get the initial screenshot and save it
@@ -184,33 +190,97 @@ class DataCollector:
         image_filename = trajectory_save_dir / f"0-0.png"
         save_image(screenshot_bytes, image_filename, logger)
 
-        while sum(len(g['actions']) for g in trajectory['goals']) < self.max_steps_per_trajectory:
-            goal_idx = len(trajectory['goals'])
-            prev_goal_intents = [g['goal_intent'] for g in trajectory['goals']]
-            prev_goals = [g['goal'] for g in trajectory['goals']]
-            prev_actor_infos = [g["actions"][-1]["action_generation"]["thought"] for g in trajectory['goals']]
-
-            # generate goal
-            # goal_intent, goal = self.openai_controller.generate_goal_with_persona(
-            #     screenshot_bytes, persona, prev_goal_intents, prev_goals
-            # )
-            goal_intent, goal = self.openai_controller.generate_goal_with_osworld_config(
-                screenshot_bytes, job_details.osworld_setup["config"], prev_goal_intents, prev_goals, prev_actor_infos
+        # generate goal in a separate loop
+        prev_requirements = []  # will be a list of tuple [("condition 1", "verdict 1"), ...]
+        while len(prev_requirements) < 10:
+            # sample example goals (instructions)
+            example_goals = random.sample(self.example_instructions, 1)  # for now, we sample 1 example goal
+            goal, requirements = self.openai_controller.generate_goal_with_long_horizon(
+                screenshot_bytes, job_details.osworld_setup["config"], example_goals, prev_requirements,
             )
 
+            # todo implement the verification mechanism for goal achievability using requirements
+            if goal:
+                trajectory['goal'] = goal
+                break
+
+        # # we are reverting back to loop-based as before
+        # while len(trajectory['steps']) < self.max_steps_per_trajectory:
+        #     history_images = [s['screenshot_base64'] for s in trajectory['steps']]
+        #     history_responses = [s['action_generation']['generation'] for s in trajectory['steps']]
+        #
+        #     # generate action
+        #     action_generation_result = self.uitar_controller.generate_action(
+        #         trajectory['goal'], screenshot_bytes, history_images, history_responses
+        #     )
+        #     pyautogui_command = action_generation_result["pyautogui_command"]
+        #     action_generation = action_generation_result["action_generation"]
+        #
+        #     # execute action
+        #     EnvController.execute_pyautogui_command(job_details.runtime, pyautogui_command)
+        #
+        #     # wait for UI to update
+        #     time.sleep(3.0)
+        #
+        #     # update steps_for_this_goal with the current screenshot & action_dict_list
+        #     trajectory['steps'].append({
+        #         "screenshot": str(image_filename.absolute()),
+        #         "screenshot_base64": bytes_to_base64(screenshot_bytes),
+        #         "pyautogui_command": pyautogui_command,
+        #         "action_generation": action_generation,
+        #     })
+        #
+        #     # save new screenshot
+        #     screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
+        #     image_filename = trajectory_save_dir / f"{len(trajectory['steps'])}.png"
+        #     save_image(screenshot_bytes, image_filename, logger)
+        #
+        #     # todo debugging - remove below
+        #     actgens = copy.deepcopy(trajectory['steps'])
+        #     for step in actgens:
+        #         step.pop("screenshot_base64")
+        #     ipdb.set_trace()
+        #     pass
+        #
+        #     # if the executed action involves "finished", break the action generation loop
+        #     # we still need to save a new screenshot since the pyautogui_command might involve actions other than
+        #     # "finished".
+        #     if any(action_dict["action_type"] == "finished" for action_dict in action_generation["parsed_actions"]):
+        #         break
+
+
+        # reverting back to original goal - action
+        while sum(len(g['actions']) for g in trajectory['steps']) < self.max_steps_per_trajectory:
+            subgoal_idx = len(trajectory['steps'])
+            prev_subgoal_intents = [g['subgoal_intent'] for g in trajectory['steps']]
+            prev_subgoals = [g['subgoal'] for g in trajectory['steps']]
+            prev_actor_infos = [g["actions"][-1]["action_generation"]["thought"] for g in trajectory['steps']]
+
+            subgoal_intent, subgoal = self.openai_controller.generate_subgoal(
+                screenshot_bytes, trajectory['goal'], prev_subgoal_intents, prev_subgoals, prev_actor_infos
+            )
+
+            if subgoal.lower().strip() == "done":
+                # the high-level goal is achieved.
+                break
+            elif subgoal.lower().strip() == "impossible":
+                # the high-level goal is impossible to achieve due to discrepancy with the environment
+                # (e.g., asking for non-existing files)
+                break
+
             # initialize steps_for_this_goal: a container to store trajectory for this goal
-            steps_for_this_goal = {
-                "goal": goal,
-                "goal_intent": goal_intent,
+            step_for_this_subgoal = {
+                "subgoal": subgoal,
+                "subgoal_intent": subgoal_intent,
                 "actions": []
             }
-            while len(steps_for_this_goal['actions']) < self.max_steps_per_goal:
-                history_images = [s['screenshot_base64'] for s in steps_for_this_goal['actions']]
-                history_responses = [s['action_generation']['generation'] for s in steps_for_this_goal['actions']]
+            while len(step_for_this_subgoal['actions']) < self.max_steps_per_goal:
+                history_images = [s['screenshot_base64'] for s in step_for_this_subgoal['actions']]
+                history_responses = [s['action_generation']['generation'] for s in step_for_this_subgoal['actions']]
 
                 # generate action
                 action_generation_result = self.uitar_controller.generate_action(
-                    goal, screenshot_bytes, history_images, history_responses
+                    subgoal, screenshot_bytes, history_images, history_responses
                 )
                 pyautogui_command = action_generation_result["pyautogui_command"]
                 action_generation = action_generation_result["action_generation"]
@@ -222,7 +292,7 @@ class DataCollector:
                 time.sleep(3.0)
 
                 # update steps_for_this_goal with the current screenshot & action_dict_list
-                steps_for_this_goal['actions'].append({
+                step_for_this_subgoal['actions'].append({
                     "screenshot": str(image_filename.absolute()),
                     "screenshot_base64": bytes_to_base64(screenshot_bytes),
                     "pyautogui_command": pyautogui_command,
@@ -231,7 +301,7 @@ class DataCollector:
 
                 # save new screenshot
                 screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
-                image_filename = trajectory_save_dir / f"{goal_idx}-{len(steps_for_this_goal['actions'])}.png"
+                image_filename = trajectory_save_dir / f"{subgoal_idx}-{len(step_for_this_subgoal['actions'])}.png"
                 save_image(screenshot_bytes, image_filename, logger)
 
                 # if the executed action involves "finished", break the action generation loop
@@ -241,14 +311,15 @@ class DataCollector:
                     break
 
             # save the completed steps
-            trajectory['goals'].append(steps_for_this_goal)
+            trajectory['steps'].append(step_for_this_subgoal)
 
-            # for debugging, remove screenshot_base64
+            # todo for debugging - remove below
             import copy
-            previous_steps = copy.deepcopy(steps_for_this_goal)
-            previous_steps["actions"] = [{"screenshot": a['screenshot'], "pyautogui_command": a['pyautogui_command'], "action_generation": a['action_generation']} for a in previous_steps["actions"]]
+            steps = copy.deepcopy(trajectory['steps'])
+            for step in steps:
+                for action in step['actions']:
+                    action.pop("screenshot_base64")
             ipdb.set_trace()
             pass
-
 
 

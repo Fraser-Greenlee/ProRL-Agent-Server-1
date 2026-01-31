@@ -47,9 +47,18 @@ def load_osworld_setup_list(osworld_setup_path: str, logger: openhands_logger) -
     with jsonlines.open(osworld_setup_path, 'r') as f:
         osworld_setup_list += list(f)
 
-    logger.debug("  ✓ Loaded {len(self.osworld_setup_dataset)} total osworld setup records")
+    logger.debug(f"  ✓ Loaded {len(osworld_setup_list)} total osworld setup records.")
 
     return osworld_setup_list
+
+
+def load_example_instructions(example_instruction_path: str, logger: openhands_logger) -> List[str]:
+    with open(example_instruction_path, 'r') as f:
+        example_instructions = f.read().splitlines()
+
+    logger.debug(f"  ✓ Loaded {len(example_instructions)} example instructions.")
+
+    return example_instructions
 
 
 def save_image(image_data: bytes | Image.Image, save_dir: Path | str, logger: Logger):

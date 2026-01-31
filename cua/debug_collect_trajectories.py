@@ -37,11 +37,15 @@ def parse_args():
     )
     parser.add_argument(
         "--persona_dataset_path", type=str,
-        default="/lustre/fsw/portfolios/nvr/users/yidong/data/nemotron_data/data/"
+        default="/lustre/fsw/portfolios/nvr/users/yidong/data/nemotron_data/data/",
+    )
+    parser.add_argument(
+        "--example_instructions_path", type=str,
+        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/cua/data/agentnet/processed/instructions.txt",
     )
     parser.add_argument(
         "--osworld_setup_path", type=str,
-        default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json"
+        default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json",
     )
     parser.add_argument("--max_steps_per_trajectory", type=int, default=100)
     parser.add_argument("--max_steps_per_goal", type=int, default=10)
