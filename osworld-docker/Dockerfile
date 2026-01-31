@@ -537,6 +537,26 @@ RUN sed -i 's|Exec=/usr/share/code/code|Exec=/usr/local/bin/code-wrapper|g' /usr
 RUN sed -i 's|Exec=code|Exec=/usr/local/bin/code-wrapper|g' /usr/share/applications/code.desktop 2>/dev/null || true
 
 # ============================================
+# Configure gedit (fix for Docker)
+# ============================================
+
+# gedit needs locale set for D-Bus activation
+RUN cat > /usr/local/bin/gedit-wrapper << 'GEDITWRAP'
+#!/bin/bash
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+exec /usr/bin/gedit "$@"
+GEDITWRAP
+RUN chmod +x /usr/local/bin/gedit-wrapper
+
+# Update D-Bus service file to use wrapper
+RUN cat > /usr/share/dbus-1/services/org.gnome.gedit.service << 'EOF'
+[D-BUS Service]
+Name=org.gnome.gedit
+Exec=/usr/local/bin/gedit-wrapper --gapplication-service
+EOF
+
+# ============================================
 # Configure gnome-terminal (fix for Docker)
 # ============================================
 
