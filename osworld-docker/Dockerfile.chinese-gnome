@@ -1,9 +1,9 @@
-# OSWorld Linux Environment Docker Image - GNOME Shell with systemd (Chinese)
+# OSWorld Linux Environment Docker Image - GNOME Shell (No Privileged Mode) - Chinese
 # Replicates Ubuntu 22.04 with GNOME Shell desktop (same as original OSWorld QEMU VM)
 # Simplified Chinese UI (简体中文界面)
 #
 # Build: docker build -t osworld-linux-zh -f Dockerfile.chinese-gnome .
-# Run:   docker run -d --name osworld-zh --cap-add SYS_ADMIN --cap-add NET_ADMIN --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw --tmpfs /run --tmpfs /run/lock --shm-size=2g -p 8000:8000 -p 9222:9222 osworld-linux-zh
+# Run:   docker run -d --name osworld-zh --shm-size=2g -p 8000:8000 -p 9222:9222 osworld-linux-zh
 
 FROM ubuntu:22.04
 
@@ -23,13 +23,10 @@ ENV RESOLUTION=1920x1080
 ENV COLOR_DEPTH=24
 
 # ============================================
-# Base System with systemd
+# Base System
 # ============================================
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    systemd \
-    systemd-sysv \
-    dbus \
     apt-transport-https \
     ca-certificates \
     curl \
@@ -40,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo \
     locales \
     tzdata \
+    dbus \
     dbus-x11 \
     build-essential \
     pkg-config \
@@ -51,6 +49,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     python3-gi \
     python3-gi-cairo \
+    python3-dbus \
     gir1.2-gtk-3.0 \
     xvfb \
     x11vnc \
@@ -84,15 +83,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     language-pack-gnome-zh-hans \
     && rm -rf /var/lib/apt/lists/*
 
-# Clean up unnecessary systemd services
-RUN rm -f /lib/systemd/system/multi-user.target.wants/* \
-    /etc/systemd/system/*.wants/* \
-    /lib/systemd/system/local-fs.target.wants/* \
-    /lib/systemd/system/sockets.target.wants/*udev* \
-    /lib/systemd/system/sockets.target.wants/*initctl* \
-    /lib/systemd/system/sysinit.target.wants/systemd-tmpfiles-setup* \
-    /lib/systemd/system/systemd-update-utmp*
-
 # Set Chinese locale
 RUN locale-gen zh_CN.UTF-8
 ENV LANG=zh_CN.UTF-8
@@ -111,7 +101,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ubuntu-session \
     gnome-terminal \
     gnome-screenshot \
-    gnome-software \
     nautilus \
     gedit \
     gvfs \
@@ -124,7 +113,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gnome-shell-extension-appindicator \
     gnome-shell-extension-desktop-icons-ng \
     mutter \
-    gdm3 \
     gnome-settings-daemon \
     gnome-control-center \
     adwaita-icon-theme \
@@ -200,7 +188,311 @@ RUN groupadd -g ${USER_GID} ${USER_NAME} \
 RUN mkdir -p /home/${USER_NAME}/server
 COPY server/ /home/${USER_NAME}/server/
 
-RUN pip3 install flask pyautogui pillow mss pynput psutil requests lxml
+RUN pip3 install flask pyautogui pillow mss pynput psutil requests lxml dbus-python
+
+# ============================================
+# Create Mock logind D-Bus service
+# ============================================
+
+RUN cat > /usr/local/bin/mock-logind.py << 'MOCKLOGIND'
+#!/usr/bin/env python3
+"""
+Mock logind D-Bus service for running GNOME Shell without systemd.
+Provides minimal org.freedesktop.login1 interface.
+"""
+
+import dbus
+import dbus.service
+import dbus.mainloop.glib
+from gi.repository import GLib
+import os
+
+class MockLogindManager(dbus.service.Object):
+    def __init__(self, bus):
+        self.bus = bus
+        self.bus_name = dbus.service.BusName('org.freedesktop.login1', bus)
+        dbus.service.Object.__init__(self, bus, '/org/freedesktop/login1')
+
+        # Create a session object
+        self.session = MockLogindSession(bus, '/org/freedesktop/login1/session/auto')
+        self.seat = MockLogindSeat(bus, '/org/freedesktop/login1/seat/seat0')
+        self.user = MockLogindUser(bus, '/org/freedesktop/login1/user/_1000')
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='', out_signature='a(susso)')
+    def ListSessions(self):
+        return [('auto', 1000, 'user', 'seat0', '/org/freedesktop/login1/session/auto')]
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='', out_signature='a(uso)')
+    def ListUsers(self):
+        return [(1000, 'user', '/org/freedesktop/login1/user/_1000')]
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='', out_signature='a(so)')
+    def ListSeats(self):
+        return [('seat0', '/org/freedesktop/login1/seat/seat0')]
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='s', out_signature='o')
+    def GetSession(self, session_id):
+        return '/org/freedesktop/login1/session/auto'
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='u', out_signature='o')
+    def GetUser(self, uid):
+        return '/org/freedesktop/login1/user/_1000'
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='s', out_signature='o')
+    def GetSeat(self, seat_id):
+        return '/org/freedesktop/login1/seat/seat0'
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='', out_signature='o')
+    def GetSessionByPID(self, pid=0):
+        return '/org/freedesktop/login1/session/auto'
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='u', out_signature='o')
+    def GetUserByPID(self, pid):
+        return '/org/freedesktop/login1/user/_1000'
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='ssss', out_signature='h')
+    def Inhibit(self, what, who, why, mode):
+        return os.open('/dev/null', os.O_RDONLY)
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='b', out_signature='')
+    def PowerOff(self, interactive):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='b', out_signature='')
+    def Reboot(self, interactive):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='b', out_signature='')
+    def Suspend(self, interactive):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='s', out_signature='s')
+    def CanPowerOff(self, action=''):
+        return 'yes'
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='s', out_signature='s')
+    def CanReboot(self, action=''):
+        return 'yes'
+
+    @dbus.service.method('org.freedesktop.login1.Manager',
+                         in_signature='s', out_signature='s')
+    def CanSuspend(self, action=''):
+        return 'yes'
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE,
+                         in_signature='ss', out_signature='v')
+    def Get(self, interface, prop):
+        props = {
+            'IdleHint': False,
+            'IdleSinceHint': dbus.UInt64(0),
+            'IdleSinceHintMonotonic': dbus.UInt64(0),
+            'PreparingForShutdown': False,
+            'PreparingForSleep': False,
+            'Docked': True,
+            'LidClosed': False,
+            'OnExternalPower': True,
+        }
+        return props.get(prop, '')
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE,
+                         in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface):
+        return {
+            'IdleHint': False,
+            'IdleSinceHint': dbus.UInt64(0),
+            'IdleSinceHintMonotonic': dbus.UInt64(0),
+            'PreparingForShutdown': False,
+            'PreparingForSleep': False,
+            'Docked': True,
+            'LidClosed': False,
+            'OnExternalPower': True,
+        }
+
+
+class MockLogindSession(dbus.service.Object):
+    def __init__(self, bus, path):
+        dbus.service.Object.__init__(self, bus, path)
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='', out_signature='')
+    def Activate(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='', out_signature='')
+    def Lock(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='', out_signature='')
+    def Unlock(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='b', out_signature='')
+    def SetIdleHint(self, idle):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='s', out_signature='')
+    def SetType(self, type_):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='uu', out_signature='')
+    def TakeControl(self, force=0, uid=0):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='', out_signature='')
+    def ReleaseControl(self):
+        pass
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='uu', out_signature='hb')
+    def TakeDevice(self, major, minor):
+        # Return a file descriptor and whether it's paused
+        fd = os.open('/dev/null', os.O_RDWR)
+        return (fd, False)
+
+    @dbus.service.method('org.freedesktop.login1.Session',
+                         in_signature='uu', out_signature='')
+    def ReleaseDevice(self, major, minor):
+        pass
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE,
+                         in_signature='ss', out_signature='v')
+    def Get(self, interface, prop):
+        props = {
+            'Id': 'auto',
+            'User': (dbus.UInt32(1000), '/org/freedesktop/login1/user/_1000'),
+            'Name': 'user',
+            'Timestamp': dbus.UInt64(0),
+            'TimestampMonotonic': dbus.UInt64(0),
+            'VTNr': dbus.UInt32(1),
+            'Seat': ('seat0', '/org/freedesktop/login1/seat/seat0'),
+            'TTY': '',
+            'Display': ':0',
+            'Remote': False,
+            'RemoteHost': '',
+            'RemoteUser': '',
+            'Service': '',
+            'Desktop': 'ubuntu',
+            'Scope': 'session-auto.scope',
+            'Leader': dbus.UInt32(os.getpid()),
+            'Audit': dbus.UInt32(0),
+            'Type': 'x11',
+            'Class': 'user',
+            'Active': True,
+            'State': 'active',
+            'IdleHint': False,
+            'IdleSinceHint': dbus.UInt64(0),
+            'IdleSinceHintMonotonic': dbus.UInt64(0),
+            'LockedHint': False,
+        }
+        return props.get(prop, '')
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE,
+                         in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface):
+        return {
+            'Id': 'auto',
+            'User': (dbus.UInt32(1000), '/org/freedesktop/login1/user/_1000'),
+            'Name': 'user',
+            'Active': True,
+            'State': 'active',
+            'Type': 'x11',
+            'Class': 'user',
+            'Display': ':0',
+            'Seat': ('seat0', '/org/freedesktop/login1/seat/seat0'),
+        }
+
+
+class MockLogindSeat(dbus.service.Object):
+    def __init__(self, bus, path):
+        dbus.service.Object.__init__(self, bus, path)
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE,
+                         in_signature='ss', out_signature='v')
+    def Get(self, interface, prop):
+        props = {
+            'Id': 'seat0',
+            'ActiveSession': ('auto', '/org/freedesktop/login1/session/auto'),
+            'CanGraphical': True,
+            'CanMultiSession': True,
+            'CanTTY': True,
+            'Sessions': [('auto', '/org/freedesktop/login1/session/auto')],
+        }
+        return props.get(prop, '')
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE,
+                         in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface):
+        return {
+            'Id': 'seat0',
+            'ActiveSession': ('auto', '/org/freedesktop/login1/session/auto'),
+            'CanGraphical': True,
+        }
+
+
+class MockLogindUser(dbus.service.Object):
+    def __init__(self, bus, path):
+        dbus.service.Object.__init__(self, bus, path)
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE,
+                         in_signature='ss', out_signature='v')
+    def Get(self, interface, prop):
+        props = {
+            'UID': dbus.UInt32(1000),
+            'GID': dbus.UInt32(1000),
+            'Name': 'user',
+            'Timestamp': dbus.UInt64(0),
+            'TimestampMonotonic': dbus.UInt64(0),
+            'RuntimePath': '/run/user/1000',
+            'Slice': 'user-1000.slice',
+            'Display': ('auto', '/org/freedesktop/login1/session/auto'),
+            'State': 'active',
+            'Sessions': [('auto', '/org/freedesktop/login1/session/auto')],
+            'IdleHint': False,
+            'IdleSinceHint': dbus.UInt64(0),
+            'IdleSinceHintMonotonic': dbus.UInt64(0),
+            'Linger': False,
+        }
+        return props.get(prop, '')
+
+    @dbus.service.method(dbus.PROPERTIES_IFACE,
+                         in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface):
+        return {
+            'UID': dbus.UInt32(1000),
+            'Name': 'user',
+            'State': 'active',
+        }
+
+
+if __name__ == '__main__':
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SystemBus()
+    manager = MockLogindManager(bus)
+    print("Mock logind service started")
+    loop = GLib.MainLoop()
+    loop.run()
+MOCKLOGIND
+RUN chmod +x /usr/local/bin/mock-logind.py
 
 # ============================================
 # Configure Chrome
@@ -238,7 +530,7 @@ EOF
 RUN mkdir -p /home/${USER_NAME}/.config/google-chrome-debug
 
 # ============================================
-# Configure VLC and other apps
+# Configure other apps
 # ============================================
 
 RUN mkdir -p /home/${USER_NAME}/.config/vlc \
@@ -279,169 +571,35 @@ RUN cat > /etc/caddy/Caddyfile << 'CADDYFILE'
 :8000 {
     @root path /
     @vnchtml path /vnc.html
-    
+
     redir @root /vnc/vnc.html 302
     redir @vnchtml /vnc/vnc.html 302
-    
+
     handle /vnc/* {
         uri strip_prefix /vnc
         reverse_proxy localhost:5910
     }
-    
+
     handle /websockify {
         reverse_proxy localhost:5910
     }
-    
+
     handle /api/* {
         uri strip_prefix /api
         reverse_proxy localhost:5000
     }
-    
+
     handle /vlc/* {
         uri strip_prefix /vlc
         reverse_proxy localhost:8100
     }
-    
+
     handle /chrome/* {
         uri strip_prefix /chrome
         reverse_proxy localhost:9222
     }
 }
 CADDYFILE
-
-# ============================================
-# Configure GDM for auto-login
-# ============================================
-
-RUN mkdir -p /etc/gdm3 && cat > /etc/gdm3/custom.conf << 'EOF'
-[daemon]
-AutomaticLoginEnable=true
-AutomaticLogin=user
-
-[security]
-
-[xdmcp]
-
-[chooser]
-
-[debug]
-EOF
-
-# ============================================
-# Create systemd services
-# ============================================
-
-RUN cat > /etc/systemd/system/xvfb.service << 'EOF'
-[Unit]
-Description=Xvfb virtual framebuffer
-After=systemd-user-sessions.service
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/Xvfb :0 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-RUN cat > /etc/systemd/system/x11vnc.service << 'EOF'
-[Unit]
-Description=x11vnc VNC server
-After=xvfb.service
-Requires=xvfb.service
-
-[Service]
-Type=simple
-User=user
-Environment=DISPLAY=:0
-ExecStart=/usr/bin/x11vnc -display :0 -rfbport 5900 -forever -shared -nopw -xkb -noshm -noxdamage
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-RUN cat > /etc/systemd/system/novnc.service << 'EOF'
-[Unit]
-Description=noVNC websocket proxy
-After=x11vnc.service
-Requires=x11vnc.service
-
-[Service]
-Type=simple
-User=user
-ExecStart=/usr/bin/websockify --web=/usr/share/novnc 5910 localhost:5900
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-RUN cat > /etc/systemd/system/gnome-session.service << 'EOF'
-[Unit]
-Description=GNOME Session
-After=xvfb.service systemd-logind.service
-Requires=xvfb.service
-
-[Service]
-Type=simple
-User=user
-Environment=DISPLAY=:0
-Environment=XDG_SESSION_TYPE=x11
-Environment=XDG_CURRENT_DESKTOP=ubuntu:GNOME
-Environment=GNOME_SHELL_SESSION_MODE=ubuntu
-Environment=LANG=zh_CN.UTF-8
-Environment=LANGUAGE=zh_CN:zh
-Environment=LC_ALL=zh_CN.UTF-8
-ExecStartPre=/bin/sleep 2
-ExecStart=/usr/bin/gnome-shell --x11
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-RUN cat > /etc/systemd/system/osworld.service << 'EOF'
-[Unit]
-Description=OSWorld API Server
-After=gnome-session.service
-Requires=gnome-session.service
-
-[Service]
-Type=simple
-User=user
-WorkingDirectory=/home/user/server
-Environment=DISPLAY=:0
-ExecStart=/usr/bin/python3 main.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-RUN cat > /etc/systemd/system/chrome-forwarder.service << 'EOF'
-[Unit]
-Description=Chrome Debug Port Forwarder
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/socat TCP-LISTEN:9222,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9223
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-RUN systemctl enable xvfb.service \
-    && systemctl enable x11vnc.service \
-    && systemctl enable novnc.service \
-    && systemctl enable gnome-session.service \
-    && systemctl enable osworld.service \
-    && systemctl enable chrome-forwarder.service \
-    && systemctl enable caddy.service \
-    && systemctl set-default multi-user.target
 
 # ============================================
 # Configure GNOME Shell settings via dconf
@@ -485,15 +643,118 @@ DCONF_EOF
 RUN dconf update
 
 # ============================================
-# Set ownership and finish
+# Create entrypoint script
+# ============================================
+
+RUN cat > /usr/local/bin/entrypoint.sh << 'ENTRYPOINT_EOF'
+#!/bin/bash
+set -e
+
+export DISPLAY=:0
+export XDG_RUNTIME_DIR=/run/user/1000
+export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=ubuntu:GNOME
+export GNOME_SHELL_SESSION_MODE=ubuntu
+export LANG=zh_CN.UTF-8
+export LANGUAGE=zh_CN:zh
+export LC_ALL=zh_CN.UTF-8
+
+# Create runtime directories
+mkdir -p /run/user/1000
+chmod 700 /run/user/1000
+chown user:user /run/user/1000
+
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix
+
+mkdir -p /run/dbus
+chmod 755 /run/dbus
+
+echo "Starting D-Bus system daemon..."
+rm -f /run/dbus/pid
+dbus-daemon --system --fork
+sleep 1
+
+echo "Starting mock logind service..."
+python3 /usr/local/bin/mock-logind.py &
+sleep 2
+
+echo "Starting Xvfb..."
+Xvfb :0 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+sleep 2
+
+# Start dbus session for user
+echo "Starting D-Bus session..."
+su - user -c "mkdir -p /run/user/1000 && dbus-daemon --session --address=unix:path=/run/user/1000/bus --fork" 2>/dev/null || true
+sleep 1
+
+echo "Starting GNOME Shell..."
+
+# Start gnome-settings-daemon
+su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && export LANG=zh_CN.UTF-8 && /usr/libexec/gsd-xsettings &" 2>/dev/null || true
+sleep 1
+
+# Start GNOME Shell
+su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && export XDG_SESSION_TYPE=x11 && export XDG_CURRENT_DESKTOP=ubuntu:GNOME && export GNOME_SHELL_SESSION_MODE=ubuntu && export LANG=zh_CN.UTF-8 && export LANGUAGE=zh_CN:zh && export LC_ALL=zh_CN.UTF-8 && gnome-shell --x11 2>&1 | head -50 &" 2>/dev/null || true
+sleep 5
+
+# Wait for GNOME Shell to be ready
+for i in $(seq 1 30); do
+    if pgrep -x gnome-shell > /dev/null; then
+        echo "GNOME Shell started successfully"
+        break
+    fi
+    echo "Waiting for GNOME Shell... ($i)"
+    sleep 1
+done
+
+# Start x11vnc
+echo "Starting x11vnc..."
+su - user -c "x11vnc -display :0 -rfbport 5900 -forever -shared -nopw -xkb -noshm -noxdamage &"
+sleep 2
+
+# Start noVNC
+echo "Starting noVNC..."
+su - user -c "websockify --web=/usr/share/novnc 5910 localhost:5900 &"
+sleep 1
+
+# Start Chrome debug port forwarder
+echo "Starting Chrome debug port forwarder..."
+socat TCP-LISTEN:9222,fork,reuseaddr,bind=0.0.0.0 TCP:127.0.0.1:9223 &
+sleep 1
+
+# Start OSWorld server
+echo "Starting OSWorld server..."
+su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && export LANG=zh_CN.UTF-8 && cd /home/user/server && python3 main.py" &
+sleep 2
+
+# Start Caddy
+echo "Starting Caddy..."
+caddy start --config /etc/caddy/Caddyfile &
+sleep 1
+
+echo ""
+echo "============================================"
+echo "OSWorld Docker Container Started (Chinese)"
+echo "============================================"
+echo "Access: http://localhost:8000/vnc.html"
+echo "============================================"
+
+# Keep container running
+tail -f /dev/null
+ENTRYPOINT_EOF
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# ============================================
+# Set ownership
 # ============================================
 
 RUN chown -R ${USER_NAME}:${USER_NAME} /home/${USER_NAME}
 
 EXPOSE 8000 5000 5900 5910 9222 8100
 
-VOLUME ["/sys/fs/cgroup"]
+WORKDIR /home/${USER_NAME}
 
-STOPSIGNAL SIGRTMIN+3
-
-ENTRYPOINT ["/lib/systemd/systemd"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

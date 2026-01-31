@@ -8,26 +8,10 @@ services:
     image: osworld-linux:latest
     container_name: osworld-linux
     hostname: osworld
-    
-    # Required capabilities for systemd/GNOME Shell (replaces privileged: true)
-    cap_add:
-      - SYS_ADMIN
-      - NET_ADMIN
-    cgroup: host
-    
-    # Tmpfs mounts required for systemd
-    tmpfs:
-      - /run
-      - /run/lock
-    
-    # Cgroup mount for systemd
-    volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
-      # Mount for persistent data (optional)
-      - osworld-data:/home/user/Documents
-      # Mount for custom files (optional)
-      # - ./files:/home/user/files:rw
-    
+
+    # No privileged mode or special capabilities required!
+    # This image uses a mock logind service to run GNOME Shell without systemd
+
     # Environment variables
     environment:
       - DISPLAY=:0
@@ -39,7 +23,7 @@ services:
       - NOVNC_PORT=5910
       - CHROME_DEBUG_PORT=9222
       - VLC_HTTP_PORT=8100
-    
+
     # Port mappings - Caddy proxy on 8000
     ports:
       # Caddy reverse proxy (primary access point)
@@ -50,10 +34,16 @@ services:
       # - "5000:5000"   # OSWorld API
       # - "5900:5900"   # VNC
       # - "5910:5910"   # noVNC
-    
+
     # Shared memory for Chrome
     shm_size: 2g
-    
+
+    # Volumes for persistent data (optional)
+    volumes:
+      - osworld-data:/home/user/Documents
+      # Mount for custom files (optional)
+      # - ./files:/home/user/files:rw
+
     # Resource limits
     deploy:
       resources:
@@ -61,7 +51,7 @@ services:
           memory: 4G
         reservations:
           memory: 2G
-    
+
     # Health check
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5000/screenshot"]
@@ -69,7 +59,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-    
+
     # Restart policy
     restart: unless-stopped
 
@@ -81,15 +71,6 @@ services:
   #   image: osworld-linux-zh:latest
   #   container_name: osworld-linux-zh
   #   hostname: osworld-zh
-  #   cap_add:
-  #     - SYS_ADMIN
-  #     - NET_ADMIN
-  #   cgroup: host
-  #   tmpfs:
-  #     - /run
-  #     - /run/lock
-  #   volumes:
-  #     - /sys/fs/cgroup:/sys/fs/cgroup:rw
   #   environment:
   #     - DISPLAY=:0
   #     - TZ=Asia/Shanghai

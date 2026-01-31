@@ -15,7 +15,7 @@ This Docker image replicates the OSWorld Linux environment (Ubuntu 22.04 with GN
 - **VNC Access**: x11vnc + noVNC for remote desktop access
 - **OSWorld Server**: Flask-based API server for automation
 - **Caddy Reverse Proxy**: Unified access to all services on port 8000
-- **Systemd Init**: Full systemd support for GNOME Shell compatibility
+- **No Privileged Mode**: Runs without `--privileged` or `SYS_ADMIN` capability (NVCF compatible)
 
 ### Available Images
 
@@ -64,12 +64,6 @@ docker-compose up -d
 
 ```bash
 docker run -d --name osworld \
-  --cap-add SYS_ADMIN \
-  --cap-add NET_ADMIN \
-  --cgroupns=host \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  --tmpfs /run \
-  --tmpfs /run/lock \
   --shm-size=2g \
   -p 8000:8000 \
   -p 9222:9222 \
@@ -79,17 +73,13 @@ docker run -d --name osworld \
 For the Chinese version:
 ```bash
 docker run -d --name osworld-zh \
-  --cap-add SYS_ADMIN \
-  --cap-add NET_ADMIN \
-  --cgroupns=host \
-  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-  --tmpfs /run \
-  --tmpfs /run/lock \
   --shm-size=2g \
   -p 8000:8000 \
   -p 9222:9222 \
   osworld-linux-zh
 ```
+
+**Note**: No `--privileged` flag or special capabilities are required. The image uses a mock logind D-Bus service to run GNOME Shell without systemd, making it compatible with NVCF and other restricted container environments.
 
 ## Accessing the Environment
 
@@ -138,7 +128,7 @@ http://localhost:8000/vlc/
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     Docker Container                         │
-│                        (systemd)                             │
+│                  (no privileged mode)                        │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │                    Caddy :8000                       │    │
 │  │  ┌─────────┬────────┬────────┬─────────┬─────────┐  │    │
@@ -165,44 +155,54 @@ http://localhost:8000/vlc/
 │      ┌──────────────────────────────────────────────┐      │
 │      │              Xvfb :0 (1920x1080)             │      │
 │      └──────────────────────────────────────────────┘      │
+│                          │                                  │
+│                          ▼                                  │
+│      ┌──────────────────────────────────────────────┐      │
+│      │           Mock logind D-Bus Service          │      │
+│      │        (replaces systemd-logind)             │      │
+│      └──────────────────────────────────────────────┘      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Why GNOME Shell Instead of Unity?
+## Why No Privileged Mode?
 
-The original OSWorld QEMU VM runs Ubuntu 22.04 with **GNOME Shell 42.9**, not Unity. This Docker image now uses the same desktop environment to ensure:
+This image uses a **mock logind D-Bus service** instead of systemd to satisfy GNOME Shell's session management requirements. This approach:
 
-1. **Identical UI behavior** - Same dock, animations, and click responsiveness
-2. **Same application integration** - Ubuntu Dock extension matches the original
-3. **Better compatibility** - GNOME Shell is the standard Ubuntu 22.04 desktop
+1. **NVCF Compatible** - Works in NVIDIA Cloud Functions and other restricted environments
+2. **No Special Capabilities** - Doesn't require `--privileged`, `SYS_ADMIN`, or `NET_ADMIN`
+3. **Secure** - Runs with minimal container permissions
+4. **Simpler Deployment** - Just `docker run` with port mapping and shared memory
+
+The mock logind service provides the `org.freedesktop.login1` D-Bus interface that GNOME Shell expects, allowing the desktop to run normally without actual systemd.
 
 ## Container Requirements
 
-The container uses systemd as init system (required for GNOME Shell's logind dependency). This requires:
+The container only requires:
+- `--shm-size=2g` - Shared memory for Chrome (prevents crashes)
 
-- `--cap-add SYS_ADMIN` - For systemd cgroup management
-- `--cap-add NET_ADMIN` - For network namespace operations
-- `--cgroupns=host` - For cgroup namespace access
-- `-v /sys/fs/cgroup:/sys/fs/cgroup:rw` - For cgroup filesystem access
-- `--tmpfs /run` and `--tmpfs /run/lock` - For systemd runtime directories
-
-**Note**: `--privileged` is NOT required.
+Optional:
+- Volume mounts for persistent data
 
 ## Troubleshooting
 
 ### Container not starting
-Ensure you're using the correct Docker run flags with the required capabilities.
-
-### Black screen in VNC
-Wait a few seconds for GNOME Shell to fully initialize. Check logs with:
+Check the container logs:
 ```bash
 docker logs osworld
 ```
 
+### Black screen in VNC
+Wait a few seconds for GNOME Shell to fully initialize. The startup process includes:
+1. D-Bus daemon startup
+2. Mock logind service
+3. Xvfb virtual display
+4. GNOME Shell
+5. VNC/noVNC services
+
 ### Services not running
-Check systemd service status:
+Check if processes are running:
 ```bash
-docker exec osworld systemctl status gnome-session xvfb x11vnc novnc osworld caddy
+docker exec osworld ps aux | grep -E "(gnome|python|x11vnc|caddy)"
 ```
 
 ## Comparison with Original OSWorld VM
@@ -211,8 +211,8 @@ docker exec osworld systemctl status gnome-session xvfb x11vnc novnc osworld cad
 |---------|------------------|------------------|
 | Base OS | Ubuntu 22.04.3 LTS | Ubuntu 22.04 LTS |
 | Desktop | GNOME Shell 42.9 | GNOME Shell 42.9 |
-| Display Manager | GDM3 | systemd service |
-| Init System | systemd | systemd |
+| Init System | systemd | entrypoint script + mock logind |
+| Privileged Mode | N/A (VM) | Not required |
 | Hardware | QEMU/KVM | Docker/containerd |
 
 ## License
