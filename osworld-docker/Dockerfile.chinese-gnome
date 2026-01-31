@@ -56,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xdotool \
     xclip \
     xsel \
+    xterm \
     wmctrl \
     ffmpeg \
     socat \
@@ -530,6 +531,27 @@ EOF
 RUN mkdir -p /home/${USER_NAME}/.config/google-chrome-debug
 
 # ============================================
+# Configure gnome-terminal (fix for Docker)
+# ============================================
+
+# gnome-terminal needs special handling in Docker without systemd
+# Create a wrapper that launches it properly
+# Create wrapper for gnome-terminal-server with proper locale
+RUN echo '#!/bin/bash' > /usr/local/bin/gnome-terminal-server-wrapper \
+    && echo 'export LANG=zh_CN.UTF-8' >> /usr/local/bin/gnome-terminal-server-wrapper \
+    && echo 'export LC_ALL=zh_CN.UTF-8' >> /usr/local/bin/gnome-terminal-server-wrapper \
+    && echo 'export DISPLAY=${DISPLAY:-:0}' >> /usr/local/bin/gnome-terminal-server-wrapper \
+    && echo 'exec /usr/libexec/gnome-terminal-server "$@"' >> /usr/local/bin/gnome-terminal-server-wrapper \
+    && chmod +x /usr/local/bin/gnome-terminal-server-wrapper
+
+# Fix D-Bus service file to use the wrapper
+RUN cat > /usr/share/dbus-1/services/org.gnome.Terminal.service << 'EOF'
+[D-BUS Service]
+Name=org.gnome.Terminal
+Exec=/usr/local/bin/gnome-terminal-server-wrapper
+EOF
+
+# ============================================
 # Configure other apps
 # ============================================
 
@@ -561,6 +583,45 @@ RUN mkdir -p /home/${USER_NAME}/.config/libreoffice/4/user \
 <item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="FirstRun" oor:op="fuse"><value>false</value></prop></item>
 <item oor:path="/org.openoffice.Office.Common/Misc"><prop oor:name="ShowTipOfTheDay" oor:op="fuse"><value>false</value></prop></item>
 </oor:items>
+EOF
+
+# ============================================
+# Disable GNOME Keyring password prompt
+# ============================================
+
+# Create keyring directory and default keyring with empty password
+RUN mkdir -p /home/${USER_NAME}/.local/share/keyrings \
+    && echo -n "" | gnome-keyring-daemon --unlock --replace 2>/dev/null || true
+
+# Create a default keyring file (empty password)
+RUN cat > /home/${USER_NAME}/.local/share/keyrings/default << 'EOF'
+[keyring]
+display-name=Default keyring
+ctime=0
+mtime=0
+lock-on-idle=false
+lock-after=false
+EOF
+
+RUN cat > /home/${USER_NAME}/.local/share/keyrings/default.keyring << 'EOF'
+[keyring]
+display-name=Default keyring
+ctime=0
+mtime=0
+lock-on-idle=false
+lock-after=false
+EOF
+
+# Disable keyring daemon autostart for secrets component
+RUN mkdir -p /home/${USER_NAME}/.config/autostart \
+    && cat > /home/${USER_NAME}/.config/autostart/gnome-keyring-secrets.desktop << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Secret Storage Service
+Exec=/bin/true
+Hidden=true
+NoDisplay=true
+X-GNOME-Autostart-enabled=false
 EOF
 
 # ============================================
