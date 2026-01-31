@@ -580,28 +580,22 @@ EOF
 # Disable GNOME Keyring password prompt
 # ============================================
 
-# Create keyring directory and default keyring with empty password
+# Disable gnome-keyring D-Bus activation (this is the key fix)
+RUN mv /usr/share/dbus-1/services/org.gnome.keyring.service /usr/share/dbus-1/services/org.gnome.keyring.service.disabled 2>/dev/null || true \
+    && mv /usr/share/dbus-1/services/org.freedesktop.secrets.service /usr/share/dbus-1/services/org.freedesktop.secrets.service.disabled 2>/dev/null || true
+
+# Create keyring directory with login keyring (empty password)
 RUN mkdir -p /home/${USER_NAME}/.local/share/keyrings \
-    && echo -n "" | gnome-keyring-daemon --unlock --replace 2>/dev/null || true
-
-# Create a default keyring file (empty password)
-RUN cat > /home/${USER_NAME}/.local/share/keyrings/default << 'EOF'
+    && cat > /home/${USER_NAME}/.local/share/keyrings/login.keyring << 'EOF'
 [keyring]
-display-name=Default keyring
-ctime=0
-mtime=0
+display-name=Login
+ctime=1234567890
+mtime=1234567890
 lock-on-idle=false
 lock-after=false
 EOF
 
-RUN cat > /home/${USER_NAME}/.local/share/keyrings/default.keyring << 'EOF'
-[keyring]
-display-name=Default keyring
-ctime=0
-mtime=0
-lock-on-idle=false
-lock-after=false
-EOF
+RUN echo "login" > /home/${USER_NAME}/.local/share/keyrings/default
 
 # Disable keyring daemon autostart for secrets component
 RUN mkdir -p /home/${USER_NAME}/.config/autostart \
@@ -757,6 +751,11 @@ for i in $(seq 1 30); do
     echo "Waiting for GNOME Shell... ($i)"
     sleep 1
 done
+
+# Start gvfsd (required for Nautilus file manager)
+echo "Starting gvfsd..."
+su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && /usr/libexec/gvfsd &" 2>/dev/null || true
+sleep 1
 
 # Start x11vnc
 echo "Starting x11vnc..."
