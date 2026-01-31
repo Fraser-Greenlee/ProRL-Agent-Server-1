@@ -1,7 +1,7 @@
 import re
 from argparse import Namespace
 from io import BytesIO
-from typing import List, Tuple, Union, Dict, Any
+from typing import List, Tuple, Union, Dict, Any, Optional
 
 import ipdb
 from PIL import Image
@@ -32,7 +32,7 @@ class UITarsController:
         self.max_retry_for_action_generation = args.max_retry_for_action_generation
 
     def prompt_vlm_with_reason(
-            self, messages: List, n: int = 1, temperature: float = 0, max_tokens: int = 4096,
+            self, messages: List, n: int = 1, temperature: float = 0.3, max_completion_tokens: int = 4096,
     ) -> Tuple[List, List]:
         """
         Helper function to prompt VLM with messages.
@@ -46,7 +46,8 @@ class UITarsController:
             },
             n=n,
             temperature=temperature,
-            max_tokens=max_tokens,
+            top_p=0.9,
+            max_completion_tokens=max_completion_tokens,
             timeout=int(600),
         )
 
@@ -61,7 +62,7 @@ class UITarsController:
             current_screenshot: Union[bytes, Image.Image],
             history_images: List[Union[bytes, Image.Image]],
             history_responses: List[str],
-        ) -> Dict[str, Any]:
+        ) -> Optional[Dict[str, Any]]:
         """
         Returns: a dictionary of
             "pyautogui_command": a string command to send to EnvController
@@ -87,7 +88,7 @@ class UITarsController:
         num_generation, action_generation = 0, None
         while num_generation < self.max_retry_for_action_generation:
             try:
-                responses, reasons = self.prompt_vlm_with_reason(messages)
+                responses, reasons = self.prompt_vlm_with_reason(messages, n=1, temperature=0.3)
                 response, reason = responses[0], reasons[0]
 
                 action_generation = self.parse_action_generation(response, model_input_width, model_input_height)
@@ -98,20 +99,26 @@ class UITarsController:
                         for pa in action_generation["parsed_actions"])
                 ):
                     break
-                else:
-                    # todo remove this when not debugging
-                    ipdb.set_trace()
-                    pass
+
+                # todo remove this when not debugging
+                # the generation failed to meet the required syntax
+                ipdb.set_trace()
+                pass
 
             except Exception as e:
+                logger.warning(f"Error in generate_action: {e}")
+
                 # todo remove below when not debugging
                 ipdb.set_trace()
                 pass
-                logger.warning(f"Error in generate_action: {e}")
+
+            finally:
+                num_generation += 1
 
         if action_generation is None:
             # OpenAI problem or generation was unexpected
-            raise ConnectionError("`generate_action` failed.")
+            logger.warning("`generate_action` failed.")
+            return None
 
         pyautogui_code = self.convert_to_pyautogui(action_generation["parsed_actions"], original_width, original_height)
 
@@ -151,7 +158,7 @@ class UITarsController:
 
         # 1. Format the Text Prompt
         instruction_prompt = (
-            # new
+            # older version used for OSWorld
             f"You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform "
             f"the next action to complete the task.\n\n"
 
@@ -161,23 +168,18 @@ class UITarsController:
             f"Action: ...\n"
             f"```\n\n"
 
-            f"## Action Space\n\n"
-
-            f"click(point='<point>x1 y1</point>')\n"
-            f"left_double(point='<point>x1 y1</point>')\n"
-            f"right_single(point='<point>x1 y1</point>')\n"
-            f"drag(start_point='<point>x1 y1</point>', end_point='<point>x2 y2</point>')\n"
+            f"## Action Space\n"
+            f"click(start_box='<|box_start|>(x1,y1)<|box_end|>')\n"
+            f"left_double(start_box='<|box_start|>(x1,y1)<|box_end|>')\n"
+            f"right_single(start_box='<|box_start|>(x1,y1)<|box_end|>')\n"
+            f"drag(start_box='<|box_start|>(x1,y1)<|box_end|>', end_box='<|box_start|>(x3,y3)<|box_end|>')\n"
             f"hotkey(key='ctrl c') # Split keys with a space and use lowercase. Also, do not use more than 3 keys in "
             f"one hotkey action.\n"
-            f"type(content='xxx') # Use escape characters \\', \\\", and \\n in content part to ensure we can parse "
-            f"the content in normal python string format. If you want to submit your input, use \\n at the end of "
-            f"content.\n"
-            f"scroll(point='<point>x1 y1</point>', direction='down or up or right or left') # Show more information "
-            f"on the `direction` side.\n"
+            f"type(content='') #If you want to submit your input, use \\n at the end of `content`.\n"
+            f"scroll(start_box='<|box_start|>(x1,y1)<|box_end|>', direction='down or up or right or left')"
             f"wait() #Sleep for 5s and take a screenshot to check for any changes.\n"
             f"finished(content='xxx') # Use escape characters \\', \\\", and \\n in content part to ensure we can parse "
             f"the content in normal python string format.\n\n\n"
-
 
             f"## Note\n"
             f"- Use English in `Thought` part.\n"
@@ -364,7 +366,7 @@ class UITarsController:
                         bbox_str = param  # e.g. "(595,25)"
 
                         # Remove parentheses and split the string by commas
-                        numbers = bbox_str.replace("(", "").replace(")", "").split(",")
+                        numbers = bbox_str.replace("(", "").replace(")", "").replace("[", "").replace("]", "").split(",")
 
                         # UI-TARS-1.5 outputs absolute coordinates specific to the given image
                         float_numbers = []
@@ -393,7 +395,7 @@ class UITarsController:
 
         except Exception as e:
             print(f"Error in parsing UI-Tars generation:\n"
-                  f"Generation: {generation}"
+                  f"Generation: {generation}\n"
                   f"Error: {e}")
 
             return None

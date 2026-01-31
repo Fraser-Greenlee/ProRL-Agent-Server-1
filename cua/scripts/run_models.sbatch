@@ -17,7 +17,7 @@ ALL_NODES=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
 UITARS_NODE=$(echo "$ALL_NODES" | head -n 1)
 EXPLORER_NODE=$(echo "$ALL_NODES" | head -n 2 | tail -n 1)
 
-# 2. Launch Server (Parser)
+# 2. Launch Server (Actor)
 # Added: --nodes=1 --ntasks=1 --exclusive
 srun -w "$UITARS_NODE" \
      --nodes=1 \

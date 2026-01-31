@@ -134,7 +134,15 @@ class DataCollector:
 
         # Sample osworld setup for this trajectory
         # First entry is None so you can skip setup if needed
-        osworld_setup = random.choice(self.osworld_setup_list)
+        osworld_setup_ready = False
+        while not osworld_setup_ready:
+            osworld_setup = random.choice(self.osworld_setup_list)
+            if any("VLC_VERBOSE=-1 vlc --no-audio --no-video-title-show" in config['parameters'].get("command", "")
+                   for config in osworld_setup['config']):
+                # sometimes
+               continue
+            else:
+                osworld_setup_ready = True
 
         # Create job details - we will use this as data interface for calling different functions here,
         # but later, the job_details will be stored into self.job_details
@@ -250,7 +258,7 @@ class DataCollector:
 
 
         # reverting back to original goal - action
-        while sum(len(g['actions']) for g in trajectory['steps']) < self.max_steps_per_trajectory:
+        while sum(len(s['actions']) for s in trajectory['steps']) < self.max_steps_per_trajectory:
             subgoal_idx = len(trajectory['steps'])
             prev_subgoal_intents = [g['subgoal_intent'] for g in trajectory['steps']]
             prev_subgoals = [g['subgoal'] for g in trajectory['steps']]
@@ -282,33 +290,39 @@ class DataCollector:
                 action_generation_result = self.uitar_controller.generate_action(
                     subgoal, screenshot_bytes, history_images, history_responses
                 )
-                pyautogui_command = action_generation_result["pyautogui_command"]
-                action_generation = action_generation_result["action_generation"]
 
-                # execute action
-                EnvController.execute_pyautogui_command(job_details.runtime, pyautogui_command)
-
-                # wait for UI to update
-                time.sleep(3.0)
-
-                # update steps_for_this_goal with the current screenshot & action_dict_list
-                step_for_this_subgoal['actions'].append({
-                    "screenshot": str(image_filename.absolute()),
-                    "screenshot_base64": bytes_to_base64(screenshot_bytes),
-                    "pyautogui_command": pyautogui_command,
-                    "action_generation": action_generation,
-                })
-
-                # save new screenshot
-                screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
-                image_filename = trajectory_save_dir / f"{subgoal_idx}-{len(step_for_this_subgoal['actions'])}.png"
-                save_image(screenshot_bytes, image_filename, logger)
-
-                # if the executed action involves "finished", break the action generation loop
-                # we still need to save a new screenshot since the pyautogui_command might involve actions other than
-                # "finished".
-                if any(action_dict["action_type"] == "finished" for action_dict in action_generation["parsed_actions"]):
+                if action_generation_result is None:
+                    # UI-TARS action generation failed (failed to meet the requirement)
                     break
+                else:
+                    pyautogui_command = action_generation_result["pyautogui_command"]
+                    action_generation = action_generation_result["action_generation"]
+
+
+                    # execute action
+                    EnvController.execute_pyautogui_command(job_details.runtime, pyautogui_command)
+
+                    # wait for UI to update
+                    time.sleep(3.0)
+
+                    # update steps_for_this_goal with the current screenshot & action_dict_list
+                    step_for_this_subgoal['actions'].append({
+                        "screenshot": str(image_filename.absolute()),
+                        "screenshot_base64": bytes_to_base64(screenshot_bytes),
+                        "pyautogui_command": pyautogui_command,
+                        "action_generation": action_generation,
+                    })
+
+                    # save new screenshot
+                    screenshot_bytes = EnvController.get_screenshot(job_details.runtime)
+                    image_filename = trajectory_save_dir / f"{subgoal_idx}-{len(step_for_this_subgoal['actions'])}.png"
+                    save_image(screenshot_bytes, image_filename, logger)
+
+                    # if the executed action involves "finished", break the action generation loop
+                    # we still need to save a new screenshot since the pyautogui_command might involve actions other than
+                    # "finished".
+                    if any(action_dict["action_type"] == "finished" for action_dict in action_generation["parsed_actions"]):
+                        break
 
             # save the completed steps
             trajectory['steps'].append(step_for_this_subgoal)
@@ -322,4 +336,6 @@ class DataCollector:
             ipdb.set_trace()
             pass
 
-
+        # full trajectory generation done
+        ipdb.set_trace()
+        pass
