@@ -549,47 +549,6 @@ RUN sed -i 's|Exec=/usr/share/code/code|Exec=/usr/local/bin/code-wrapper|g' /usr
 RUN sed -i 's|Exec=code|Exec=/usr/local/bin/code-wrapper|g' /usr/share/applications/code.desktop 2>/dev/null || true
 
 # ============================================
-# Configure gedit (fix for Docker)
-# ============================================
-
-# gedit needs locale set for D-Bus activation
-RUN cat > /usr/local/bin/gedit-wrapper << 'GEDITWRAP'
-#!/bin/bash
-export LANG=zh_CN.UTF-8
-export LC_ALL=zh_CN.UTF-8
-exec /usr/bin/gedit "$@"
-GEDITWRAP
-RUN chmod +x /usr/local/bin/gedit-wrapper
-
-# Update D-Bus service file to use wrapper
-RUN cat > /usr/share/dbus-1/services/org.gnome.gedit.service << 'EOF'
-[D-BUS Service]
-Name=org.gnome.gedit
-Exec=/usr/local/bin/gedit-wrapper --gapplication-service
-EOF
-
-# ============================================
-# Configure gnome-terminal (fix for Docker)
-# ============================================
-
-# gnome-terminal needs special handling in Docker without systemd
-# Create a wrapper that launches it properly
-# Create wrapper for gnome-terminal-server with proper locale
-RUN echo '#!/bin/bash' > /usr/local/bin/gnome-terminal-server-wrapper \
-    && echo 'export LANG=zh_CN.UTF-8' >> /usr/local/bin/gnome-terminal-server-wrapper \
-    && echo 'export LC_ALL=zh_CN.UTF-8' >> /usr/local/bin/gnome-terminal-server-wrapper \
-    && echo 'export DISPLAY=${DISPLAY:-:0}' >> /usr/local/bin/gnome-terminal-server-wrapper \
-    && echo 'exec /usr/libexec/gnome-terminal-server "$@"' >> /usr/local/bin/gnome-terminal-server-wrapper \
-    && chmod +x /usr/local/bin/gnome-terminal-server-wrapper
-
-# Fix D-Bus service file to use the wrapper
-RUN cat > /usr/share/dbus-1/services/org.gnome.Terminal.service << 'EOF'
-[D-BUS Service]
-Name=org.gnome.Terminal
-Exec=/usr/local/bin/gnome-terminal-server-wrapper
-EOF
-
-# ============================================
 # Configure uxterm (fix font issue)
 # ============================================
 
@@ -795,6 +754,11 @@ sleep 2
 echo "Starting D-Bus session..."
 su - user -c "mkdir -p /run/user/1000 && dbus-daemon --session --address=unix:path=/run/user/1000/bus --fork" 2>/dev/null || true
 sleep 1
+
+# Set environment variables for all D-Bus activated applications
+# This is the key fix - instead of patching each app individually
+echo "Setting D-Bus activation environment..."
+su - user -c "export DISPLAY=:0 && export XDG_RUNTIME_DIR=/run/user/1000 && export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && export LANG=zh_CN.UTF-8 && export LC_ALL=zh_CN.UTF-8 && dbus-update-activation-environment DISPLAY LANG LC_ALL XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS" 2>/dev/null || true
 
 echo "Starting GNOME Shell..."
 
