@@ -531,6 +531,21 @@ EOF
 RUN mkdir -p /home/${USER_NAME}/.config/google-chrome-debug
 
 # ============================================
+# Configure VS Code (fix for Docker)
+# ============================================
+
+# VS Code needs --no-sandbox to run in Docker without privileges
+RUN cat > /usr/local/bin/code-wrapper << 'CODEWRAP'
+#!/bin/bash
+exec /usr/bin/code --no-sandbox "$@"
+CODEWRAP
+RUN chmod +x /usr/local/bin/code-wrapper
+
+# Update the desktop file to use wrapper
+RUN sed -i 's|Exec=/usr/share/code/code|Exec=/usr/local/bin/code-wrapper|g' /usr/share/applications/code.desktop 2>/dev/null || true
+RUN sed -i 's|Exec=code|Exec=/usr/local/bin/code-wrapper|g' /usr/share/applications/code.desktop 2>/dev/null || true
+
+# ============================================
 # Configure gnome-terminal (fix for Docker)
 # ============================================
 
