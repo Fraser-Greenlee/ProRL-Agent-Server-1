@@ -91,6 +91,11 @@ def image_to_base64(image: Image.Image) -> str:
     return f"data:image;base64,{encoded_image_str}"
 
 
+def bytes_to_base64(image_bytes: bytes) -> str:
+    encoded_image_str = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:image;base64,{encoded_image_str}"
+
+
 def process_image(image: Image.Image, min_pixels: int, max_pixels: int) -> Image.Image:
     if min_pixels != -1 and max_pixels != -1:
         image_dict = {

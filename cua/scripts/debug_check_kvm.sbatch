@@ -4,7 +4,7 @@
 #SBATCH --partition=cpu_interactive
 #SBATCH --reservation=sla_res_osworld_agent_vlm_cpu_only
 #SBATCH --account=nvr_lpr_agentic
-#SBATCH --job-name=kvm_test
+#SBATCH --job-name=cua-check_kvm
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=04:00:00

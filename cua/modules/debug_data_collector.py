@@ -13,14 +13,12 @@ from typing import Optional, Dict, Any
 
 import ipdb
 
-from cua.debug.util import bytes_to_base64
-from cua.modules.actors.debug_uitars_actor import UITarsActor
-from cua.modules.debug_planner import Planner
-# from cua.modules.module_parser_controller import ParserController
+from modules.actors.debug_uitars_actor import UITarsActor
+from modules.debug_planner import Planner
+from modules.debug_env_controller import EnvController
+from modules.util import *
 from openhands.core.logger import openhands_logger
 
-from cua.modules.debug_env_controller import EnvController
-from cua.modules.util import load_persona_dataset, load_osworld_setup_list, save_image, load_example_instructions
 
 # Create a child logger
 logger = openhands_logger.getChild('data_controller')

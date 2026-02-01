@@ -8,7 +8,7 @@ from PIL import Image
 
 from openai import OpenAI, OpenAIError
 
-from cua.modules.util import build_messages, bytes_to_image
+from modules.util import build_messages, bytes_to_image
 from openhands.core.logger import openhands_logger
 
 # Create a child logger
