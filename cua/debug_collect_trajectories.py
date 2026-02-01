@@ -24,12 +24,8 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     # Set Explorer / Parser nodes
-    parser.add_argument("--explorer_node", type=str, required=True)
-    parser.add_argument("--uitars_node", type=str, required=True)
-    parser.add_argument(
-        "--explorer_model_name", type=str,
-        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/models/Qwen3-VL-235B-A22B-Thinking")
-
+    parser.add_argument("--planner_node", type=str, required=True)
+    parser.add_argument("--actor_node", type=str, required=True)
     # DataCollector
     parser.add_argument(
         "--vm_image_path", type=str,
@@ -50,11 +46,15 @@ def parse_args():
     parser.add_argument("--max_steps_per_trajectory", type=int, default=100)
     parser.add_argument("--max_steps_per_goal", type=int, default=10)
 
-    # OpenAIWrapper
-    parser.add_argument("--model_name", type=str)
+    # Planner
+    parser.add_argument(
+        "--planner_model_name", type=str,
+        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/models/Qwen3-VL-235B-A22B-Thinking")
     parser.add_argument("--min_pixels", type=int, default=4 * 28 * 28)
     parser.add_argument("--max_pixels", type=int, default=5120 * 28 * 28)
     parser.add_argument("--max_retry_for_goal_generation", type=int, default=1)
+
+    # Actor
     parser.add_argument("--max_retry_for_action_generation", type=int, default=3)
 
 
@@ -65,7 +65,7 @@ def parse_args():
 
 async def main(args):
     data_collector = DataCollector(args)
-    await data_collector.submit_trajectory_job(123456)
+    await data_collector.submit_trajectory_job(trajectory_idx=123456)
 
 
 if __name__ == "__main__":

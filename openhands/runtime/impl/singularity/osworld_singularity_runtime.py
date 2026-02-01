@@ -208,9 +208,9 @@ class OSWorldSingularityRuntime(SingularityRuntime):
         # Check if KVM is available
         kvm_available = self._check_kvm_available()
         if kvm_available:
-            self.log('warning', 'KVM is available, enabling hardware acceleration')
+            self.log('info', 'KVM is available, enabling hardware acceleration')
         else:
-            self.log('warning', 'KVM is not available, running QEMU in emulation mode (slower)')
+            self.log('info', 'KVM is not available, running QEMU in emulation mode (slower)')
 
         # Log snapshot mode (always enabled)
         self.log('info', 'Snapshot mode ENABLED: disk changes will NOT be saved (protects base image)')

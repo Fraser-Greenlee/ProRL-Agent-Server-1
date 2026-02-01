@@ -14,37 +14,18 @@ VLLM_CONTAINER_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jae
 
 # 1. Get Node List and Assign Roles
 ALL_NODES=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
-UITARS_NODE=$(echo "$ALL_NODES" | head -n 1)
-EXPLORER_NODE=$(echo "$ALL_NODES" | head -n 2 | tail -n 1)
+PLANNER_NODE=$(echo "$ALL_NODES" | head -n 1)
+ACTOR_NODE=$(echo "$ALL_NODES" | head -n 2 | tail -n 1)
 
 # 2. Launch Server (Actor)
-# Added: --nodes=1 --ntasks=1 --exclusive
-srun -w "$UITARS_NODE" \
+srun -w "$PLANNER_NODE" \
      --nodes=1 \
      --ntasks=1 \
      --container-image="$VLLM_CONTAINER_IMAGE" \
      --container-mounts=/lustre:/lustre \
-     --output=logs/uitars.out \
+     --output=logs/planner.out \
      bash -c "
-      echo \"Launching UI-TARS model at $UITARS_NODE\"
-      vllm serve ByteDance-Seed/UI-TARS-1.5-7B \
-        --api-key gen \
-        --tensor-parallel-size 4 \
-        --limit-mm-per-prompt.image 5 \
-        --limit-mm-per-prompt.video 0 \
-        --max-model-len 65536
-     " &
-
-# 3. Launch Server (vLLM/Explorer)
-# Added: --nodes=1 --ntasks=1 --exclusive
-srun -w "$EXPLORER_NODE" \
-     --nodes=1 \
-     --ntasks=1 \
-     --container-image="$VLLM_CONTAINER_IMAGE" \
-     --container-mounts=/lustre:/lustre \
-     --output=logs/explorer.out \
-     bash -c "
-      echo \"Launching explorer model at $EXPLORER_NODE\"
+      echo \"Launching explorer model at $PLANNER_NODE\"
       vllm serve /lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/models/Qwen3-VL-235B-A22B-Thinking \
         --api-key gen \
         --tensor-parallel-size 8 \
@@ -54,5 +35,22 @@ srun -w "$EXPLORER_NODE" \
         --async-scheduling \
         --max-model-len 65536 \
         --gpu-memory-utilization 0.9
+     " &
+
+# 3. Launch Server (Planner)
+srun -w "$ACTOR_NODE" \
+     --nodes=1 \
+     --ntasks=1 \
+     --container-image="$VLLM_CONTAINER_IMAGE" \
+     --container-mounts=/lustre:/lustre \
+     --output=logs/actor.out \
+     bash -c "
+      echo \"Launching UI-TARS model at $ACTOR_NODE\"
+      vllm serve ByteDance-Seed/UI-TARS-1.5-7B \
+        --api-key gen \
+        --tensor-parallel-size 4 \
+        --limit-mm-per-prompt.image 5 \
+        --limit-mm-per-prompt.video 0 \
+        --max-model-len 65536
      "
 

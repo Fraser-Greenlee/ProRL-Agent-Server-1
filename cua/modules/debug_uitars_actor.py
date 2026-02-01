@@ -12,10 +12,10 @@ from cua.modules.util_uitars import escape_single_quotes, parse_point_coordinate
 from openhands.core.logger import openhands_logger
 
 
-logger = openhands_logger.getChild('uitars_controller')
+logger = openhands_logger.getChild('uitars_actor')
 
 
-class UITarsController:
+class UITarsActor:
     """
     Interface for UI-Tars model
     References
@@ -25,7 +25,7 @@ class UITarsController:
 
     def __init__(self, args: Namespace):
         self.client = OpenAI(
-            base_url=f"http://{args.uitars_node}:8000/v1",
+            base_url=f"http://{args.actor_node}:8000/v1",
             api_key="gen",
         )
         self.model_name = "ByteDance-Seed/UI-TARS-1.5-7B"
