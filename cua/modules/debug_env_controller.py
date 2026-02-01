@@ -1,11 +1,9 @@
 import logging
 import re
-from pathlib import Path
-from typing import Any, Dict, Tuple, List
+from typing import Dict, Tuple
 
 import ipdb
 
-from cua.modules.util import save_image
 from examples.setup import SetupController
 from openhands.core.config import OpenHandsConfig
 from openhands.events import EventStream

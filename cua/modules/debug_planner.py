@@ -1,6 +1,5 @@
 import ast
 import json
-import re
 from argparse import Namespace
 from typing import Dict, List, Tuple, Optional
 

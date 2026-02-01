@@ -1,4 +1,3 @@
-import asyncio
 import copy
 import json
 import logging
@@ -15,12 +14,10 @@ from typing import Optional, Dict, Any
 import ipdb
 
 from cua.debug.util import bytes_to_base64
-from cua.modules.debug_uitars_actor import UITarsActor
+from cua.modules.actors.debug_uitars_actor import UITarsActor
 from cua.modules.debug_planner import Planner
 # from cua.modules.module_parser_controller import ParserController
 from openhands.core.logger import openhands_logger
-from openhands.events.action.os import OSWorldInteractiveAction
-from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWorldSingularityRuntime
 
 from cua.modules.debug_env_controller import EnvController
 from cua.modules.util import load_persona_dataset, load_osworld_setup_list, save_image, load_example_instructions
@@ -30,20 +27,6 @@ logger = openhands_logger.getChild('data_controller')
 logger.setLevel(logging.DEBUG)
 
 
-@dataclass
-class TrajectoryJobDetails:
-    """Details for a single trajectory collection job."""
-    job_id: str = ''
-    trajectory_id: str = ''
-    persona: Optional[Dict[str, Any]] = None
-    runtime: Optional[OSWorldSingularityRuntime] = None
-    osworld_setup: Optional[Dict[str, Any]] = None
-    trajectory_data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    event: Optional[threading.Event] = None
-    completed: bool = False
-
-
 class DataCollector:
     """
     Class managing actual workflow to collect trajectory data.
@@ -51,8 +34,13 @@ class DataCollector:
     Excluded asyncio / threading for debugging purposes.
     """
     def __init__(self, args: Namespace):
+        # load helper classes
         self.planner = Planner(args)
-        self.actor = UITarsActor(args)
+        if args.actor_model_name == "ByteDance-Seed/UI-TARS-1.5-7B":
+            self.actor = UITarsActor(args)
+        else:
+            ipdb.set_trace()
+            raise NotImplementedError(f"actor_model_name `{args.actor_model_name}` is unknown.`")
 
         self.vm_image_path = args.vm_image_path
         self.os_type = 'linux' if 'Ubuntu' in self.vm_image_path else 'windows'

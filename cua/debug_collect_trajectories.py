@@ -49,14 +49,15 @@ def parse_args():
     # Planner
     parser.add_argument(
         "--planner_model_name", type=str,
-        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/models/Qwen3-VL-235B-A22B-Thinking")
+        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/models/Qwen3-VL-235B-A22B-Thinking"
+    )
     parser.add_argument("--min_pixels", type=int, default=4 * 28 * 28)
     parser.add_argument("--max_pixels", type=int, default=5120 * 28 * 28)
     parser.add_argument("--max_retry_for_goal_generation", type=int, default=1)
 
     # Actor
+    parser.add_argument("--actor_model_name", type=str, default="ByteDance-Seed/UI-TARS-1.5-7B")
     parser.add_argument("--max_retry_for_action_generation", type=int, default=3)
-
 
     args = parser.parse_args()
 

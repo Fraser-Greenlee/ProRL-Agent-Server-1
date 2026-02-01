@@ -8,7 +8,7 @@ from PIL import Image
 from openai import OpenAI
 
 from cua.modules.util import process_image, image_to_base64
-from cua.modules.util_uitars import escape_single_quotes, parse_point_coordinates, parse_function_call
+from cua.modules.actors.util_uitars import escape_single_quotes, parse_point_coordinates, parse_function_call
 from openhands.core.logger import openhands_logger
 
 
