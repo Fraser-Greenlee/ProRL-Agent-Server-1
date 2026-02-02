@@ -221,6 +221,24 @@ class SetupController:
                 e = None
                 for i in range(max_retries):
                     try:
+                        # Too many requests to HF can lead to 429 - we utilize pre-downloaded cache and simply move files
+                        hf_cache_url = "https://huggingface.co/datasets/xlangai/ubuntu_osworld_file_cache/resolve/main/"
+                        if url.startswith(hf_cache_url):
+                            local_cache_dir = Path("/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/"
+                                                   "cua/prorl-agent-server/cua/data/ubuntu_osworld_file_cache")
+                            local_file_path = local_cache_dir / url.removeprefix(hf_cache_url)
+
+                            if local_file_path.exists():
+                                import shutil
+
+                                # copy file from loca_file_path to cache_path
+                                shutil.copy(local_file_path, cache_path)
+
+                                logger.info(f"Found cache at {local_file_path}, successfully copied to {cache_path}.")
+                                downloaded = True
+                                break
+
+                        # Original code for download
                         logger.info(f"Download attempt {i+1}/{max_retries} for {url}")
                         response = requests.get(url, stream=True, timeout=300)  # Add 5 minute timeout
                         response.raise_for_status()

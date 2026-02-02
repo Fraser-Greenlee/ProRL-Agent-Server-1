@@ -100,17 +100,8 @@ class UITarsActor:
                 ):
                     break
 
-                # todo remove this when not debugging
-                # the generation failed to meet the required syntax
-                ipdb.set_trace()
-                pass
-
             except Exception as e:
                 logger.warning(f"Error in generate_action: {e}")
-
-                # todo remove below when not debugging
-                ipdb.set_trace()
-                pass
 
             finally:
                 num_generation += 1

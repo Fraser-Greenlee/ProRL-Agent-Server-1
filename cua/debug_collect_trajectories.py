@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 from openhands.core.logger import openhands_logger
-from modules.debug_data_collector import DataCollector
+from modules.module_data_collector import DataCollector
 
 
 # Create a child logger
@@ -43,7 +43,7 @@ def parse_args():
         "--osworld_setup_path", type=str,
         default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json",
     )
-    parser.add_argument("--max_steps_per_trajectory", type=int, default=100)
+    parser.add_argument("--max_steps_per_trajectory", type=int, default=150)
     parser.add_argument("--max_steps_per_goal", type=int, default=10)
 
     # Planner
@@ -66,7 +66,7 @@ def parse_args():
 
 async def main(args):
     data_collector = DataCollector(args)
-    await data_collector.submit_trajectory_job(trajectory_idx=123456)
+    await data_collector.single_trajectory_job(trajectory_idx=123456)
 
 
 if __name__ == "__main__":

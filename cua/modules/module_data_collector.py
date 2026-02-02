@@ -1,148 +1,286 @@
-from openhands.runtime.impl.singularity.osworld_singularity_runtime import OSWorldSingularityRuntime
+import copy
+import json
+import logging
+import os
+import random
+import socket
+import threading
+import time
+from argparse import Namespace
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, Any, Tuple
 
-# NOTE: this is just a dummy class for now, plan to reuse them for parallel processing
+import ipdb
+
+from modules.actors.debug_uitars_actor import UITarsActor
+from modules.debug_planner import Planner
+from modules.debug_env_controller import EnvController
+from modules.util import *
+from openhands.core.logger import openhands_logger
 
 
-class ModuleDataCollector:
+# Create a child logger
+logger = openhands_logger.getChild('data_controller')
+logger.setLevel(logging.INFO)  # todo for debugging, set this to logging.DEBUG
+
+
+class DataCollector:
     """
     Class managing actual workflow to collect trajectory data.
     Orchestrates usage of EnvController and OpenAIWrapper.
     """
-    def __init__(self):
-        # todo
-        # initialize self._init_queue and self._collect_queue
-        # initialize self.job_details - storage of job
+    def __init__(self, args: Namespace):
+        # load helper classes
+        self.planner = Planner(args)
+        if args.actor_model_name == "ByteDance-Seed/UI-TARS-1.5-7B":
+            self.actor = UITarsActor(args)
+        else:
+            raise NotImplementedError(f"actor_model_name `{args.actor_model_name}` is unknown.`")
 
-        pass
+        self.vm_image_path = args.vm_image_path
+        self.os_type = 'linux' if 'Ubuntu' in self.vm_image_path else 'windows'
 
-    def start_workers(self):
-        """
-        Start init and collect worker threads.
-        """
-        # todo
-        # initialize self._executor (ThreadPoolExecutor)
-        # initialize self._init_workers, self._collect_workers
-        # submit self._run_init_worker_in_thread to self._executor
-        # submit self._run_collect_worker_in_thread to self._executor
-        pass
+        self.max_steps_per_trajectory = args.max_steps_per_trajectory
+        self.max_steps_per_goal = args.max_steps_per_goal
 
-    def stop_workers(self):
-        """
-        Stop all workers and clean up.
-        """
-        # todo
-        pass
+        # We need these directories relative to where the script is run
+        self.output_root = (Path("./trajectories") /
+                            f"{socket.gethostname()}--{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        self.output_root.mkdir(parents=True, exist_ok=True)
 
-    async def _init_worker(self, worker_id: int):
-        """
-        Init worker routine: initializes OSWorldRuntime for each worker
-        """
-        # todo
-        # get the job_id from init_queue, and the corresponding job_detail from self.job_details
-        # then boot the VM
-        # then put the job_id to collect_queue so that collect_worker can fetch it
-        # NOTE: use EnvController.initialize_runtime to boot up VM for this thread
+        # load persona dataset if args.persona_dataset_path is set
+        self.persona_dfs, self.persona_df_weights = load_persona_dataset(args.persona_dataset_path, logger)
 
-        pass
+        # load osworld setup list
+        self.osworld_setup_list = load_osworld_setup_list(args.osworld_setup_path, logger)
 
-    def _run_init_worker_in_thread(self, worker_id: int):
-        """
-        Run _init_worker in a thread with an event loop (bridging asyncio and thread pool)
-        """
-        # todo
-        pass
+        # load example instructions
+        self.example_instructions = load_example_instructions(args.example_instructions_path, logger)
 
-    async def _collect_worker(self, worker_id: int):
-        """
-        Collect worker routine: collect trajectories using initialized runtimes
-        """
-        # todo
-        # get the job_id from collect_queue,
-        # then call function self.collect_trajectory to get the trajectory data
-        # save the final trajectory data
-        # call cleanup_job_runtime to clean things up
-        # set the job_details.event so that generate_trajectories fetch it and mark completion
-        pass
+        # Default screen dimensions (will be updated per runtime)
+        if self.os_type == 'windows':
+            self.default_screen_width, self.default_screen_height = 1280, 800
+        else:
+            self.default_screen_width, self.default_screen_height = 1920, 1080
 
-    async def collect_trajectory(self):
+    def sample_persona(self) -> Optional[Dict[str, Any]]:
         """
-        Collect a single trajectory using the provided runtime.
-
-        Args:
-            trajectory_id: Unique identifier for this trajectory
-            runtime: Runtime instance to use for this trajectory
-            persona: Optional persona context for this trajectory
+        Sample a random persona from the dataset.
 
         Returns:
-            Trajectory data
+            Dictionary containing persona information, or None if dataset not loaded
         """
-        # summary of previous implementation
-        # loop over max_steps_per_trajectory, and in each loop,
-        #   generate 1 goal
-        #   for that 1 goal, we call generate_action => which updates trajectory['steps'] and returns the state after all tool-calls
-        # we retain the list of goals, and the trajectory.
-        # after each goal, we save the trajectory (keeps over-writing over previous save)
-        # finally returns trajectory.
+        if not self.persona_dfs:
+            return None
 
-        # todo
-        # at each goal_step in self.max_num_goals,
-        # we generate 1 goal (i.e. sub-objective for the persona)
-        #   input: previous goals, current screenshot, summarized result of the actions taken for previous goals (whether the goal was achieved, etc)
-        #   output: a new goal
-        # we generate multiple actions to achieve the goal
-        #   input: the current goal, current screenshot, previous action steps taken
-        #   output: a new single action
-        # after each goal, save the trajectories so far (by over-writing previous save)
+        # Randomly select a dataframe (weighted by number of records)
+        selected_df = random.choices(self.persona_dfs, weights=self.persona_df_weights, k=1)[0]
+        age = 1
+        persona_info = None
 
-    def generate_goal(self):
-        # summary of previous implementation
-        # generate goal using LLM - maybe this could be moved to OpenAIWrapper side
-        pass
+        while age < 18:
+            # Sample random persona from the selected dataframe
+            persona_record = selected_df.sample(n=1).iloc[0].to_dict()
 
-    def generate_action(self):
+            # Extract key fields
+            persona_info = {
+                'professional': persona_record.get('professional_persona', ''),
+                'hobbies': persona_record.get('hobbies_and_interests', ''),
+                'occupation': persona_record.get('occupation', ''),
+                'age': persona_record.get('age', ''),
+                'education': persona_record.get('education_level', ''),
+                'city': persona_record.get('city', ''),
+                'state': persona_record.get('state', ''),
+                'skills': persona_record.get('skills_and_expertise', ''),
+                'interests_list': eval(persona_record.get('hobbies_and_interests_list', '[]')),
+                'career_goals': persona_record.get('career_goals_and_ambitions', ''),
+            }
+            age = persona_record.get('age', 20)
+
+        return persona_info
+
+    @staticmethod
+    def save_trajectory(trajectory: Dict, trajectory_save_dir: Path):
         """
-        update "steps" argument and return state, final_messages.
+        Save trajectory data to json.
         """
+        trajectory_to_save = copy.deepcopy(trajectory)
+        for step in trajectory_to_save["steps"]:
+            for action in step['actions']:
+                if "screenshot_base64" in action:
+                    action.pop("screenshot_base64")
 
-        # summary of previous implementation
-        # iterate for max_tool_calls times (inner-loop)
-        #   and in each inner-loop, we generate multiple actions, and execute them
-        #   across each inner-loop, we use the observations + tool call results from previous (multiple) actions as part of next input,
-        #       along with the context.
-        #   we do this until there's no more tool calls.
-        #
+        with open(trajectory_save_dir / "trajectory.json", "w") as f:
+            json.dump(trajectory_to_save, f, indent=4)
 
-        # originally, this function also called execute_action
-        pass
+        logger.debug(f"✓ [save_trajectory] Saved to {str(trajectory_save_dir / 'trajectory.json')}")
 
-    def _cleanup_job_runtime(self, runtime: OSWorldSingularityRuntime, job_id: str):
+    async def init_runtime_for_job(self, trajectory_idx: int) -> Tuple:
         """
-        Cleanup runtime in background thread
+        Stage 1: Initialize the VM and OSWorld setup.
+        Returns: (runtime, trajectory, trajectory_save_dir, trajectory_id, osworld_setup)
         """
-        # todo
-        pass
+        # Create unique IDs
+        job_id = f"job_{trajectory_idx:04d}"
+        trajectory_id = f"{trajectory_idx:04d}"
 
-    def submit_trajectory_job(self, trajectory_idx: int) -> str:
-        """
-        Submit a trajectory collection to the dual-queue system
+        trajectory_save_dir = self.output_root / trajectory_id
+        os.makedirs(trajectory_save_dir, exist_ok=True)
 
-        Args:
-            trajectory_idx: Index of this trajectory
+        # Sample osworld setup
+        osworld_setup_ready, osworld_setup = False, None
+        while not osworld_setup_ready:
+            osworld_setup = random.choice(self.osworld_setup_list)
+            # Filter unstable VLC configs
+            if osworld_setup and any("VLC_VERBOSE=-1" in config.get('parameters', {}).get("command", "")
+                                     for config in osworld_setup.get('config', [])):
+                continue
+            else:
+                osworld_setup_ready = True
 
-        Returns:
-            Job ID for tracking
-        """
-        # todo
-        # prepare job_details
-        # put the job_id into init_queue so that init_worker can fetch it
-        pass
+        # Initialize Runtime (Async)
+        runtime = await EnvController.initialize_runtime(
+            job_id, self.vm_image_path, self.os_type, osworld_setup
+        )
 
-    async def generate_trajectories(self):
+        # Get screen size
+        width, height = EnvController.get_screen_size(runtime)
+
+        # Prepare Metadata
+        trajectory = {
+            'trajectory_id': trajectory_id,
+            'metadata': {
+                'vm_image': self.vm_image_path,
+                'screen_size': f"{width}x{height}",
+                'osworld_setup': osworld_setup
+            },
+            'goal': None,
+            'steps': [],
+        }
+
+        return runtime, trajectory, trajectory_save_dir, trajectory_id, osworld_setup
+
+    async def collect_trajectory(self, runtime, trajectory: Dict, trajectory_save_dir: Path, osworld_setup: Dict):
         """
-        Main routine to collect trajectories using dual-queue system
+        Stage 2: Run the Agent Loop (Goal Generation -> Action Execution).
         """
-        # todo
-        # start workers
-        # open job_ids and submit_trajectory_job
-        # wait for all jobs to trigger event (in collect_worker)
-        # when the event triggers, track completed_count
+        # Wait for UI initialization
+        time.sleep(3.0)
+
+        # Initial Screenshot
+        screenshot_bytes = EnvController.get_screenshot(runtime)
+        image_filename = trajectory_save_dir / f"0-0.png"
+        save_image(screenshot_bytes, image_filename, logger)
+
+        # --- 1. Generate High Level Goal --- #
+        # todo implement the verification mechanism for goal achievability using requirements
+        # generate goal in a separate loop
+        prev_requirements = []  # will be a list of tuple [("condition 1", "verdict 1"), ...]
+        example_goals = random.sample(self.example_instructions, 1)  # for now, we sample 1 example goal
+        goal, requirements = self.planner.generate_goal_with_long_horizon(
+            screenshot_bytes, osworld_setup["config"], example_goals, prev_requirements,
+        )
+
+        trajectory['goal'] = goal
+        logger.debug(f"Generated Goal: {goal}")
+
+        if not trajectory['goal']:
+            logger.warning("Failed to generate goal.")
+            return trajectory
+
+        # --- 2. Action Loop --- #
+        while sum(len(s['actions']) for s in trajectory['steps']) < self.max_steps_per_trajectory:
+            # Prepare context for Planner
+            prev_subgoal_intents = [g['subgoal_intent'] for g in trajectory['steps']]
+            prev_subgoals = [g['subgoal'] for g in trajectory['steps']]
+            prev_actor_infos = [
+                g["actions"][-1]["action_generation"]["thought"]
+                if g["actions"] else "None"
+                for g in trajectory['steps']
+            ]
+
+            # Generate Subgoal
+            subgoal_intent, subgoal = self.planner.generate_subgoal(
+                screenshot_bytes, trajectory['goal'],
+                prev_subgoal_intents, prev_subgoals, prev_actor_infos
+            )
+
+            logger.debug(f"Subgoal: {subgoal} (Intent: {subgoal_intent})")
+
+            if subgoal.lower().strip() in ["done", "impossible"]:
+                break
+
+            step_for_this_subgoal = {
+                "subgoal": subgoal,
+                "subgoal_intent": subgoal_intent,
+                "actions": []
+            }
+
+            subgoal_idx = len(trajectory['steps'])
+
+            # Actor Loop for this Subgoal
+            while len(step_for_this_subgoal['actions']) < self.max_steps_per_goal:
+                history_images = [s['screenshot_base64'] for s in step_for_this_subgoal['actions']]
+                history_responses = [s['action_generation']['generation'] for s in step_for_this_subgoal['actions']]
+
+                # Generate Action
+                action_result = self.actor.generate_action(
+                    subgoal, screenshot_bytes, history_images, history_responses
+                )
+
+                if action_result is None:
+                    # UI-TARS action generation failed (failed to meet the requirement)
+                    # in this case, save only up to the current trajectory
+                    break
+
+                pyautogui_command = action_result["pyautogui_command"]
+                action_generation = action_result["action_generation"]
+
+                # Execute
+                EnvController.execute_pyautogui_command(runtime, pyautogui_command)
+
+                # Wait & Observe
+                time.sleep(3.0)
+
+                # Capture new state
+                screenshot_bytes = EnvController.get_screenshot(runtime)
+
+                # Save step info
+                action_idx = len(step_for_this_subgoal['actions'])
+                image_filename = trajectory_save_dir / f"{subgoal_idx}-{action_idx + 1}.png"
+                save_image(screenshot_bytes, image_filename, logger)
+
+                step_for_this_subgoal['actions'].append({
+                    "screenshot": str(image_filename.absolute()),
+                    "screenshot_base64": bytes_to_base64(screenshot_bytes),
+                    "pyautogui_command": pyautogui_command,
+                    "action_generation": action_generation,
+                })
+
+                # Check for finished
+                if any(a["action_type"] == "finished" for a in action_generation["parsed_actions"]):
+                    break
+
+            trajectory['steps'].append(step_for_this_subgoal)
+            self.save_trajectory(trajectory, trajectory_save_dir)
+
+        # Final Save
+        self.save_trajectory(trajectory, trajectory_save_dir)
+        return trajectory
+
+    async def single_trajectory_job(self, trajectory_idx: int):
+        """
+        Original single-trajectory generation for debugging.
+        Simply chains the two stages sequentially in the main thread.
+        """
+        # 1. Init
+        runtime, trajectory_data, save_dir, t_id, setup = await self.init_runtime_for_job(trajectory_idx)
+
+        try:
+            # 2. Collect
+            await self.collect_trajectory(runtime, trajectory_data, save_dir, setup)
+        finally:
+            # Cleanup for debug mode
+            runtime.close()
