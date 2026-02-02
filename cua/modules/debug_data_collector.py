@@ -179,19 +179,15 @@ class DataCollector:
         image_filename = trajectory_save_dir / f"0-0.png"
         save_image(screenshot_bytes, image_filename, logger)
 
+        # todo implement the verification mechanism for goal achievability using requirements
         # generate goal in a separate loop
         prev_requirements = []  # will be a list of tuple [("condition 1", "verdict 1"), ...]
-        while len(prev_requirements) < 10:
-            # sample example goals (instructions)
-            example_goals = random.sample(self.example_instructions, 1)  # for now, we sample 1 example goal
-            goal, requirements = self.planner.generate_goal_with_long_horizon(
-                screenshot_bytes, osworld_setup["config"], example_goals, prev_requirements,
-            )
+        example_goals = random.sample(self.example_instructions, 1)  # for now, we sample 1 example goal
+        goal, requirements = self.planner.generate_goal_with_long_horizon(
+            screenshot_bytes, osworld_setup["config"], example_goals, prev_requirements,
+        )
 
-            # todo implement the verification mechanism for goal achievability using requirements
-            if goal:
-                trajectory['goal'] = goal
-                break
+        trajectory['goal'] = goal
 
         # reverting back to original goal - action
         while sum(len(s['actions']) for s in trajectory['steps']) < self.max_steps_per_trajectory:
