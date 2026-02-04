@@ -1,9 +1,9 @@
 # CUA Data Collection
 
-## How to Run (Interactive Session for Debugging)
+## Running on Interactive Session
 ### 1. Boot Up vLLM Servers
-We use two vLLM servers - 1 for Qwen3-VL-235B (goal generation policy, aka `explorer policy` in the code) and 1 for
-UI-TARS-1.5-7B (action generation policy, aka `uitars policy` in the code).
+We use two vLLM servers - 1 for Qwen3-VL-235B (goal generation policy, aka `planner model` in the code) and 1 for
+UI-TARS-1.5-7B (action generation policy, aka `actor model` in the code).
 
 Run both servers on 2 nodes by
 ```bash
@@ -11,7 +11,7 @@ cd scripts
 sbatch run_model.sbatch
 ```
 
-The logs will be shown at `logs/explorer.out` and `logs/uitars.out`.
+The logs will be shown at `scripts/logs/planner.out` and `scripts/logs/actor.out`.
 
 ### 2. Run CPU node for data collection, with /dev/kvm write permission
 We now run CPU interactive session, in which we boot up the linux virtual machine (VM) and call the vLLM servers to
@@ -35,21 +35,17 @@ CPU node originally had. The only way to retain `/dev/kvm` access inside enroot 
 then running `enroot exec $CONTAINER_ID bash` from outside.
 
 
-### 3. Run Data Collection Script for Debugging
+### 3-A. Run Data Collection Script for Debugging
 ```bash
-python debug_collect_trajectories.py --uitars_node $UITARS_NODE --explorer_node $EXPLORER_NODE
+python debug_collect_trajectories.py --planner_node $PLANNER_NODE --actor_node $ACTOR_NODE
 ```
-`$UITARS_NODE` and `$EXPLORER_NODE` should be manually set by the user (e.g., pool0-2838).
+`$PLANNER_NODE` and `$ACTOR_NODE` should be manually set by the user (e.g., pool0-2838).
 
-## To-Do
+### 3-B. Run Data Collection Script for Parallel Processing
+```bash
+python parallel_collect_trajectories.py --planner_node $PLANNER_NODE --actor_node $ACTOR_NODE
+```
 
-- **Testing UI-TARS** \
-UI-TARS often generates tool calls slightly different from the instruction it has been given. We need to test if there
-is any missing case in our inference logic, implemented in `module_uitars_controller.py`.
-
-
-- **Implementing parallelism with `asyncio` and `threadpoolexecutor`** \
-The current implementation is sequential for debugging. We need to implement a parallel version, in a similar fashion to
-our old pipeline in `synthetic_data_generator.py`.
-
+## Running with SBATCH
+TBD (we just need SBATCH script to run `parallel_collect_trajectories.py`)
 
