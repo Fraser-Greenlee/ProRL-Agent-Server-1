@@ -1,10 +1,12 @@
 """Configuration dataclasses for OSWorld NVCF deployment."""
 
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
 # Hardcoded image that succeeded in osworld-nvcf reproduction (org i01fc6pe8nwm)
-DEFAULT_CONTAINER_IMAGE = "nvcr.io/i01fc6pe8nwm/nemo:osworld-linux"
+NGC_ORG = os.environ.get("NGC_ORG", "nvidian")
+DEFAULT_CONTAINER_IMAGE = f"nvcr.io/{NGC_ORG}/nemo:osworld-linux-2"
 
 
 @dataclass
