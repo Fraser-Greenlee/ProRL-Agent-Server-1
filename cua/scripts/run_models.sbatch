@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=gpu_server
 #SBATCH --account=nvr_lacr_llm
-#SBATCH --partition=interactive
+#SBATCH --partition=batch_short
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --mem=0
-#SBATCH --time=04:00:00
+#SBATCH --time=02:00:00
 #SBATCH --exclusive
 #SBATCH --output=/dev/null
 
