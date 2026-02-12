@@ -84,7 +84,7 @@ echo "[run.sh] Planner job submitted: $PLANNER_JOB_ID"
 echo "[run.sh] Waiting for planner to start and write hostname..."
 PLANNER_NODE=""
 COORD_ELAPSED=0
-MAX_COORD_WAIT=900  # 15 minutes
+MAX_COORD_WAIT=7200  # 2 hours
 
 while [ $COORD_ELAPSED -lt $MAX_COORD_WAIT ]; do
     if [ -f "$COORD_FILE" ]; then
