@@ -11,7 +11,7 @@
 #
 # Usage:
 #   bash run.sh                                         # 1 actor (default)
-#   NUM_ACTORS=3 MAX_PARALLEL=4 MAX_TRAJECTORIES=500 bash run.sh
+#   NUM_ACTORS=4 bash run.sh
 # ============================================================================
 
 SCRIPT_DIR="$(realpath .)"

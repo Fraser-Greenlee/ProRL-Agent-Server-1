@@ -56,7 +56,7 @@ echo "[Actor $ACTOR_IDX] Submitting holder job..."
 ACTOR_JOB_ID=$(sbatch --parsable \
     --job-name="cua_actor_${ACTOR_IDX}" \
     --account=llmservice_fm_vision \
-    --partition=interactive \
+    --partition=batch_block1 \
     --reservation=sla_res_osworld_agent_vlm \
     --gpus-per-node=8 \
     --mem=0 \
@@ -64,6 +64,7 @@ ACTOR_JOB_ID=$(sbatch --parsable \
     --exclusive \
     --output="/dev/null" \
     --error="/dev/null" \
+    --comment='{"OccupiedIdleGPUsJobReaper":{"exemptIdleTimeMins":"240","reason":"disproportionate_resource_requirement","description":"Co-locating vLLM instance with kvm-accessible OS VM"}}' \
     --wrap="srun --container-image=$ACTOR_IMAGE --container-mounts=/lustre:/lustre sleep infinity")
 
 if [ -z "$ACTOR_JOB_ID" ]; then

@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=cua_planner
-#SBATCH --account=nvr_lacr_llm
+#SBATCH --account=llmservice_fm_vision
 #SBATCH --partition=interactive
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
