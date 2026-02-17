@@ -14,6 +14,7 @@ from openhands.events.tool import ToolCallMetadata
 from openhands.runtime.impl.nvcf.nvcf_runtime import NVCFRuntime
 from openhands.runtime.impl.nvcf.nvcf_proxy import NVCFLocalProxy
 from openhands.runtime.plugins import PluginRequirement
+from openhands.runtime.utils.osworld_http_client import NVCFHttpClient
 
 if TYPE_CHECKING:
     from openhands.events.observation import Observation
@@ -215,6 +216,17 @@ class OSWorldNVCFRuntime(NVCFRuntime):
         For NVCF, this returns localhost since we use local proxies.
         """
         return "127.0.0.1"
+    
+    @property
+    def http_client(self):
+        """Get the HTTP client for runtime-agnostic communication.
+        
+        Returns an NVCFHttpClient that handles NVCF authentication and URL rewriting.
+        """
+        return NVCFHttpClient(
+            api_key=self._nvcf_api_key,
+            function_id=self._nvcf_function_id
+        )
 
     # --- OSWorld API (NVCF HTTP) ---
     def get_vm_screenshot(self) -> bytes | None:

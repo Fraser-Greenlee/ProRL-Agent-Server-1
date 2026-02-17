@@ -214,6 +214,7 @@ async def initialize_runtime(runtime: Runtime, instance: dict, metadata: EvalMet
         vm_ip="127.0.0.1",
         server_port=runtime._vm_server_port,
         chromium_port=runtime._chromium_port,
+        vlc_port=runtime._vlc_port,
         cache_dir="/tmp/osworld_example",
         client_password="password",
         runtime=runtime  # Pass your runtime object here
