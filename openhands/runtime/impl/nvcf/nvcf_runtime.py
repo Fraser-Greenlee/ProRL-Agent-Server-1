@@ -108,7 +108,7 @@ class NVCFRuntime(ActionExecutionClient):
         deploy_config = self._nvcf_deployment_config
         if deploy_config is None:
             deploy_config = OSWorldDeploymentConfig(
-                gpu="L40G",
+                gpu="L40S",
                 min_instances=1,
                 max_instances=1,
             )

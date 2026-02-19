@@ -59,7 +59,7 @@ class OSWorldDeploymentConfig:
         configuration: Optional dict of helm chart value overrides.
     """
 
-    gpu: str = "L40"
+    gpu: str = "L40S"
     instance_type: Optional[str] = None
     min_instances: int = 1
     max_instances: int = 1
@@ -80,7 +80,7 @@ class OSWorldDeploymentConfig:
         defaults = {
             ("GFN", "L40"): "gl40_1.br20_2xlarge",
             ("GFN", "L40G"): "gl40g_1.br25_2xlarge",
-            ("GFN", "L40S"): "gl40s_1.br25_2xlarge",
+            ("GFN", "L40S"): "gl40s_4.br25_small",
             ("GFN", "T10"): "g6.full",
             ("AZURE", "H100"): "AZURE.GPU.H100_1x",
             ("GCP", "H100"): "a3-highgpu-8g_1x",
