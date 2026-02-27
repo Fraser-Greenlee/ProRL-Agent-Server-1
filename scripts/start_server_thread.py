@@ -35,11 +35,11 @@ global_timeout = DEFAULT_TIMEOUT
 def _initialize_thread_pool(force_reinit: bool = False):
     """Initialize or reinitialize the global thread pool if needed."""
     global thread_pool, server
-    
+
     if server is None:
         logger.error('Cannot initialize thread pool: server is not initialized')
         return
-    
+
     if thread_pool is None or thread_pool._shutdown or force_reinit:
         # Clean up existing thread pool if it exists
         if thread_pool is not None and not thread_pool._shutdown:
@@ -47,7 +47,7 @@ def _initialize_thread_pool(force_reinit: bool = False):
                 thread_pool.shutdown(wait=False, cancel_futures=True)
             except Exception as e:
                 logger.warning(f'Error shutting down old thread pool: {e}')
-        
+
         # Create new thread pool
         thread_pool_count = server.max_init_workers * 3
         thread_pool = ThreadPoolExecutor(max_workers=thread_pool_count)
@@ -138,6 +138,8 @@ async def start_server():
         logger.error(f'Failed to start server: {str(e)}')
         raise HTTPException(status_code=500, detail=f'Failed to start server: {str(e)}')
 
+    #TODO: Start proxy server here
+
 
 @app.post('/stop')
 async def stop_server():
@@ -155,7 +157,7 @@ async def stop_server():
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, server.stop)
         server.clear_singularity_jobs()
-        
+
         # Clean up the global thread pool to prevent dead threads
         if thread_pool is not None:
             thread_pool.shutdown(wait=False, cancel_futures=True)
@@ -165,16 +167,17 @@ async def stop_server():
     except Exception as e:
         logger.warning(f'Failed to stop server: {str(e)}. Force kill all singularity jobs.')
         server.clear_singularity_jobs()
-        
+
         # Still try to clean up thread pool even if server stop failed
         if thread_pool is not None:
             try:
                 thread_pool.shutdown(wait=False, cancel_futures=True)
                 thread_pool = None
             except Exception as thread_e:
-                logger.warning(f'Failed to shutdown thread pool: {thread_e}')  
+                logger.warning(f'Failed to shutdown thread pool: {thread_e}')
         return {'status': 'Force killed all singularity jobs.'}
 
+    #TODO: Stop proxy server here
 
 @app.get('/status')
 async def get_status():

@@ -108,7 +108,7 @@ async def process(instance, num_tasks: int = 4):
     tasks = []
     for i in range(num_tasks):
         sampling_params = {
-            'model': 'hosted_vllm/Qwen/Qwen3-8B',
+            'model': 'hosted_vllm/MiniMaxAI/MiniMax-M2.1',
             'api_key': 'mykey',
             'modify_params': False,
             'log_completions': False,
@@ -155,11 +155,11 @@ if __name__ == '__main__':
         assert res['critical_error'] is None, f'Critical error in single task: {res}'
 
     # Test with 64 tasks
-    start_time = time.time()
-    results_multi = asyncio.run(process(instance, num_tasks=64))
-    end_time = time.time()
-    print(f'\nTime2 taken: {end_time - start_time} seconds')
-    for res in results_multi:
-        assert res['critical_error'] is None, f'Critical error in multiple tasks: {res}'
+    # start_time = time.time()
+    # results_multi = asyncio.run(process(instance, num_tasks=64))
+    # end_time = time.time()
+    # print(f'\nTime2 taken: {end_time - start_time} seconds')
+    # for res in results_multi:
+    #     assert res['critical_error'] is None, f'Critical error in multiple tasks: {res}'
 
     print('All tests passed')

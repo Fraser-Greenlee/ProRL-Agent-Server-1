@@ -175,44 +175,44 @@ echo ""
 # Run your Gym commands (ng_run, ng_collect_rollouts, etc.) in another terminal.
 wait
 
-# # ==================== Run evaluation ====================
-# echo ""
-# echo "=========================================="
-# echo "Starting standalone SWE-bench evaluation"
-# echo "=========================================="
-# echo "  OpenHands URLs:   $openhands_urls"
-# echo "  LLM Server URLs:  $llm_server_urls"
-# echo "  Data:             $DATA_PATH"
-# echo "  Output:           $OUTPUT_DIR"
-# echo "  Logs:             $LOG_DIR"
-# echo "=========================================="
+# ==================== Run evaluation ====================
+echo ""
+echo "=========================================="
+echo "Starting standalone SWE-bench evaluation"
+echo "=========================================="
+echo "  OpenHands URLs:   $openhands_urls"
+echo "  LLM Server URLs:  $llm_server_urls"
+echo "  Data:             $DATA_PATH"
+echo "  Output:           $OUTPUT_DIR"
+echo "  Logs:             $LOG_DIR"
+echo "=========================================="
 
-# TOKEN_LEVEL_FLAG=""
-# if [ "$TOKEN_LEVEL_GENERATION" = "true" ]; then
-#     TOKEN_LEVEL_FLAG="--token_level_generation"
-# fi
+TOKEN_LEVEL_FLAG=""
+if [ "$TOKEN_LEVEL_GENERATION" = "true" ]; then
+    TOKEN_LEVEL_FLAG="--token_level_generation"
+fi
 
-# cd "$OPENHANDS_WORKDIR"
-# export PYTHONPATH="${OPENHANDS_WORKDIR}:${PYTHONPATH}"
+cd "$OPENHANDS_WORKDIR"
+export PYTHONPATH="${OPENHANDS_WORKDIR}:${PYTHONPATH}"
 
-# python scripts/tests/standalone_swebench_test.py \
-#     --data_path "$DATA_PATH" \
-#     --openhands_urls "$openhands_urls" \
-#     --llm_server_urls "$llm_server_urls" \
-#     --model_name "$SFT_MODEL_PATH" \
-#     --output_dir "$OUTPUT_DIR" \
-#     --num_trajectories "$NUM_TRAJECTORIES" \
-#     --num_workers_per_server "$OPENHANDS_NUM_WORKERS" \
-#     --temperature "$TEMPERATURE" \
-#     --top_p "$TOP_P" \
-#     --max_iterations "$MAX_ITERATIONS" \
-#     --max_output_tokens "$MAX_OUTPUT_TOKENS" \
-#     --max_model_len "$MAX_MODEL_LEN" \
-#     --timeout "$TIMEOUT" \
-#     --hint_mode "$HINT_MODE" \
-#     --custom_tokenizer "$TOKENIZER_PATH" \
-#     $TOKEN_LEVEL_FLAG
+python scripts/tests/standalone_swebench_test.py \
+    --data_path "$DATA_PATH" \
+    --openhands_urls "$openhands_urls" \
+    --llm_server_urls "$llm_server_urls" \
+    --model_name "$SFT_MODEL_PATH" \
+    --output_dir "$OUTPUT_DIR" \
+    --num_trajectories "$NUM_TRAJECTORIES" \
+    --num_workers_per_server "$OPENHANDS_NUM_WORKERS" \
+    --temperature "$TEMPERATURE" \
+    --top_p "$TOP_P" \
+    --max_iterations "$MAX_ITERATIONS" \
+    --max_output_tokens "$MAX_OUTPUT_TOKENS" \
+    --max_model_len "$MAX_MODEL_LEN" \
+    --timeout "$TIMEOUT" \
+    --hint_mode "$HINT_MODE" \
+    --custom_tokenizer "$TOKENIZER_PATH" \
+    $TOKEN_LEVEL_FLAG
 
-# echo ""
-# echo "Evaluation completed! Results saved to: $OUTPUT_DIR"
-# echo "Logs available at: $LOG_DIR"
+echo ""
+echo "Evaluation completed! Results saved to: $OUTPUT_DIR"
+echo "Logs available at: $LOG_DIR"
