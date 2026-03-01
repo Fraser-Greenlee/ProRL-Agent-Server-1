@@ -1,30 +1,37 @@
 #!/bin/bash
+# Multi-node standalone SWE-bench evaluation via SLURM for Qwen3-4B-Instruct-2507.
+# Usage: sbatch run_standalone_swebench_test_qwen3_4b_instruct.sh
+#
+# This script submits a SLURM job that starts ProRL Agent Server + vLLM on multiple
+# nodes, then runs evaluation. For single-node local run without SLURM, use
+# run_standalone_swebench_test_qwen3_4b_instruct_single_node.sh instead.
+
 #SBATCH --job-name=standalone-swebench-test
-#SBATCH --nodes=2
+#SBATCH --nodes=8
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem=1000G
-#SBATCH --partition=interactive
+#SBATCH --partition=YOUR_PARTITION
 #SBATCH --time=4:00:00
-#SBATCH --account=llmservice_fm_vision
+#SBATCH --account=YOUR_ACCOUNT
 #SBATCH --gpus-per-node=8
 #SBATCH --cpus-per-task=64
-#SBATCH --output=/lustre/fsw/portfolios/llmservice/users/haozh/outputs/verl_internal/results/slurm-%A_%a.out
-#SBATCH --error=/lustre/fsw/portfolios/llmservice/users/haozh/outputs/verl_internal/results/slurm-%A_%a.err
+#SBATCH --output=/path/to/ProRL-Agent-Server/logs/slurm-%A_%a.out
+#SBATCH --error=/path/to/ProRL-Agent-Server/logs/slurm-%A_%a.err
 
 set -x  # Enable debug output
 
 # ==================== Configuration ====================
-HOME_HAOZH='/lustre/fs1/portfolios/nvr/projects/nvr_lpr_agentic/users/haozh'
-OPENHANDS_WORKDIR=$HOME_HAOZH/projects/new_ProRL-Agent-Server/ProRL-Agent-Server
-RESULTS_DIR="${OPENHANDS_WORKDIR}/results/standalone_test_$(date +%Y%m%d_%H%M%S)"
-container_name="$HOME_HAOZH/singularity_images_v3/nvidian+nemo+verl_v2+vllm0.10dev.sqsh"
-MOUNTS="--container-mounts=/lustre:/lustre"
+ProRL_Agent_WORKDIR=/path/to/ProRL-Agent-Server
+RESULTS_DIR="${ProRL_Agent_WORKDIR}/results/standalone_test_$(date +%Y%m%d_%H%M%S)"
+container_name=/path/to/your/container.sqsh
+MOUNTS="--container-mounts=/path/to/data:/path/to/data"
+
 # Model configuration
-SFT_MODEL_PATH='/lustre/fsw/portfolios/llmservice/users/haozh/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/9c925d64d72725edaf899c6cb9c377fd0709d9c5'
-TOKENIZER_PATH='/lustre/fsw/portfolios/llmservice/users/haozh/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/9c925d64d72725edaf899c6cb9c377fd0709d9c5'
+MODEL_PATH='Qwen/Qwen3-4B-Instruct-2507'
+TOKENIZER_PATH='Qwen/Qwen3-4B-Instruct-2507'
 
 # Data configuration
-DATA_PATH="$HOME_HAOZH/data/swegym-new-split/test-transformed-with-prompt-first-64.parquet"
+DATA_PATH='/path/to/data/swe-bench-verified.parquet'
 OUTPUT_DIR="${RESULTS_DIR}/standalone_swebench_test_${SLURM_JOB_ID}"
 
 # Server configuration
@@ -33,8 +40,8 @@ TP_SIZE=4
 GPU_MEM_UTIL=0.8
 NUM_SERVERS_PER_NODE=$((GPUS_PER_NODE / TP_SIZE))
 VLLM_BASE_PORT=8100
-OPENHANDS_PORT=8006
-OPENHANDS_NUM_WORKERS=64
+ProRL_Agent_Server_PORT=8006
+ProRL_Agent_NUM_WORKERS=64
 
 # Evaluation configuration
 NUM_TRAJECTORIES=1
@@ -72,38 +79,38 @@ for i in "${!nodes_array[@]}"; do
     echo "Node $i: ${nodes_array[$i]} -> IP: $node_ip"
 done
 
-# ==================== Start OpenHands on all nodes ====================
-echo "Starting OpenHands servers on all nodes..."
-openhands_urls=""
+# ==================== Start ProRL Agent Server on all nodes ====================
+echo "Starting ProRL Agent Server on all nodes..."
+ProRL_Agent_Server_urls=""
 
 for i in "${!nodes_array[@]}"; do
     node=${nodes_array[$i]}
     node_ip=${node_ips[$i]}
 
-    echo "Starting OpenHands on node $node (IP: $node_ip)"
+    echo "Starting ProRL Agent Server on node $node (IP: $node_ip)"
 
     srun --nodes=1 --ntasks=1 -w "$node" \
-        -o "$RESULTS_DIR/output-%A_%a-openhands-node-$i.out" \
-        -e "$RESULTS_DIR/output-%A_%a-openhands-node-$i.err" \
+        -o "$RESULTS_DIR/output-%A_%a-ProRL_Agent-node-$i.out" \
+        -e "$RESULTS_DIR/output-%A_%a-ProRL_Agent-node-$i.err" \
         --container-image="$container_name" $MOUNTS \
-        bash -c "cd $OPENHANDS_WORKDIR \
-        && export OH_RUNTIME_SINGULARITY_IMAGE_REPO=$HOME_HAOZH/singularity_images_v3 \
-        && export OVERWRITE_OPENHANDS_DIR=$OPENHANDS_WORKDIR \
+        bash -c "cd $ProRL_Agent_WORKDIR \
+        && export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images \
+        && export OVERWRITE_OPENHANDS_DIR=$ProRL_Agent_WORKDIR \
         && export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\$PATH \
-        && export PYTHONPATH=$OPENHANDS_WORKDIR:\$PYTHONPATH \
+        && export PYTHONPATH=$ProRL_Agent_WORKDIR:\$PYTHONPATH \
         && export LOG_LEVEL=ERROR \
         && export DEBUG=False \
-        && nohup /usr/bin/python scripts/start_server_thread.py --max-init-workers 70 --max-run-workers $OPENHANDS_NUM_WORKERS --timeout 9999999" &
+        && nohup /usr/bin/python scripts/start_server_thread.py --max-init-workers 70 --max-run-workers $ProRL_Agent_NUM_WORKERS --timeout 9999999" &
 
-    # Build the OpenHands URLs string
-    if [ -z "$openhands_urls" ]; then
-        openhands_urls="http://$node_ip:$OPENHANDS_PORT"
+    # Build the ProRL Agent Server URLs string
+    if [ -z "$ProRL_Agent_Server_urls" ]; then
+        ProRL_Agent_Server_urls="http://$node_ip:$ProRL_Agent_Server_PORT"
     else
-        openhands_urls="$openhands_urls+http://$node_ip:$OPENHANDS_PORT"
+        ProRL_Agent_Server_urls="$ProRL_Agent_Server_urls+http://$node_ip:$ProRL_Agent_Server_PORT"
     fi
 done
 
-echo "OpenHands URLs: $openhands_urls"
+echo "ProRL Agent Server URLs: $ProRL_Agent_Server_urls"
 
 # ==================== Start vLLM servers on all nodes ====================
 echo "Starting vLLM servers on all nodes..."
@@ -123,8 +130,8 @@ for i in "${!nodes_array[@]}"; do
 
         if [ "$TOKEN_LEVEL_GENERATION" = "true" ]; then
             # Token-level generation: use custom vllm_api_server.py
-            vllm_cmd="CUDA_VISIBLE_DEVICES=$cuda_devices python $OPENHANDS_WORKDIR/scripts/tests/vllm_api_server.py \
-                --model $SFT_MODEL_PATH \
+            vllm_cmd="CUDA_VISIBLE_DEVICES=$cuda_devices python $ProRL_Agent_WORKDIR/scripts/tests/vllm_api_server.py \
+                --model $MODEL_PATH \
                 --tensor-parallel-size $TP_SIZE \
                 --port $port \
                 --host 0.0.0.0 \
@@ -133,7 +140,7 @@ for i in "${!nodes_array[@]}"; do
         else
             # Standard mode: use OpenAI-compatible vLLM server
             vllm_cmd="CUDA_VISIBLE_DEVICES=$cuda_devices python -m vllm.entrypoints.openai.api_server \
-                --model $SFT_MODEL_PATH \
+                --model $MODEL_PATH \
                 --tensor-parallel-size $TP_SIZE \
                 --port $port \
                 --host 0.0.0.0 \
@@ -141,7 +148,7 @@ for i in "${!nodes_array[@]}"; do
                 --max-model-len $MAX_MODEL_LEN"
         fi
 
-        srun --nodes=1 --ntasks=1 -w "$node" \
+        srun --overlap --nodes=1 --ntasks=1 -w "$node" \
             -o "$RESULTS_DIR/output-%A_%a-vllm-node-$i-server-$server_idx.out" \
             -e "$RESULTS_DIR/output-%A_%a-vllm-node-$i-server-$server_idx.err" \
             --container-image="$container_name" $MOUNTS \
@@ -186,23 +193,25 @@ fi
 
 # ==================== Run standalone evaluation ====================
 echo "Starting standalone SWE-bench evaluation..."
-echo "  OpenHands URLs: $openhands_urls"
+echo "  ProRL Agent Server URLs: $ProRL_Agent_Server_urls"
 echo "  LLM Server URLs: $llm_server_urls"
 
 srun --overlap --nodes=1 --ntasks=1 -w "${nodes_array[0]}" \
+    --cpus-per-task=8 \
+    --mem=16G \
     -o "$RESULTS_DIR/output-%A_%a-evaluation.out" \
     -e "$RESULTS_DIR/output-%A_%a-evaluation.err" \
     --container-image="$container_name" $MOUNTS \
-    bash -c "cd $OPENHANDS_WORKDIR \
-    && export PYTHONPATH=$OPENHANDS_WORKDIR:\$PYTHONPATH \
+    bash -c "cd $ProRL_Agent_WORKDIR \
+    && export PYTHONPATH=$ProRL_Agent_WORKDIR:\$PYTHONPATH \
     && python scripts/tests/standalone_swebench_test.py \
         --data_path $DATA_PATH \
-        --openhands_urls '$openhands_urls' \
+        --ProRL_Agent_Server_urls '$ProRL_Agent_Server_urls' \
         --llm_server_urls '$llm_server_urls' \
-        --model_name $SFT_MODEL_PATH \
+        --model_name $MODEL_PATH \
         --output_dir $OUTPUT_DIR \
         --num_trajectories $NUM_TRAJECTORIES \
-        --num_workers_per_server $OPENHANDS_NUM_WORKERS \
+        --num_workers_per_server $ProRL_Agent_NUM_WORKERS \
         --temperature $TEMPERATURE \
         --top_p $TOP_P \
         --max_iterations $MAX_ITERATIONS \

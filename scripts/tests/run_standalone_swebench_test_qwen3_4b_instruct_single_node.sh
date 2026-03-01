@@ -1,24 +1,23 @@
 #!/bin/bash
-# Single-node standalone SWE-bench evaluation script.
-# Usage: bash run_standalone_swebench_test_single_node.sh
+# Single-node standalone SWE-bench evaluation script for Qwen3-4B-Instruct-2507.
+# Usage: bash run_standalone_swebench_test_qwen3_4b_instruct_single_node.sh
 #
-# This script launches OpenHands + vLLM servers locally, then runs evaluation.
+# This script launches ProRL Agent Server + vLLM servers locally, then runs evaluation.
 # All background processes are cleaned up on exit (Ctrl-C or natural completion).
 
 set -x  # Enable debug output
 
 # ==================== Configuration ====================
-HOME_HAOZH='/lustre/fs1/portfolios/nvr/projects/nvr_lpr_agentic/users/haozh'
-OPENHANDS_WORKDIR=$HOME_HAOZH/projects/new_ProRL-Agent-Server/ProRL-Agent-Server
-LOG_DIR="${OPENHANDS_WORKDIR}/logs/standalone_test_$(date +%Y%m%d_%H%M%S)"
-OUTPUT_DIR="${OPENHANDS_WORKDIR}/results/standalone_test_$(date +%Y%m%d_%H%M%S)"
+ProRL_Agent_WORKDIR=/path/to/ProRL-Agent-Server
+LOG_DIR="${ProRL_Agent_WORKDIR}/logs/standalone_test_$(date +%Y%m%d_%H%M%S)"
+OUTPUT_DIR="${ProRL_Agent_WORKDIR}/results/standalone_test_$(date +%Y%m%d_%H%M%S)"
 
 # Model configuration
-SFT_MODEL_PATH='/lustre/fsw/portfolios/llmservice/users/haozh/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/9c925d64d72725edaf899c6cb9c377fd0709d9c5'
-TOKENIZER_PATH='/lustre/fsw/portfolios/llmservice/users/haozh/.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots/9c925d64d72725edaf899c6cb9c377fd0709d9c5'
+MODEL_PATH='Qwen/Qwen3-4B-Instruct-2507'
+TOKENIZER_PATH='Qwen/Qwen3-4B-Instruct-2507'
 
 # Data configuration
-DATA_PATH=$HOME_HAOZH/data/SWE-GYM-R2E-GYM/test-transformed-with-prompt-first-64.parquet
+DATA_PATH='/path/to/data/swe-bench-verified.parquet'
 
 # Server configuration
 GPUS_PER_NODE=8
@@ -26,8 +25,8 @@ TP_SIZE=4
 GPU_MEM_UTIL=0.8
 NUM_SERVERS=$((GPUS_PER_NODE / TP_SIZE))
 VLLM_BASE_PORT=8100
-OPENHANDS_PORT=8006
-OPENHANDS_NUM_WORKERS=64
+ProRL_Agent_Server_PORT=8006
+ProRL_Agent_NUM_WORKERS=64
 
 # Evaluation configuration
 NUM_TRAJECTORIES=1
@@ -73,26 +72,26 @@ if [[ "$NODE_IP" == *" "* ]]; then
 fi
 echo "Node IP: $NODE_IP"
 
-# ==================== Start OpenHands server ====================
-echo "Starting OpenHands server..."
+# ==================== Start ProRL Agent Server ====================
+echo "Starting ProRL Agent Server..."
 
-cd "$OPENHANDS_WORKDIR"
-export OH_RUNTIME_SINGULARITY_IMAGE_REPO=$HOME_HAOZH/singularity_images_v3
-export OVERWRITE_OPENHANDS_DIR="$OPENHANDS_WORKDIR"
-export PYTHONPATH="${OPENHANDS_WORKDIR}:${PYTHONPATH}"
+cd "$ProRL_Agent_WORKDIR"
+export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
+export OVERWRITE_OPENHANDS_DIR="$ProRL_Agent_WORKDIR"
+export PYTHONPATH="${ProRL_Agent_WORKDIR}:${PYTHONPATH}"
 export LOG_LEVEL=ERROR
 export DEBUG=False
 
 python scripts/start_server_thread.py \
     --max-init-workers 70 \
-    --max-run-workers "$OPENHANDS_NUM_WORKERS" \
+    --max-run-workers "$ProRL_Agent_NUM_WORKERS" \
     --timeout 9999999 \
-    > "$LOG_DIR/openhands.out" 2> "$LOG_DIR/openhands.err" &
+    > "$LOG_DIR/ProRL_Agent_Server.out" 2> "$LOG_DIR/ProRL_Agent_Server.err" &
 PIDS+=($!)
-echo "OpenHands server PID: ${PIDS[-1]}"
+echo "ProRL Agent Server PID: ${PIDS[-1]}"
 
-openhands_urls="http://${NODE_IP}:${OPENHANDS_PORT}"
-echo "OpenHands URL: $openhands_urls"
+ProRL_Agent_Server_urls="http://${NODE_IP}:${ProRL_Agent_Server_PORT}"
+echo "ProRL Agent Server URL: $ProRL_Agent_Server_urls"
 
 cd "$WORKDIR"
 
@@ -109,8 +108,8 @@ for server_idx in $(seq 0 $((NUM_SERVERS - 1))); do
     echo "  Server $server_idx: GPUs=$cuda_devices, port=$port"
 
     if [ "$TOKEN_LEVEL_GENERATION" = "true" ]; then
-        CUDA_VISIBLE_DEVICES=$cuda_devices python "$OPENHANDS_WORKDIR/scripts/tests/vllm_api_server.py" \
-            --model "$SFT_MODEL_PATH" \
+        CUDA_VISIBLE_DEVICES=$cuda_devices python "$ProRL_Agent_WORKDIR/scripts/tests/vllm_api_server.py" \
+            --model "$MODEL_PATH" \
             --tensor-parallel-size "$TP_SIZE" \
             --port "$port" \
             --host 0.0.0.0 \
@@ -119,7 +118,7 @@ for server_idx in $(seq 0 $((NUM_SERVERS - 1))); do
             > "$LOG_DIR/vllm_server_${server_idx}.out" 2> "$LOG_DIR/vllm_server_${server_idx}.err" &
     else
         CUDA_VISIBLE_DEVICES=$cuda_devices python -m vllm.entrypoints.openai.api_server \
-            --model "$SFT_MODEL_PATH" \
+            --model "$MODEL_PATH" \
             --tensor-parallel-size "$TP_SIZE" \
             --port "$port" \
             --host 0.0.0.0 \
@@ -173,7 +172,7 @@ echo ""
 echo "=========================================="
 echo "Starting standalone SWE-bench evaluation"
 echo "=========================================="
-echo "  OpenHands URLs:   $openhands_urls"
+echo "  ProRL Agent Server URLs:   $ProRL_Agent_Server_urls"
 echo "  LLM Server URLs:  $llm_server_urls"
 echo "  Data:             $DATA_PATH"
 echo "  Output:           $OUTPUT_DIR"
@@ -185,17 +184,17 @@ if [ "$TOKEN_LEVEL_GENERATION" = "true" ]; then
     TOKEN_LEVEL_FLAG="--token_level_generation"
 fi
 
-cd "$OPENHANDS_WORKDIR"
-export PYTHONPATH="${OPENHANDS_WORKDIR}:${PYTHONPATH}"
+cd "$ProRL_Agent_WORKDIR"
+export PYTHONPATH="${ProRL_Agent_WORKDIR}:${PYTHONPATH}"
 
 python scripts/tests/standalone_swebench_test.py \
     --data_path "$DATA_PATH" \
-    --openhands_urls "$openhands_urls" \
+    --ProRL_Agent_Server_urls "$ProRL_Agent_Server_urls" \
     --llm_server_urls "$llm_server_urls" \
-    --model_name "$SFT_MODEL_PATH" \
+    --model_name "$MODEL_PATH" \
     --output_dir "$OUTPUT_DIR" \
     --num_trajectories "$NUM_TRAJECTORIES" \
-    --num_workers_per_server "$OPENHANDS_NUM_WORKERS" \
+    --num_workers_per_server "$ProRL_Agent_NUM_WORKERS" \
     --temperature "$TEMPERATURE" \
     --top_p "$TOP_P" \
     --max_iterations "$MAX_ITERATIONS" \

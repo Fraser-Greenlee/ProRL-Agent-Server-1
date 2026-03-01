@@ -5,7 +5,7 @@ Standalone SWE-bench validation/testing script.
 This script replicates the validation logic from the verl training framework
 without depending on any verl project files. It:
 1. Loads test data from a parquet file
-2. Sends instances to OpenHands servers for multi-turn agent interaction
+2. Sends instances to ProRL Agent Server servers for multi-turn agent interaction
 3. Computes rewards (resolved, file_iou, block_iou)
 4. Computes pass@k metrics
 5. Saves results to JSONL
@@ -13,7 +13,7 @@ without depending on any verl project files. It:
 Usage:
     python standalone_swebench_test.py \
         --data_path /path/to/test-transformed-with-prompt.parquet \
-        --openhands_urls "http://host1:8006+http://host2:8006" \
+        --ProRL_Agent_Server_urls "http://host1:8006+http://host2:8006" \
         --model_name "Qwen/Qwen3-32B" \
         --output_dir ./results
 """
@@ -237,7 +237,7 @@ def compute_git_patch_ious(gt_patch: str, pred_patch: str) -> Dict[str, float]:
 
 def compute_rewards(results: List[dict], file_iou_coef: float = 0.0, block_iou_coef: float = 0.0) -> List[dict]:
     """
-    Compute rewards for each result returned by OpenHands.
+    Compute rewards for each result returned by ProRL Agent Server.
 
     Each result dict should have keys: success, resolved, finish, error, git_patch, messages, instance.
     Returns the same list of dicts with added keys: score, file_iou, block_iou.
@@ -449,23 +449,23 @@ def load_test_data(parquet_path: str) -> List[dict]:
 
 
 # =====================================================================
-# OpenHands interaction
+# ProRL Agent Server interaction
 # =====================================================================
 
 
-async def send_to_openhands(
+async def send_to_ProRL_Agent_Server(
     session: aiohttp.ClientSession,
-    openhands_url: str,
+    ProRL_Agent_Server_url: str,
     instance: dict,
     sampling_params: dict,
     timeout_seconds: int = 1500,
 ) -> dict:
-    """Send a single instance to an OpenHands server's /process endpoint."""
+    """Send a single instance to a ProRL Agent Server server's /process endpoint."""
     request_data = {"instance": instance, "sampling_params": sampling_params}
     try:
         timeout = aiohttp.ClientTimeout(total=timeout_seconds)
         async with session.post(
-            f"{openhands_url}/process",
+            f"{ProRL_Agent_Server_url}/process",
             headers={"Content-Type": "application/json"},
             json=request_data,
             timeout=timeout,
@@ -476,11 +476,11 @@ async def send_to_openhands(
                 if messages and len(messages) > 0:
                     return data
                 else:
-                    logger.warning(f"Empty messages from {openhands_url} for {instance.get('instance_id', '?')}")
+                    logger.warning(f"Empty messages from {ProRL_Agent_Server_url} for {instance.get('instance_id', '?')}")
                     return {"success": False, "messages": [], "resolved": False, "finish": False, "error": "Empty response", "git_patch": ""}
             else:
                 error_text = await resp.text()
-                logger.error(f"HTTP {resp.status} from {openhands_url}: {error_text}")
+                logger.error(f"HTTP {resp.status} from {ProRL_Agent_Server_url}: {error_text}")
                 return {"success": False, "messages": [], "resolved": False, "finish": False, "error": f"HTTP {resp.status}", "git_patch": ""}
     except asyncio.TimeoutError:
         logger.error(f"Timeout for instance {instance.get('instance_id', '?')}")
@@ -490,24 +490,24 @@ async def send_to_openhands(
         return {"success": False, "messages": [], "resolved": False, "finish": False, "error": str(e), "git_patch": ""}
 
 
-async def start_openhands_server(session: aiohttp.ClientSession, url: str):
+async def start_ProRL_Agent_Server_server(session: aiohttp.ClientSession, url: str):
     try:
         timeout = aiohttp.ClientTimeout(total=60)
         async with session.post(f"{url}/start", timeout=timeout) as resp:
             if resp.status == 200:
-                logger.info(f"Started OpenHands server: {url}")
+                logger.info(f"Started ProRL Agent Server server: {url}")
             else:
                 logger.warning(f"Failed to start {url}: HTTP {resp.status}")
     except Exception as e:
         logger.warning(f"Failed to start {url}: {e}")
 
 
-async def stop_openhands_server(session: aiohttp.ClientSession, url: str):
+async def stop_ProRL_Agent_Server_server(session: aiohttp.ClientSession, url: str):
     try:
         timeout = aiohttp.ClientTimeout(total=30)
         async with session.post(f"{url}/stop", timeout=timeout) as resp:
             if resp.status == 200:
-                logger.info(f"Stopped OpenHands server: {url}")
+                logger.info(f"Stopped ProRL Agent Server server: {url}")
     except Exception as e:
         logger.warning(f"Failed to stop {url}: {e}")
 
@@ -517,35 +517,35 @@ async def stop_openhands_server(session: aiohttp.ClientSession, url: str):
 # =====================================================================
 
 
-async def clear_llm_servers_from_openhands(session: aiohttp.ClientSession, openhands_url: str):
-    """Clear existing LLM servers from an OpenHands server."""
+async def clear_llm_servers_from_ProRL_Agent_Server(session: aiohttp.ClientSession, ProRL_Agent_Server_url: str):
+    """Clear existing LLM servers from a ProRL Agent Server."""
     try:
         timeout = aiohttp.ClientTimeout(total=30)
-        async with session.post(f"{openhands_url}/clear_llm_server", timeout=timeout) as resp:
+        async with session.post(f"{ProRL_Agent_Server_url}/clear_llm_server", timeout=timeout) as resp:
             if resp.status == 200:
                 result = await resp.json()
-                logger.info(f"Cleared LLM servers from {openhands_url}: {result}")
+                logger.info(f"Cleared LLM servers from {ProRL_Agent_Server_url}: {result}")
             else:
                 error_text = await resp.text()
-                logger.warning(f"Failed to clear LLM servers from {openhands_url}: HTTP {resp.status}: {error_text}")
+                logger.warning(f"Failed to clear LLM servers from {ProRL_Agent_Server_url}: HTTP {resp.status}: {error_text}")
     except Exception as e:
-        logger.warning(f"Failed to clear LLM servers from {openhands_url}: {e}")
+        logger.warning(f"Failed to clear LLM servers from {ProRL_Agent_Server_url}: {e}")
 
 
-async def add_llm_server_to_openhands(session: aiohttp.ClientSession, openhands_url: str, llm_address: str):
-    """Register a single LLM server address with an OpenHands server."""
+async def add_llm_server_to_ProRL_Agent_Server(session: aiohttp.ClientSession, ProRL_Agent_Server_url: str, llm_address: str):
+    """Register a single LLM server address with a ProRL Agent Server server."""
     try:
         timeout = aiohttp.ClientTimeout(total=30)
         payload = {"address": llm_address}
-        async with session.post(f"{openhands_url}/add_llm_server", json=payload, timeout=timeout) as resp:
+        async with session.post(f"{ProRL_Agent_Server_url}/add_llm_server", json=payload, timeout=timeout) as resp:
             if resp.status == 200:
                 result = await resp.json()
-                logger.info(f"Added LLM server {llm_address} to {openhands_url}: {result}")
+                logger.info(f"Added LLM server {llm_address} to {ProRL_Agent_Server_url}: {result}")
             else:
                 error_text = await resp.text()
-                logger.error(f"Failed to add LLM server {llm_address} to {openhands_url}: HTTP {resp.status}: {error_text}")
+                logger.error(f"Failed to add LLM server {llm_address} to {ProRL_Agent_Server_url}: HTTP {resp.status}: {error_text}")
     except Exception as e:
-        logger.error(f"Failed to add LLM server {llm_address} to {openhands_url}: {e}")
+        logger.error(f"Failed to add LLM server {llm_address} to {ProRL_Agent_Server_url}: {e}")
 
 
 def _url_to_ip(url: str) -> str:
@@ -554,22 +554,22 @@ def _url_to_ip(url: str) -> str:
     return url.split(":")[0]
 
 
-def assign_llm_servers_to_openhands(
-    openhands_urls: List[str], llm_server_urls: List[str]
+def assign_llm_servers_to_ProRL_Agent_Server(
+    ProRL_Agent_Server_urls: List[str], llm_server_urls: List[str]
 ) -> Dict[str, List[str]]:
     """
-    Assign LLM servers to OpenHands servers based on IP locality.
+    Assign LLM servers to ProRL Agent Server servers based on IP locality.
 
-    Phase 1: Assign LLM servers to OpenHands servers on the same IP.
-    Phase 2: Distribute remaining LLM servers evenly across all OpenHands servers.
+    Phase 1: Assign LLM servers to ProRL Agent Server servers on the same IP.
+    Phase 2: Distribute remaining LLM servers evenly across all ProRL Agent Server servers.
     """
-    assignments: Dict[str, List[str]] = {url: [] for url in openhands_urls}
+    assignments: Dict[str, List[str]] = {url: [] for url in ProRL_Agent_Server_urls}
     assigned: Set[str] = set()
 
     # Phase 1: Locality-based assignment
     for llm_url in llm_server_urls:
         llm_ip = _url_to_ip(llm_url)
-        for oh_url in openhands_urls:
+        for oh_url in ProRL_Agent_Server_urls:
             oh_ip = _url_to_ip(oh_url)
             if llm_ip == oh_ip:
                 assignments[oh_url].append(llm_url)
@@ -579,9 +579,9 @@ def assign_llm_servers_to_openhands(
     # Phase 2: Distribute remaining evenly (round-robin)
     remaining = [url for url in llm_server_urls if url not in assigned]
     if remaining:
-        logger.info(f"Distributing {len(remaining)} remaining LLM servers across {len(openhands_urls)} OpenHands servers")
+        logger.info(f"Distributing {len(remaining)} remaining LLM servers across {len(ProRL_Agent_Server_urls)} ProRL Agent Server servers")
         for i, llm_url in enumerate(remaining):
-            oh_url = openhands_urls[i % len(openhands_urls)]
+            oh_url = ProRL_Agent_Server_urls[i % len(ProRL_Agent_Server_urls)]
             assignments[oh_url].append(llm_url)
 
     return assignments
@@ -610,19 +610,19 @@ async def wait_for_server_health(urls: List[str], timeout: int = 600):
     logger.info("All servers are healthy")
 
 
-async def setup_llm_servers_with_openhands(
-    openhands_urls: List[str],
+async def setup_llm_servers_with_ProRL_Agent_Server(
+    ProRL_Agent_Server_urls: List[str],
     llm_server_urls: List[str],
     token_level_generation: bool = False,
 ):
     """
-    Clear existing LLM servers and register new ones with all OpenHands servers.
+    Clear existing LLM servers and register new ones with all ProRL Agent Server servers.
 
     Steps:
     1. Wait for all LLM servers to be healthy.
-    2. Clear existing LLM server registrations from all OpenHands servers.
-    3. Compute locality-based assignment of LLM servers to OpenHands servers.
-    4. Register each LLM server with its assigned OpenHands server.
+    2. Clear existing LLM server registrations from all ProRL Agent Server servers.
+    3. Compute locality-based assignment of LLM servers to ProRL Agent Server servers.
+    4. Register each LLM server with its assigned ProRL Agent Server server.
     """
     # Step 1: Wait for LLM servers to be healthy
     await wait_for_server_health(llm_server_urls)
@@ -630,15 +630,15 @@ async def setup_llm_servers_with_openhands(
     connector = aiohttp.TCPConnector(limit=0)
     async with aiohttp.ClientSession(connector=connector) as session:
         # Step 2: Clear existing LLM servers
-        logger.info("Clearing existing LLM servers from all OpenHands servers...")
-        clear_tasks = [clear_llm_servers_from_openhands(session, url) for url in openhands_urls]
+        logger.info("Clearing existing LLM servers from all ProRL Agent Server servers...")
+        clear_tasks = [clear_llm_servers_from_ProRL_Agent_Server(session, url) for url in ProRL_Agent_Server_urls]
         await asyncio.gather(*clear_tasks)
 
         # Step 3: Compute assignment
-        assignments = assign_llm_servers_to_openhands(openhands_urls, llm_server_urls)
+        assignments = assign_llm_servers_to_ProRL_Agent_Server(ProRL_Agent_Server_urls, llm_server_urls)
 
         # Step 4: Register LLM servers
-        logger.info(f"Registering {len(llm_server_urls)} LLM servers with {len(openhands_urls)} OpenHands servers...")
+        logger.info(f"Registering {len(llm_server_urls)} LLM servers with {len(ProRL_Agent_Server_urls)} ProRL Agent Server servers...")
         add_tasks = []
         for oh_url, llm_urls in assignments.items():
             for llm_url in llm_urls:
@@ -648,7 +648,7 @@ async def setup_llm_servers_with_openhands(
                 else:
                     base = llm_url if llm_url.startswith("http") else f"http://{llm_url}"
                     address = f"{base}/v1" if not base.endswith("/v1") else base
-                add_tasks.append(add_llm_server_to_openhands(session, oh_url, address))
+                add_tasks.append(add_llm_server_to_ProRL_Agent_Server(session, oh_url, address))
         await asyncio.gather(*add_tasks)
 
         # Log summary
@@ -657,9 +657,9 @@ async def setup_llm_servers_with_openhands(
         logger.info("LLM server registration complete")
 
 
-async def run_openhands_evaluation(
+async def run_ProRL_Agent_Server_evaluation(
     instances: List[dict],
-    openhands_urls: List[str],
+    ProRL_Agent_Server_urls: List[str],
     sampling_params: dict,
     num_trajectories: int = 1,
     num_workers_per_server: int = 64,
@@ -667,7 +667,7 @@ async def run_openhands_evaluation(
     timeout_seconds: int = 1500,
 ) -> List[dict]:
     """
-    Send all instances to OpenHands servers with load balancing.
+    Send all instances to ProRL Agent Server servers with load balancing.
 
     Returns a flat list of result dicts (one per instance * trajectory).
     Each result has the original instance attached.
@@ -684,7 +684,7 @@ async def run_openhands_evaluation(
 
     # Build server worker pool
     server_workers = []
-    for url in openhands_urls:
+    for url in ProRL_Agent_Server_urls:
         for w in range(num_workers_per_server):
             server_workers.append(url)
 
@@ -704,9 +704,9 @@ async def run_openhands_evaluation(
     connector = aiohttp.TCPConnector(limit=0)
     async with aiohttp.ClientSession(connector=connector) as session:
         # Start all servers
-        start_tasks = [start_openhands_server(session, url) for url in openhands_urls]
+        start_tasks = [start_ProRL_Agent_Server_server(session, url) for url in ProRL_Agent_Server_urls]
         await asyncio.gather(*start_tasks)
-        logger.info("All OpenHands servers started")
+        logger.info("All ProRL Agent Server servers started")
 
         async def worker():
             nonlocal completed
@@ -720,7 +720,7 @@ async def run_openhands_evaluation(
 
                 server_url = await server_queue.get()
                 try:
-                    result = await send_to_openhands(session, server_url, instance, sampling_params, timeout_seconds)
+                    result = await send_to_ProRL_Agent_Server(session, server_url, instance, sampling_params, timeout_seconds)
                     result["instance"] = instance
 
                     if not result.get("success", False) and not result.get("messages") and retry_count < max_retries:
@@ -765,7 +765,7 @@ async def run_openhands_evaluation(
         await asyncio.gather(*workers)
 
         # Stop all servers
-        stop_tasks = [stop_openhands_server(session, url) for url in openhands_urls]
+        stop_tasks = [stop_ProRL_Agent_Server_server(session, url) for url in ProRL_Agent_Server_urls]
         await asyncio.gather(*stop_tasks)
 
     # Fill in any None results (jobs that exhausted all retries)
@@ -892,22 +892,22 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Standalone SWE-bench validation script")
     parser.add_argument("--data_path", type=str, required=True, help="Path to test parquet file")
     parser.add_argument(
-        "--openhands_urls",
+        "--ProRL_Agent_Server_urls",
         type=str,
         required=True,
-        help="OpenHands server URLs separated by '+' (e.g. http://host1:8006+http://host2:8006)",
+        help="ProRL Agent Server URLs separated by '+' (e.g. http://host1:8006+http://host2:8006)",
     )
     parser.add_argument(
         "--llm_server_urls",
         type=str,
         default=None,
         help="vLLM server URLs separated by '+' (e.g. http://host1:8100+http://host2:8100). "
-             "If provided, these will be registered with OpenHands servers before evaluation.",
+             "If provided, these will be registered with ProRL Agent Server servers before evaluation.",
     )
     parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-32B", help="Model name for vLLM")
     parser.add_argument("--output_dir", type=str, default="./test_results", help="Output directory")
     parser.add_argument("--num_trajectories", type=int, default=1, help="Number of trajectories per instance")
-    parser.add_argument("--num_workers_per_server", type=int, default=64, help="Number of concurrent workers per OpenHands server")
+    parser.add_argument("--num_workers_per_server", type=int, default=64, help="Number of concurrent workers per ProRL Agent Server server")
     parser.add_argument("--max_retries", type=int, default=2, help="Max retries per job")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature (0 = greedy)")
     parser.add_argument("--top_p", type=float, default=1.0, help="Top-p sampling")
@@ -928,17 +928,17 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # Parse OpenHands URLs
-    openhands_urls = [url.strip() for url in args.openhands_urls.split("+") if url.strip()]
-    logger.info(f"OpenHands servers: {openhands_urls}")
+    # Parse ProRL Agent Server URLs
+    ProRL_Agent_Server_urls = [url.strip() for url in args.ProRL_Agent_Server_urls.split("+") if url.strip()]
+    logger.info(f"ProRL Agent Server servers: {ProRL_Agent_Server_urls}")
 
-    # Register LLM servers with OpenHands if provided
+    # Register LLM servers with ProRL Agent Server if provided
     if args.llm_server_urls:
         llm_server_urls = [url.strip() for url in args.llm_server_urls.split("+") if url.strip()]
         logger.info(f"LLM servers: {llm_server_urls}")
         asyncio.run(
-            setup_llm_servers_with_openhands(
-                openhands_urls, llm_server_urls, args.token_level_generation
+            setup_llm_servers_with_ProRL_Agent_Server(
+                ProRL_Agent_Server_urls, llm_server_urls, args.token_level_generation
             )
         )
 
@@ -973,9 +973,9 @@ def main():
     # Run evaluation
     start_time = time.time()
     results = asyncio.run(
-        run_openhands_evaluation(
+        run_ProRL_Agent_Server_evaluation(
             instances=[inst["instance"] for inst in instances],
-            openhands_urls=openhands_urls,
+            ProRL_Agent_Server_urls=ProRL_Agent_Server_urls,
             sampling_params=sampling_params,
             num_trajectories=args.num_trajectories,
             num_workers_per_server=args.num_workers_per_server,
