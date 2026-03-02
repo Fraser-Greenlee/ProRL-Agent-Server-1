@@ -4,33 +4,33 @@
 echo "[Local] Submitting background job to reserve node..."
 
 # for CPU reservation
-#IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
+IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
+JOB_ID=$(sbatch --parsable \
+    --job-name=kvm_interactive \
+    --account=nvr_lpr_agentic \
+    --partition=cpu_interactive \
+    --reservation=sla_res_osworld_agent_vlm_cpu_only \
+    --nodes=1 \
+    --ntasks-per-node=1 \
+    --time=04:00:00 \
+    --exclusive \
+    --output=/dev/null \
+    --error=/dev/null \
+    --wrap="srun --container-image=$IMAGE --container-mounts=/lustre:/lustre,/home:/home sleep infinity")
+
+# for GPU reservation - note: the container image for GPU node is not ready yet
+#IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.13.0.sqsh"
 #JOB_ID=$(sbatch --parsable \
 #    --job-name=kvm_interactive \
-#    --account=nvr_lpr_agentic \
-#    --partition=cpu_interactive \
-#    --reservation=sla_res_osworld_agent_vlm_cpu_only \
-#    --nodes=1 \
-#    --ntasks-per-node=1 \
+#    --account=llmservice_fm_vision \
+#    --partition=batch_block1 \
+#    --gpus-per-node=8 \
+#    --reservation=sla_res_osworld_agent_vlm \
 #    --time=04:00:00 \
 #    --exclusive \
 #    --output=/dev/null \
 #    --error=/dev/null \
 #    --wrap="srun --container-image=$IMAGE --container-mounts=/lustre:/lustre sleep infinity")
-
-# for GPU reservation - note: the container image for GPU node is not ready yet
-IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.13.0.sqsh"
-JOB_ID=$(sbatch --parsable \
-    --job-name=kvm_interactive \
-    --account=llmservice_fm_vision \
-    --partition=batch_block1 \
-    --gpus-per-node=8 \
-    --reservation=sla_res_osworld_agent_vlm \
-    --time=04:00:00 \
-    --exclusive \
-    --output=/dev/null \
-    --error=/dev/null \
-    --wrap="srun --container-image=$IMAGE --container-mounts=/lustre:/lustre sleep infinity")
 
 if [ -z "$JOB_ID" ]; then
     echo "Error: Job submission failed."

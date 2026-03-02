@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Union, Optional
 from typing import Dict, List
-from urllib.parse import urlparse, urlunparse, ParseResult
+from urllib.parse import urlparse, urlunparse, unquote, ParseResult
 
 import requests
 from playwright.async_api import async_playwright, TimeoutError
@@ -226,7 +226,7 @@ class SetupController:
                         if url.startswith(hf_cache_url):
                             local_cache_dir = Path("/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/"
                                                    "cua/prorl-agent-server/cua/data/ubuntu_osworld_file_cache")
-                            local_file_path = local_cache_dir / url.removeprefix(hf_cache_url)
+                            local_file_path = local_cache_dir / unquote(url.removeprefix(hf_cache_url))
 
                             if local_file_path.exists():
                                 import shutil

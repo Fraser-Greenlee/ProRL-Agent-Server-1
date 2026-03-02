@@ -22,8 +22,7 @@
 # ============================================================================
 
 ACTOR_IDX="${1:-0}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs_single}"
+LOG_DIR="${LOG_DIR:-./logs}"
 
 # Logging Files
 ACTOR_VLLM_LOG="$LOG_DIR/actor_${PLANNER_JOB_ID}-${ACTOR_IDX}.out"

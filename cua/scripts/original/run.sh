@@ -14,8 +14,7 @@
 #   NUM_ACTORS=4 bash run.sh
 # ============================================================================
 
-SCRIPT_DIR="$(realpath .)"
-export LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs_multi_thread}"
+export LOG_DIR="${LOG_DIR:-./logs}"
 
 # Configurable parameters
 NUM_ACTORS="${NUM_ACTORS:-1}"
@@ -77,7 +76,7 @@ PLANNER_JOB_ID=$(sbatch \
     --output="$LOG_DIR/planner-%j.out" \
     --export=ALL,COORD_FILE="$COORD_FILE" \
     --parsable \
-    "$SCRIPT_DIR/run_planner.sbatch")
+    "./run_planner.sbatch")
 echo "[run.sh] Planner job submitted: $PLANNER_JOB_ID"
 
 # --- 2. Wait for planner hostname ---
@@ -119,7 +118,7 @@ for i in $(seq 1 "$NUM_ACTORS"); do
     PLANNER_JOB_ID="$PLANNER_JOB_ID" \
     MAX_PARALLEL="$MAX_PARALLEL" \
     MAX_TRAJECTORIES="$MAX_TRAJECTORIES" \
-        bash "$SCRIPT_DIR/run_actor_and_vm.sh" "$i" &> "$CURRENT_LOG" &
+        bash "./run_actor_and_vm.sh" "$i" &> "$CURRENT_LOG" &
 
     ACTOR_PIDS+=($!)
     echo "[run.sh] Actor $i launched (PID ${ACTOR_PIDS[-1]})"
