@@ -25,7 +25,7 @@
 export LOG_DIR="${LOG_DIR:-./logs}"
 
 # Configurable parameters
-MAX_PARALLEL="${MAX_PARALLEL:-12}"
+MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
 
 # Create logs directory
@@ -76,7 +76,9 @@ trap cleanup EXIT
 # --- 1. Submit Kimi vLLM server (with reservation for /dev/kvm) ---
 echo "[colocated] Submitting Kimi vLLM sbatch job (reserved nodes)..."
 KIMI_JOB_ID=$(sbatch \
+    --account=llmservice_fm_vision \
     --reservation=sla_res_osworld_agent_vlm \
+    --partition=batch_block1 \
     --output="$LOG_DIR/slurm-%j-server.out" \
     --error="$LOG_DIR/slurm-%j-server.out" \
     --parsable \

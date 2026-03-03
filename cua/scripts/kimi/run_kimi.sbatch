@@ -8,7 +8,6 @@
 #SBATCH --mem=0
 #SBATCH --time=04:00:00
 #SBATCH --exclusive
-#SBATCH --reservation=sla_res_osworld_agent_vlm
 #SBATCH --output=logs/slurm-%A-server.out
 #SBATCH --error=logs/slurm-%A-server.out
 #SBATCH --comment='{"OccupiedIdleGPUsJobReaper": {"exemptIdleTimeMins": "240", "reason": "model_loading", "description": "Required model loading will take 90 minutes."}}'
@@ -16,8 +15,10 @@
 # parameters
 TOTAL_TP=$(( SLURM_JOB_NUM_NODES * 8 ))
 TOTAL_PP=1
+#TOTAL_TP=8
+#TOTAL_PP=$SLURM_JOB_NUM_NODES
 CONTAINER_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.16.0.sqsh"
-CONTAINER_MOUNTS="/lustre:/lustre"
+CONTAINER_MOUNTS="/lustre:/lustre,/tmp:/tmp"
 
 
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
@@ -82,11 +83,14 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     -tp $TOTAL_TP \
     -pp $TOTAL_PP \
     --host 0.0.0.0 \
+    --port $api_port \
     --mm-encoder-tp-mode data \
     --compilation_config.pass_config.fuse_allreduce_rms true \
     --tool-call-parser kimi_k2 \
     --reasoning-parser kimi_k2 \
     --enable-auto-tool-choice \
+    --limit-mm-per-prompt.video 0 \
+    --limit-mm-per-prompt.image 2 \
     --max-model-len 65536 \
     --trust-remote-code \
     --enable-expert-parallel \

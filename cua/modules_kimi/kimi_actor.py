@@ -349,7 +349,7 @@ class KimiActor:
             temperature=temperature,
             top_p=self.top_p,
             max_completion_tokens=self.max_tokens,
-            timeout=600,
+            timeout=900,
         )
 
         message = chat_response.choices[0].message

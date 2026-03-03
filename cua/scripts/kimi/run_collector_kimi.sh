@@ -52,7 +52,7 @@ COLLECTOR_JOB_ID=$(sbatch --parsable \
     --partition=cpu_short \
     --reservation=sla_res_osworld_agent_vlm_cpu_only \
     --mem=0 \
-    --time=04:00:00 \
+    --time=02:00:00 \
     --exclusive \
     --output="/dev/null" \
     --error="/dev/null" \
