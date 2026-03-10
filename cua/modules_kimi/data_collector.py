@@ -47,8 +47,12 @@ class DataCollector:
         self.max_steps_per_trajectory = args.max_steps_per_trajectory
 
         # Output directory: cua/trajectories/kimi/<hostname>--<timestamp>
+        # self.output_root = (
+        #     Path("./trajectories/kimi")
+        #     / f"{socket.gethostname()}--{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # )
         self.output_root = (
-            Path("./trajectories/kimi")
+            Path(args.trajectory_save_dir)
             / f"{socket.gethostname()}--{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         )
         self.output_root.mkdir(parents=True, exist_ok=True)

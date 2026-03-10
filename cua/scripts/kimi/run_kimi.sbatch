@@ -90,7 +90,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     --reasoning-parser kimi_k2 \
     --enable-auto-tool-choice \
     --limit-mm-per-prompt.video 0 \
-    --limit-mm-per-prompt.image 2 \
+    --limit-mm-per-prompt.image 3 \
     --max-model-len 65536 \
     --trust-remote-code \
     --enable-expert-parallel \

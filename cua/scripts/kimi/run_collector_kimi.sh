@@ -52,7 +52,7 @@ COLLECTOR_JOB_ID=$(sbatch --parsable \
     --partition=cpu_short \
     --reservation=sla_res_osworld_agent_vlm_cpu_only \
     --mem=0 \
-    --time=02:00:00 \
+    --time=01:30:00 \
     --exclusive \
     --output="/dev/null" \
     --error="/dev/null" \
@@ -136,7 +136,8 @@ ssh -t -q -o StrictHostKeyChecking=no "$COLLECTOR_NODE" \
         python parallel_collect_kimi.py \
             --model_node $MODEL_NODE \
             --max_parallel $MAX_PARALLEL \
-            --max_trajectories $MAX_TRAJECTORIES
+            --max_trajectories $MAX_TRAJECTORIES \
+            --trajectory_save_dir $TRAJECTORY_SAVE_DIR
 
         COLLECT_EXIT=\$?
         echo \"[Collector $COLLECTOR_IDX] Data collection finished with exit code \$COLLECT_EXIT\"

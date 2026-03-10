@@ -270,6 +270,8 @@ def parse_args():
                         default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/cua/data/agentnet/processed/instructions.txt")
     parser.add_argument("--osworld_setup_path", type=str,
                         default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json")
+    parser.add_argument("--trajectory_save_dir", type=str,
+                        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/cua/trajectories/kimi")
 
     # Steps
     parser.add_argument("--max_steps_per_trajectory", type=int, default=150)
