@@ -8,7 +8,7 @@ and your model, transparently proxying any supported API format while capturing
 every completion for trajectory construction and reward assignment.
 
 <p align="center">
-  <img src="assets/arp.svg" alt="Agent Rollout Protocol logo" width="400"/>
+  <img src="assets/arp_bg.svg" alt="Agent Rollout Protocol logo" width="800"/>
 </p>
 
 
