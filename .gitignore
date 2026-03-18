@@ -259,3 +259,4 @@ containers/runtime/code
 **/screenshots/*
 **/annotated_images/*
 **/trajectories/*
+**/postprocess/*

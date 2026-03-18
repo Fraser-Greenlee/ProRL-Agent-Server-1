@@ -19,23 +19,33 @@
 #   $1 = collector index (for log naming, default: 0)
 #
 # Usage:
-#   MODEL_NODE=pool0-03161 NGC_API_KEY=nvapi-xxx NGC_ORG=my-org \
+#   MODEL_NODE=pool0-04195 NGC_API_KEY=nvapi-xxx NGC_ORG=my-org \
 #       bash run_collector_kimi_nvcf.sh 1
 # ============================================================================
 
 COLLECTOR_IDX="${1:-0}"
+
+# Load .env if present (cua/.env, two levels up from this script)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../../.env"
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    source "$ENV_FILE"
+    set +a
+fi
+
 LOG_DIR="${LOG_DIR:-./logs}"
 
 # Configs
-PROJECT_ROOT="/lustre/fsw/portfolios/nvr/users/bcui/ProRL-Agent-Server"
+PROJECT_ROOT="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2"
 PROJECT_DIR="$PROJECT_ROOT/cua"
 # COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
-# COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/bcui/images/cua_cpu.sqsh"
-COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.16.0.sqsh"
+COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
+#COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.16.0.sqsh"
 
 MAX_PARALLEL=${MAX_PARALLEL:-10}
 MAX_TRAJECTORIES=${MAX_TRAJECTORIES:-10000}
-TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-$PROJECT_DIR/trajectories/kimi-nvcf}"
+TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-$PROJECT_DIR/trajectories/kimi_nvcf}"
 
 KIMI_PORT=8000
 NVCF_FUNCTION_NAME_PREFIX="${NVCF_FUNCTION_NAME_PREFIX:-data-collection}"
@@ -69,8 +79,8 @@ COLLECTOR_JOB_ID=$(sbatch --parsable \
     --mem=0 \
     --time=01:30:00 \
     --exclusive \
-    --output="$LOG_DIR/slurm-holder-${COLLECTOR_IDX}.out" \
-    --error="$LOG_DIR/slurm-holder-${COLLECTOR_IDX}.out" \
+    --output=/dev/null \
+    --error=/dev/null \
     --wrap="srun --container-image=$COLLECTOR_IMAGE --container-mounts=/lustre:/lustre sleep infinity")
 
 if [ -z "$COLLECTOR_JOB_ID" ]; then
