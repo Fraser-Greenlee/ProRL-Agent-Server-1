@@ -1,4 +1,4 @@
-# Agent Rollout Protocol
+# ProRL Agent Rollout Protocol
 
 A lightweight and ultra-flexible protocol for running **massively parallel LLM agent rollouts**
 against one or more `vLLM` backends. Each gateway node proxies one upstream
@@ -43,36 +43,18 @@ Requires **Python >= 3.10**.
 
 ```bash
 uv venv .venv && . .venv/bin/activate
-uv pip install -e ".[dev]"
+uv pip install -e .
 ```
 
 ---
 
 ## Quick Start
 
-See [**examples/single_node_localhost/**](examples/single_node_localhost/) for a
-full walkthrough that runs one `vLLM`, one gateway node, and the rollout server
-on a single machine with 8 parallel Claude Code sessions.
-
 See [**examples/localhost_multi_node/**](examples/localhost_multi_node/) for a
 localhost topology with one rollout server, four gateway nodes, and two
 `vLLM` servers. This is the supported multi-`vLLM` pattern in the current
 codebase: multiple gateway nodes, each configured with its own served model and
 upstream `vLLM` base URL.
-
-```bash
-# 1. start vLLM
-vllm serve MiniMaxAI/MiniMax-M2.5 --tensor-parallel-size 4 ...
-
-# 2. start rollout server
-CONFIG_PATH=examples/single_node_localhost/rollout.yaml python -m rollout.server
-
-# 3. start gateway node (self-registers to rollout server)
-CONFIG_PATH=examples/single_node_localhost/gateway.yaml python -m gateway.server
-
-# 4. submit a rollout task
-bash examples/single_node_localhost/submit_task.sh
-```
 
 ---
 
