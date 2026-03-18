@@ -7,17 +7,10 @@ nodes. It sits between your agent harness (Claude Code, OpenCode, Codex, ...)
 and your model, transparently proxying any supported API format while capturing
 every completion for trajectory construction and reward assignment.
 
-```
-┌──────────────┐     ┌──────────────────┐     ┌────────────┐
-│  Agent CLI   │────▶│   Gateway Node   │────▶│    vLLM    │
-│  (any API)   │◀────│  proxy + capture │◀────│   server   │
-└──────────────┘     └────────┬─────────┘     └────────────┘
-                              │ callback
-                     ┌────────▼─────────┐
-                     │  Rollout Server   │
-                     │  dispatch + eval  │
-                     └──────────────────┘
-```
+<p align="center">
+  <img src="assets/arp.svg" alt="Agent Rollout Protocol logo" width="400"/>
+</p>
+
 
 ---
 
