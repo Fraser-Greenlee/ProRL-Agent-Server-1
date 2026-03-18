@@ -1,0 +1,15 @@
+{
+  "task_id": "multi-node-localhost-capacity8",
+  "num_rollouts": 32,
+  "timeout_seconds": 600,
+  "agent": {
+    "run_cmd": "claude -p 'Count the number of dependencies for the current repo'",
+    "timeout": 900
+  },
+  "builder": {
+    "strategy": "all_records"
+  },
+  "evaluator": {
+    "strategy": "status_outcome"
+  }
+}

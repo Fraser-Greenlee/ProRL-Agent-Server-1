@@ -1,0 +1,8 @@
+rollout:
+  host: 127.0.0.1
+  port: 8080
+  public_url: http://127.0.0.1:8080
+  save_dir: ./rollout_results
+  dispatch_poll_interval_seconds: 1.0
+  callback_grace_seconds: 10.0
+  
