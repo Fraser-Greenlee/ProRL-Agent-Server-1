@@ -59,10 +59,15 @@ class DataCollector:
         )
         self.output_root.mkdir(parents=True, exist_ok=True)
 
+        self.generation_mode = args.generation_mode
+
         # Load datasets
-        self.persona_dfs, self.persona_df_weights = load_persona_dataset(
-            args.persona_dataset_path, logger
-        )
+        if args.persona_dataset_path is not None:
+            self.persona_dfs, self.persona_df_weights = load_persona_dataset(
+                args.persona_dataset_path, logger
+            )
+        else:
+            self.persona_dfs, self.persona_df_weights = None, None
         self.osworld_setup_list = load_osworld_setup_list(args.osworld_setup_path, logger)
         self.example_instructions = load_example_instructions(
             args.example_instructions_path, logger

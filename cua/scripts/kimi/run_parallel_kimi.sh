@@ -23,6 +23,7 @@ export LOG_DIR="${LOG_DIR:-./logs}"
 
 # Configurable parameters
 NUM_COLLECTORS="${NUM_COLLECTORS:-2}"
+GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
 MAX_PARALLEL="${MAX_PARALLEL:-10}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
 TRAJECTORY_SAVE_DIR=/lustre/fs1/portfolios/nvr/projects/nvr_lpr_agentic/users/mingjiel/workspace/data/jaehun/cua/trajectories/kimi
@@ -155,6 +156,7 @@ for i in $(seq 1 "$NUM_COLLECTORS"); do
     CURRENT_LOG="$LOG_DIR/slurm-${KIMI_JOB_ID}-collector-${i}.out"
 
     MODEL_NODE="$MODEL_NODE" \
+    GENERATION_MODE="$GENERATION_MODE" \
     MAX_PARALLEL="$MAX_PARALLEL" \
     MAX_TRAJECTORIES="$MAX_TRAJECTORIES" \
     TRAJECTORY_SAVE_DIR="$TRAJECTORY_SAVE_DIR" \

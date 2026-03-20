@@ -41,25 +41,37 @@ def parse_args():
         default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/OS_images/Ubuntu.qcow2",
     )
     parser.add_argument(
-        "--persona_dataset_path", type=str,
-        default="/lustre/fsw/portfolios/nvr/users/yidong/data/nemotron_data/data/",
+        "--generation_mode", type=str, required=True,
+        help="Data generation mode. Currently supports: `vanilla`, `spreadsheetbench`"
     )
-    parser.add_argument(
-        "--example_instructions_path", type=str,
-        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/cua/data/agentnet/processed/instructions.txt",
-    )
-    parser.add_argument(
-        "--osworld_setup_path", type=str,
-        default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json",
-    )
-    parser.add_argument("--max_steps_per_trajectory", type=int, default=150)
+    parser.add_argument("--max_steps_per_trajectory", type=int, default=100)
+    parser.add_argument("--trajectory_save_dir", type=str,
+                        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_debug")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.generation_mode == "vanilla":
+        # (1) use example instructions from AgentNet as 1-shot example for goal generation
+        # (2) use official osworld setups in osworld_test_nogdrive.json
+        args.persona_dataset_path = "/lustre/fsw/portfolios/nvr/users/yidong/data/nemotron_data/data/"
+        args.example_instructions_path = ("/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/"
+                                          "prorl-agent-server-v2/cua/data/agentnet/processed/instructions.txt")
+        args.osworld_setup_path = "/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json"
+    elif args.generation_mode == "spreadsheetbench":
+        args.persona_dataset_path = None
+        args.example_instructions_path = ("/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/"
+                                          "prorl-agent-server-v2/cua/data/agentnet/processed/instructions.txt")
+        args.osworld_setup_path = ("/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/"
+                                   "prorl-agent-server-v2/cua/data/custom_configs/spreadsheetbench/osworld_setup_configs.jsonl")
+    else:
+        raise NotImplementedError
+
+    return args
 
 
 async def main(args):
     data_collector = DataCollector(args)
-    await data_collector.single_trajectory_job(trajectory_idx=123456)
+    await data_collector.single_trajectory_job(trajectory_idx=1234)
 
 
 if __name__ == "__main__":

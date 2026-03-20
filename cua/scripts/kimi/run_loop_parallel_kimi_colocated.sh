@@ -14,6 +14,7 @@ NUM_INSTANCES="${NUM_INSTANCES:-4}"
 NUM_ROUNDS="${NUM_ROUNDS:-20}"
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-600}"  # 10 minutes
 ROUND_TIMEOUT="${ROUND_TIMEOUT:-14400}"      # 4 hours — timeout for one round of NUM_INSTANCES runs
+GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this
 MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
 
@@ -51,6 +52,7 @@ for round in $(seq 1 "$NUM_ROUNDS"); do
     PIDS=()
     for inst in $(seq 1 "$NUM_INSTANCES"); do
         echo "[loop] Starting instance $inst..."
+        GENERATION_MODE="$GENERATION_MODE" \
         MAX_PARALLEL="$MAX_PARALLEL" \
         MAX_TRAJECTORIES="$MAX_TRAJECTORIES" \
             bash run_parallel_kimi_colocated.sh &

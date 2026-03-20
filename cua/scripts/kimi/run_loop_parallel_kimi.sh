@@ -16,6 +16,7 @@ NUM_ROUNDS="${NUM_ROUNDS:-40}"
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-600}"  # 10 minutes
 ROUND_TIMEOUT="${ROUND_TIMEOUT:-14400}"      # 4 hours — timeout for one round of NUM_INSTANCES runs
 NUM_COLLECTORS="${NUM_COLLECTORS:-2}"
+GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
 MAX_PARALLEL="${MAX_PARALLEL:-10}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
 
@@ -55,6 +56,7 @@ for round in $(seq 1 "$NUM_ROUNDS"); do
     for inst in $(seq 1 "$NUM_INSTANCES"); do
         echo "[loop] Starting instance $inst..."
         NUM_COLLECTORS="$NUM_COLLECTORS" \
+        GENERATION_MODE="$GENERATION_MODE" \
         MAX_PARALLEL="$MAX_PARALLEL" \
         MAX_TRAJECTORIES="$MAX_TRAJECTORIES" \
             bash run_parallel_kimi.sh &

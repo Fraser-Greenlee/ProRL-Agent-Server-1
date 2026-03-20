@@ -25,10 +25,10 @@
 export LOG_DIR="${LOG_DIR:-./logs}"
 
 # Configurable parameters
+GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
 MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
-# TRAJECTORY_SAVE_DIR=/lustre/fs1/portfolios/nvr/projects/nvr_lpr_agentic/users/mingjiel/workspace/data/jaehun/cua/trajectories/kimi
-TRAJECTORY_SAVE_DIR=/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/bcui/ProRL-Agent-Server/cua/trajectories/kimi-debug/
+TRAJECTORY_SAVE_DIR=/lustre/fs1/portfolios/nvr/projects/nvr_lpr_agentic/users/mingjiel/workspace/data/jaehun/cua/trajectories/kimi
 
 # Create logs directory
 mkdir -p "$LOG_DIR"
@@ -185,6 +185,7 @@ for i in "${!NODES_ARRAY[@]}"; do
             cd $PROJECT_DIR
             python parallel_collect_kimi.py \
                 --model_node $MODEL_NODE \
+                --generation_mode $GENERATION_MODE \
                 --max_parallel $MAX_PARALLEL \
                 --max_trajectories $MAX_TRAJECTORIES \
                 --trajectory_save_dir $TRAJECTORY_SAVE_DIR

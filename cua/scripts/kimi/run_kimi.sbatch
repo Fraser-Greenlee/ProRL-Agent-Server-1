@@ -71,7 +71,27 @@ if [ "$SLURM_JOB_NUM_NODES" -gt 1 ]; then
   done
 fi
 
-sleep 60
+# Wait until all Ray nodes have joined
+echo "[INFO] Waiting for all $SLURM_JOB_NUM_NODES Ray nodes to join..."
+EXPECTED_NODES=$SLURM_JOB_NUM_NODES
+MAX_WAIT=300
+ELAPSED=0
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+  NODE_COUNT=$(srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
+    --container-image="$CONTAINER_IMAGE" --container-mounts="$CONTAINER_MOUNTS" \
+    bash -c "export VLLM_HOST_IP=$head_node_ip; ray status 2>/dev/null | grep -c 'node_'" 2>/dev/null || echo 0)
+  if [ "$NODE_COUNT" -ge "$EXPECTED_NODES" ] 2>/dev/null; then
+    echo "[INFO] All $NODE_COUNT/$EXPECTED_NODES Ray nodes ready."
+    break
+  fi
+  echo "[INFO] Ray nodes: ${NODE_COUNT}/${EXPECTED_NODES}, waiting..."
+  sleep 10
+  ELAPSED=$((ELAPSED + 10))
+done
+
+if [ $ELAPSED -ge $MAX_WAIT ]; then
+  echo "[ERROR] Timed out waiting for Ray nodes. Proceeding anyway..."
+fi
 
 # === Launching vLLM server === #
 echo "[INFO] Launching VLLM Server on $head_node with TP=$TOTAL_TP, PP=$TOTAL_PP..."

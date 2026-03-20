@@ -13,6 +13,7 @@
 #   NGC_ORG           - NVCF organization
 #
 # Optional env vars:
+#   GENERATION_MODE   - vanilla or spreadsheetbench (default: vanilla)
 #   MAX_PARALLEL      - parallel VMs per collector (default: 10)
 #   MAX_TRAJECTORIES  - trajectories to collect (default: 10000)
 #   TRAJECTORY_SAVE_DIR - output directory
@@ -41,6 +42,7 @@ fi
 PROJECT_ROOT="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2"
 PROJECT_DIR="$PROJECT_ROOT/cua"
 
+GENERATION_MODE=${GENERATION_MODE:-vanilla}
 MAX_PARALLEL=${MAX_PARALLEL:-10}
 MAX_TRAJECTORIES=${MAX_TRAJECTORIES:-10000}
 TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-$PROJECT_DIR/trajectories/kimi_nvcf}"
@@ -64,6 +66,7 @@ if [ -z "$NGC_ORG" ]; then
 fi
 
 echo "MODEL_NODE=$MODEL_NODE"
+echo "GENERATION_MODE=$GENERATION_MODE"
 echo "MAX_PARALLEL=$MAX_PARALLEL MAX_TRAJECTORIES=$MAX_TRAJECTORIES"
 echo "TRAJECTORY_SAVE_DIR=$TRAJECTORY_SAVE_DIR"
 echo "Runtime: nvcf"
@@ -94,6 +97,7 @@ echo "Starting parallel data collection (NVCF backend)..."
 cd "$PROJECT_DIR"
 python parallel_collect_kimi.py \
     --model_node "$MODEL_NODE" \
+    --generation_mode "$GENERATION_MODE" \
     --runtime nvcf \
     --max_parallel "$MAX_PARALLEL" \
     --max_trajectories "$MAX_TRAJECTORIES" \

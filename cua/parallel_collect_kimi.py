@@ -272,17 +272,16 @@ def parse_args():
     parser.add_argument("--runtime", type=str, choices=["singularity", "nvcf"], default="singularity",
                         help="Runtime backend: 'singularity' (local KVM) or 'nvcf' (NVCF via OSWorld DesktopEnv)")
 
+    # Generation mode
+    parser.add_argument("--generation_mode", type=str, default="vanilla",
+                        choices=["vanilla", "spreadsheetbench"],
+                        help="Data generation mode")
+
     # Environment & Setup
     parser.add_argument("--vm_image_path", type=str,
                         default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/OS_images/Ubuntu.qcow2")
-    parser.add_argument("--persona_dataset_path", type=str,
-                        default="/lustre/fsw/portfolios/nvr/users/yidong/data/nemotron_data/data/")
-    parser.add_argument("--example_instructions_path", type=str,
-                        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/cua/data/agentnet/processed/instructions.txt")
-    parser.add_argument("--osworld_setup_path", type=str,
-                        default="/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json")
-    parser.add_argument("--trajectory_save_dir", type=str,
-                        default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/cua/trajectories/kimi")
+    parser.add_argument("--trajectory_save_dir", type=str, default=None,
+                        help="Output directory (default: auto based on generation_mode)")
 
     # Steps
     parser.add_argument("--max_steps_per_trajectory", type=int, default=150)
@@ -292,7 +291,24 @@ def parse_args():
     parser.add_argument("--max_trajectories", type=int, default=10000,
                         help="Total trajectories to generate")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    PROJECT_DIR = "/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua"
+
+    if args.generation_mode == "vanilla":
+        args.persona_dataset_path = "/lustre/fsw/portfolios/nvr/users/yidong/data/nemotron_data/data/"
+        args.example_instructions_path = f"{PROJECT_DIR}/data/agentnet/processed/instructions.txt"
+        args.osworld_setup_path = "/lustre/fsw/portfolios/nvr/users/mingjiel/data/osworld/osworld_test_nogdrive.json"
+        if args.trajectory_save_dir is None:
+            args.trajectory_save_dir = f"{PROJECT_DIR}/trajectories/kimi"
+    elif args.generation_mode == "spreadsheetbench":
+        args.persona_dataset_path = None
+        args.example_instructions_path = f"{PROJECT_DIR}/data/agentnet/processed/instructions.txt"
+        args.osworld_setup_path = f"{PROJECT_DIR}/data/custom_configs/spreadsheetbench/osworld_setup_configs.jsonl"
+        if args.trajectory_save_dir is None:
+            args.trajectory_save_dir = f"{PROJECT_DIR}/trajectories/kimi_spreadsheetbench"
+
+    return args
 
 
 async def main():

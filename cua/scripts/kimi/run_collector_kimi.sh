@@ -29,6 +29,7 @@ PROJECT_ROOT="/lustre/fsw/portfolios/nvr/users/bcui/ProRL-Agent-Server"
 PROJECT_DIR="$PROJECT_ROOT/cua"
 COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
 
+GENERATION_MODE=${GENERATION_MODE:-vanilla}
 MAX_PARALLEL=${MAX_PARALLEL:-10}
 MAX_TRAJECTORIES=${MAX_TRAJECTORIES:-10000}
 
@@ -136,6 +137,7 @@ ssh -t -q -o StrictHostKeyChecking=no "$COLLECTOR_NODE" \
         cd $PROJECT_DIR
         python parallel_collect_kimi.py \
             --model_node $MODEL_NODE \
+            --generation_mode $GENERATION_MODE \
             --max_parallel $MAX_PARALLEL \
             --max_trajectories $MAX_TRAJECTORIES \
             --trajectory_save_dir $TRAJECTORY_SAVE_DIR

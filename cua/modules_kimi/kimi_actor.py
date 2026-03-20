@@ -72,7 +72,6 @@ THOUGHT_HISTORY_TEMPLATE_NON_THINKING = "## Thought:\n{thought}\n\n## Action:\n{
 # ---------------------------------------------------------------------------
 # Goal generation prompt — adapted from Planner.prepare_generate_goal_with_long_horizon
 # ---------------------------------------------------------------------------
-
 GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data for OS World environment. Given example instruction(s), your task is to generate a realistic, similar-in-style, similar-in-complexity instruction suited for a new environment.
 
 ### Information on New Environment
@@ -106,6 +105,42 @@ New Goal: [your new goal]
 Requirements: ["your requirement 1", "your requirement 2", ... max 5 requirements]
 """
 
+SPREADSHEETBENCH_GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data for OS World environment. A spreadsheet file has been opened in LibreOffice Calc. Your task is to generate a concise but challenging instruction that centers on the data in this spreadsheet.
+
+### Information on New Environment
+- **OS Setup (Configuration)**:
+{osworld_config}
+  *Schema Reference*: `upload_file` (file on disk), `open` (app active), `launch` (command run), `execute` (shell command).
+
+- **Visual State (Screenshot)**:
+  The provided screenshot shows the spreadsheet currently open in LibreOffice Calc. Examine the visible data — column headers, data types, sheet names, and structure — to ground your instruction in the actual content.
+
+- **Previous Requirements**:
+{prev_requirements}
+
+### Example Goals (for style and length reference)
+{example_goals}
+
+### INSTRUCTIONS
+1. **Ground in the Spreadsheet**: Your instruction MUST reference the actual data visible in the screenshot (column names, sheet names, data patterns). Do not invent columns or sheets that don't exist.
+2. **Length and Style**: Aim for 2-4 sentences, matching the example goals in length. Describe the end result clearly, mentioning specific columns/sheets/data, but do not dictate every click or menu navigation.
+3. **Complexity**: The task should involve 2-3 distinct sub-tasks that build on each other. Pick a core spreadsheet challenge AND a meaningful follow-up — either within the spreadsheet or in another app:
+   - Core challenges: cross-sheet lookups, conditional aggregation, data restructuring, formula construction, charting
+   - Follow-ups that add depth: visualize the result as a chart, export a summary to Writer or Impress, save as CSV and verify in terminal, create a PDF report
+   - Avoid: pure formatting tasks, single-formula tasks, or chaining 5+ unrelated steps
+4. **Learn from Failures**: Review 'Previous Requirements' — do not generate a goal relying on conditions proven impossible.
+5. **Define Requirements**: List specific, objective pre-conditions as binary (True/False) questions that can be verified by inspecting the environment.
+
+Your final response should be formatted as follows:
+New Goal: [your new goal]
+Requirements: ["your requirement 1", "your requirement 2", ... max 5 requirements]
+"""
+
+GOAL_PROMPT = {
+    "vanilla": GOAL_GENERATION_PROMPT,
+    "spreadsheetbench": SPREADSHEETBENCH_GOAL_GENERATION_PROMPT
+}
+
 
 class KimiActor:
     """
@@ -120,6 +155,7 @@ class KimiActor:
             api_key="gen",
         )
         self.model_name = args.kimi_model_name
+        self.generation_mode = args.generation_mode
 
         # Defaults from reference
         self.temperature = 1.0
@@ -158,7 +194,7 @@ class KimiActor:
 
         example_goals_str = "\n".join(f"- {g}" for g in example_goals)
 
-        prompt_text = GOAL_GENERATION_PROMPT.format(
+        prompt_text = GOAL_PROMPT[self.generation_mode].format(
             osworld_config=json.dumps(osworld_config, indent=4),
             prev_requirements=prev_req_str,
             example_goals=example_goals_str,

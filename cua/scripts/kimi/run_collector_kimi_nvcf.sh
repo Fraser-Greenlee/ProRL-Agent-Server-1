@@ -44,6 +44,7 @@ PROJECT_DIR="$PROJECT_ROOT/cua"
 COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
 #COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.16.0.sqsh"
 
+GENERATION_MODE=${GENERATION_MODE:-vanilla}
 MAX_PARALLEL=${MAX_PARALLEL:-10}
 MAX_TRAJECTORIES=${MAX_TRAJECTORIES:-10000}
 TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-$PROJECT_DIR/trajectories/kimi_nvcf}"
@@ -167,6 +168,7 @@ ssh -t -q -o StrictHostKeyChecking=no "$COLLECTOR_NODE" \
         cd $PROJECT_DIR
         python parallel_collect_kimi.py \
             --model_node $MODEL_NODE \
+            --generation_mode $GENERATION_MODE \
             --runtime nvcf \
             --max_parallel $MAX_PARALLEL \
             --max_trajectories $MAX_TRAJECTORIES \
