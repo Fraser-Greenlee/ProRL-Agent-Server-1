@@ -284,7 +284,7 @@ def parse_args():
                         help="Output directory (default: auto based on generation_mode)")
 
     # Steps
-    parser.add_argument("--max_steps_per_trajectory", type=int, default=150)
+    parser.add_argument("--max_steps_per_trajectory", type=int, default=100)
 
     # Parallel specific args
     parser.add_argument("--max_parallel", type=int, default=24, help="Max concurrent VMs")

@@ -26,7 +26,8 @@ NUM_COLLECTORS="${NUM_COLLECTORS:-2}"
 GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
 MAX_PARALLEL="${MAX_PARALLEL:-10}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
-TRAJECTORY_SAVE_DIR=/lustre/fs1/portfolios/nvr/projects/nvr_lpr_agentic/users/mingjiel/workspace/data/jaehun/cua/trajectories/kimi
+TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_spreadsheet}"
+
 
 # Create logs directory
 mkdir -p "$LOG_DIR"

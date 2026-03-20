@@ -40,10 +40,9 @@ def parse_args():
         "--vm_image_path", type=str,
         default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server/OS_images/Ubuntu.qcow2",
     )
-    parser.add_argument(
-        "--generation_mode", type=str, required=True,
-        help="Data generation mode. Currently supports: `vanilla`, `spreadsheetbench`"
-    )
+    parser.add_argument("--generation_mode", type=str, default="vanilla",
+                        choices=["vanilla", "spreadsheetbench"],
+                        help="Data generation mode")
     parser.add_argument("--max_steps_per_trajectory", type=int, default=100)
     parser.add_argument("--trajectory_save_dir", type=str,
                         default="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_debug")

@@ -40,11 +40,9 @@ LOG_DIR="${LOG_DIR:-./logs}"
 # Configs
 PROJECT_ROOT="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2"
 PROJECT_DIR="$PROJECT_ROOT/cua"
-# COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
 COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua_cpu.sqsh"
-#COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.16.0.sqsh"
 
-GENERATION_MODE=${GENERATION_MODE:-vanilla}
+GENERATION_MODE=${GENERATION_MODE:-spreadsheetbench}
 MAX_PARALLEL=${MAX_PARALLEL:-10}
 MAX_TRAJECTORIES=${MAX_TRAJECTORIES:-10000}
 TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-$PROJECT_DIR/trajectories/kimi_nvcf}"

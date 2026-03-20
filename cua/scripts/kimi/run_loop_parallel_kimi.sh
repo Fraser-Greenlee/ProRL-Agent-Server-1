@@ -19,6 +19,7 @@ NUM_COLLECTORS="${NUM_COLLECTORS:-2}"
 GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
 MAX_PARALLEL="${MAX_PARALLEL:-10}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
+TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_spreadsheet}"
 
 PIDS=()
 
@@ -42,8 +43,10 @@ echo "NUM_ROUNDS:        $NUM_ROUNDS"
 echo "COOLDOWN:          ${COOLDOWN_SECONDS}s"
 echo "ROUND_TIMEOUT:     ${ROUND_TIMEOUT}s"
 echo "NUM_COLLECTORS:    $NUM_COLLECTORS (per instance)"
+echo "GENERATION_MODE:   $GENERATION_MODE"
 echo "MAX_PARALLEL:      $MAX_PARALLEL"
 echo "MAX_TRAJECTORIES:  $MAX_TRAJECTORIES"
+echo "TRAJECTORY_SAVE_DIR: $TRAJECTORY_SAVE_DIR"
 echo ""
 
 for round in $(seq 1 "$NUM_ROUNDS"); do
@@ -59,6 +62,7 @@ for round in $(seq 1 "$NUM_ROUNDS"); do
         GENERATION_MODE="$GENERATION_MODE" \
         MAX_PARALLEL="$MAX_PARALLEL" \
         MAX_TRAJECTORIES="$MAX_TRAJECTORIES" \
+        TRAJECTORY_SAVE_DIR="$TRAJECTORY_SAVE_DIR" \
             bash run_parallel_kimi.sh &
         PIDS+=($!)
     done
