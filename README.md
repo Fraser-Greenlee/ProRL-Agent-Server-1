@@ -73,6 +73,7 @@ This command starts the FastAPI-based async evaluation server and listens on the
 It exposes /start, /process, and /status endpoints, and uses --max-init-workers/--max-run-workers and --timeout to control concurrency and time limits.
 
 ```bash
+export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
 python scripts/start_server.py --host 0.0.0.0 --port 8006 --max-init-workers 64 --max-run-workers 64 --timeout 300
 ```
 
@@ -217,7 +218,7 @@ TEST_RUNTIME=singularity RUN_AS_OPENHANDS=False PYTHONPATH='.' pytest tests/runt
 #### Image Storage Location
 **`OH_RUNTIME_SINGULARITY_IMAGE_REPO`** - Specifies the directory where Singularity runtime images will be stored.
 ```bash
-OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
+export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
 ```
 
 ## 📄 Documentation
@@ -233,6 +234,6 @@ More module READMEs (click to open):
 ## 💡 Current Results
 
 
-To validate the functionality of the ProRLAgent servers, we conducted experiments on software engineering (SWE) tasks by integrating the server with our ProRLAgent Training framework based on verl. We did some initial RL training on Qwen3-4B-Instruct-2507 model. We used 32 A100 GPUs to train the model. Our training data is a subset of [SWE-GYM](https://huggingface.co/datasets/NovaSky-AI/SkyRL-v0-293-data) with 293 training examples. Training for around 66 steps have allowed the Pass@1 on SWE-Bench-Verified to be improved from 14.2% to 20.8%，the following charts shows the test results on SWE-Bench-Verified. It increases during training.
+To validate the functionality of the ProRLAgent servers, we conducted experiments on software engineering (SWE) tasks by integrating the server with our ProRLAgent Training framework based on verl. We did some initial RL training on Qwen3-4B-Instruct-2507 model. We used 32 A100 GPUs to train the model. Our training data is a subset of [SWE-GYM](https://huggingface.co/datasets/NovaSky-AI/SkyRL-v0-293-data) with 293 training examples. Training for around 66 steps have allowed the Pass@1 on SWE-Bench-Verified to be improved from 14.8% to 21.2%，the following charts shows the test results on SWE-Bench-Verified. It increases during training.
 <img src="NVIDIA_Assets/swe-bench.png" alt="swe-bench curve" width="600" />
 
