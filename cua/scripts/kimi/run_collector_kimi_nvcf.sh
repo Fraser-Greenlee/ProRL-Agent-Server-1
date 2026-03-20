@@ -23,6 +23,7 @@
 #       bash run_collector_kimi_nvcf.sh 1
 # ============================================================================
 
+MODEL_NODE=pool0-04195
 COLLECTOR_IDX="${1:-0}"
 
 # Load .env if present (cua/.env, two levels up from this script)

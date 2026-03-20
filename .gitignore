@@ -260,3 +260,6 @@ containers/runtime/code
 **/annotated_images/*
 **/trajectories/*
 **/postprocess/*
+**/spreadsheetbench/*.jsonl
+**/spreadsheetbench/*.png
+**/spreadsheetbench/all_data_912_v0.1/
