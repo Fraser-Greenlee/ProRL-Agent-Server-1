@@ -14,7 +14,7 @@
 NUM_INSTANCES="${NUM_INSTANCES:-2}"
 NUM_ROUNDS="${NUM_ROUNDS:-40}"
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-600}"  # 10 minutes
-ROUND_TIMEOUT="${ROUND_TIMEOUT:-14400}"      # 4 hours — timeout for one round of NUM_INSTANCES runs
+ROUND_TIMEOUT="${ROUND_TIMEOUT:-7200}"      # 2 hours — timeout for one round of NUM_INSTANCES runs
 NUM_COLLECTORS="${NUM_COLLECTORS:-2}"
 GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
 MAX_PARALLEL="${MAX_PARALLEL:-10}"

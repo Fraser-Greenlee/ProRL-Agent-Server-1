@@ -66,7 +66,13 @@ cleanup() {
     # 2. Cancel Kimi vLLM server
     if [ -n "$KIMI_JOB_ID" ]; then
         echo "[colocated] Cancelling Kimi vLLM job $KIMI_JOB_ID"
-        scancel "$KIMI_JOB_ID" 2>/dev/null
+        SCANCEL_OUTPUT=$(scancel "$KIMI_JOB_ID" 2>&1)
+        SCANCEL_EXIT=$?
+        if [ $SCANCEL_EXIT -ne 0 ]; then
+            echo "[colocated] WARNING: scancel failed (exit $SCANCEL_EXIT): $SCANCEL_OUTPUT"
+        else
+            echo "[colocated] scancel succeeded for job $KIMI_JOB_ID"
+        fi
     fi
 
     # 3. Remove head node file
