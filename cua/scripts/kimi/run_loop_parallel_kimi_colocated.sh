@@ -17,7 +17,7 @@ ROUND_TIMEOUT="${ROUND_TIMEOUT:-7200}"      # 2 hours — timeout for one round 
 GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this
 MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
-TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_spreadsheet}"
+TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_$GENERATION_MODE}"
 
 
 PIDS=()

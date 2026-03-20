@@ -16,10 +16,10 @@ NUM_ROUNDS="${NUM_ROUNDS:-40}"
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-600}"  # 10 minutes
 ROUND_TIMEOUT="${ROUND_TIMEOUT:-7200}"      # 2 hours — timeout for one round of NUM_INSTANCES runs
 NUM_COLLECTORS="${NUM_COLLECTORS:-2}"
-GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
 MAX_PARALLEL="${MAX_PARALLEL:-10}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
-TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_spreadsheet}"
+GENERATION_MODE="${GENERATION_MODE:-zenodo}"  # todo change this - vanilla, spreadsheetbench, zenodo
+TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_$GENERATION_MODE}"
 
 PIDS=()
 

@@ -274,7 +274,7 @@ def parse_args():
 
     # Generation mode
     parser.add_argument("--generation_mode", type=str, default="vanilla",
-                        choices=["vanilla", "spreadsheetbench"],
+                        choices=["vanilla", "spreadsheetbench", "zenodo"],
                         help="Data generation mode")
 
     # Environment & Setup
@@ -307,6 +307,12 @@ def parse_args():
         args.osworld_setup_path = f"{PROJECT_DIR}/data/custom_configs/spreadsheetbench/osworld_setup_configs.jsonl"
         if args.trajectory_save_dir is None:
             args.trajectory_save_dir = f"{PROJECT_DIR}/trajectories/kimi_spreadsheetbench"
+    elif args.generation_mode == "zenodo":
+        args.persona_dataset_path = None
+        args.example_instructions_path = f"{PROJECT_DIR}/data/agentnet/processed/instructions.txt"
+        args.osworld_setup_path = f"{PROJECT_DIR}/data/custom_configs/zenodo/osworld_setup_configs.jsonl"
+        if args.trajectory_save_dir is None:
+            args.trajectory_save_dir = f"{PROJECT_DIR}/trajectories/kimi_zenodo"
 
     return args
 

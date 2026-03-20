@@ -28,7 +28,7 @@ export LOG_DIR="${LOG_DIR:-./logs}"
 GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
 MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
-TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_spreadsheet}"
+TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_$GENERATION_MODE}"
 
 # Create logs directory
 mkdir -p "$LOG_DIR"

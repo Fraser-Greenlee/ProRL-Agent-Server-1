@@ -23,10 +23,10 @@ export LOG_DIR="${LOG_DIR:-./logs}"
 
 # Configurable parameters
 NUM_COLLECTORS="${NUM_COLLECTORS:-2}"
-GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
+GENERATION_MODE="${GENERATION_MODE:-zenodo}"  # todo change this - vanilla, spreadsheetbench, zenodo
 MAX_PARALLEL="${MAX_PARALLEL:-10}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
-TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_spreadsheet}"
+TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_$GENERATION_MODE}"
 
 
 # Create logs directory
@@ -62,8 +62,14 @@ cleanup() {
 
     # 2. Cancel Kimi vLLM server
     if [ -n "$KIMI_JOB_ID" ]; then
-        echo "[run_parallel_kimi.sh] Cancelling Kimi vLLM job $KIMI_JOB_ID"
-        scancel "$KIMI_JOB_ID" 2>/dev/null
+        echo "[colocated] Cancelling Kimi vLLM job $KIMI_JOB_ID"
+        SCANCEL_OUTPUT=$(scancel "$KIMI_JOB_ID" 2>&1)
+        SCANCEL_EXIT=$?
+        if [ $SCANCEL_EXIT -ne 0 ]; then
+            echo "[colocated] WARNING: scancel failed (exit $SCANCEL_EXIT): $SCANCEL_OUTPUT"
+        else
+            echo "[colocated] scancel succeeded for job $KIMI_JOB_ID"
+        fi
     fi
 
     # 3. Remove head node file
