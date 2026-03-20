@@ -154,6 +154,28 @@ Output (response body):
 }
 ```
 
+## 💻 Do RL Training with verl
+1) Clone [verl](https://github.com/verl-project/verl) and switch to specific commit
+```shell
+cd /path/to/verl
+git checkout 60138ebd
+```
+2) Install verl following [verl](https://github.com/verl-project/verl)'s instructions
+3) Install our verl patch
+```shell
+cd ProRL-Agent-Server/trainer_integration/verl
+pip install -e .
+```
+4) Start agent server
+```shell
+export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
+python scripts/start_server.py --host 0.0.0.0 --port 8006 --max-init-workers 64 --max-run-workers 64 --timeout 1000
+```
+5) Run training script
+```shell
+bash trainer_integration/verl/verl_custom/nvidia/scripts/run_proagent_qwn3_4B_instruct.sh
+```
+
 ## 💻 Add a New Task/Handler
 
 To add a new task:
