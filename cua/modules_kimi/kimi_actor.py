@@ -7,6 +7,7 @@ Design: stateless — history passed as explicit parameters for thread safety.
 """
 import ast
 import json
+import random
 from argparse import Namespace
 from typing import List, Tuple, Dict, Any, Optional
 
@@ -155,10 +156,8 @@ ZENODO_GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data fo
 ### INSTRUCTIONS
 1. **Ground in the Presentation**: Do not invent slides or content that don't exist.
 2. **Length and Style**: Aim for 2-4 sentences, matching the example goals in length. Describe the end result clearly, mentioning specific slides/content, but do not dictate every click or menu navigation.
-3. **Complexity**: The task should involve 2-3 distinct sub-tasks that build on each other. Pick a core presentation challenge AND a meaningful follow-up — either within the presentation or in another app:
-   - Core challenges: slide restructuring, content editing across multiple slides, applying/modifying themes, adding animations or transitions, image operations, creating new slides from existing content, changing content layout, ...
-   - You are encouraged to add follow-ups that add depth: export the slide, create a summary document in Writer, insert charts or tables derived from slide content, use terminal to check exported files, ...
-   - Avoid: pure formatting tasks, single-slide edits, or chaining 5+ unrelated steps
+3. **Complexity**: The task should involve 2-3 distinct sub-tasks that build on each other:
+   - Avoid: ambiguous, or subjective, under-defined tasks, chaining 5+ unrelated steps
 4. **Learn from Failures**: Review 'Previous Requirements' — do not generate a goal relying on conditions proven impossible.
 5. **Define Requirements**: List specific, objective pre-conditions as binary (True/False) questions that can be verified by inspecting the environment.
 6. **Leverage Example Goals**: Try to come up with a new goal similar in style with the given example(s), while being more LibreOffice-themed and more complex.
@@ -168,7 +167,7 @@ New Goal: [your new goal]
 Requirements: ["your requirement 1", "your requirement 2", ... max 5 requirements]
 """
 
-OFFICE_GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data for OS World environment. One or more office documents have been opened in a LibreOffice application (Calc, Impress, or Writer). Your task is to generate a concise but challenging instruction that starts from the open document and naturally involves multiple applications.
+ZENODO_MULTIAPP_GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data for OS World environment. One or more presentation files (.pptx) have been opened in LibreOffice Impress. Your task is to generate a concise but challenging instruction that centers on the presentation content.
 
 ### Information on New Environment
 - **OS Setup (Configuration)**:
@@ -176,7 +175,7 @@ OFFICE_GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data fo
   *Schema Reference*: `upload_file` (file on disk), `open` (app active), `launch` (command run), `execute` (shell command).
 
 - **Visual State (Screenshot)**:
-  The provided screenshot shows the current state of the desktop. Carefully examine what application is open, what document content is visible (data, slides, text, tables, images, filenames), and any other visible context. Use this to ground your instruction in what actually exists.
+  The provided screenshot shows a presentation currently open in LibreOffice Impress. Examine the visible slides — the main slide in the center as well as other slides shown in the slide panel on the left — paying attention to titles, content, layout, images, and structure to ground your instruction in the actual content.
 
 - **Previous Requirements**:
 {prev_requirements}
@@ -185,12 +184,14 @@ OFFICE_GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data fo
 {example_goals}
 
 ### INSTRUCTIONS
-1. **Ground in Reality**: Your instruction MUST reference actual content visible in the screenshot. Do not invent files, sheets, slides, or data that don't exist.
-2. **Length and Style**: Aim for 2-4 sentences. State the desired outcome clearly without dictating step-by-step navigation.
-3. **Multi-App Workflow**: The task MUST span at least 2 different applications. Start from the open document, then naturally extend to one or more other apps. The transition between apps should feel like a coherent workflow, not a forced checklist. Available apps include LibreOffice Calc/Impress/Writer, Chrome, the file manager, and the terminal.
-4. **Complexity**: The task should require meaningful work in each app involved — not just opening an app and doing one trivial action. Each app step should build on or transform the output of the previous step.
-5. **Learn from Failures**: Review 'Previous Requirements' — do not generate a goal relying on conditions proven impossible.
-6. **Define Requirements**: List specific, objective pre-conditions as binary (True/False) questions that can be verified by inspecting the environment.
+1. **Ground in the Presentation**: Do not invent slides or content that don't exist.
+2. **Length and Style**: Aim for 2-4 sentences, matching the example goals in length. Describe the end result clearly, mentioning specific slides/content, but do not dictate every click or menu navigation.
+3. **Complexity**: The task should involve 2-3 distinct sub-tasks that build on each other:
+   - You are encouraged to create tasks that span at least 2 different applications. Start from the open document, then naturally extend to one or more other apps. The transition between apps should feel like a coherent workflow, not a forced checklist. Available apps include LibreOffice Calc/Impress/Writer, Chrome, the file manager, and the terminal.
+   - Avoid: ambiguous, or subjective, under-defined tasks, chaining 5+ unrelated steps
+4. **Learn from Failures**: Review 'Previous Requirements' — do not generate a goal relying on conditions proven impossible.
+5. **Define Requirements**: List specific, objective pre-conditions as binary (True/False) questions that can be verified by inspecting the environment.
+6. **Leverage Example Goals**: Try to come up with a new goal similar in style with the given example(s), while being more LibreOffice-themed and more complex.
 
 Your final response should be formatted as follows:
 New Goal: [your new goal]
@@ -199,8 +200,8 @@ Requirements: ["your requirement 1", "your requirement 2", ... max 5 requirement
 
 GOAL_PROMPT = {
     "vanilla": GOAL_GENERATION_PROMPT,
-    "spreadsheetbench": OFFICE_GOAL_GENERATION_PROMPT,
-    "zenodo": OFFICE_GOAL_GENERATION_PROMPT,
+    "spreadsheetbench": SPREADSHEETBENCH_GOAL_GENERATION_PROMPT,
+    "zenodo": [ZENODO_GOAL_GENERATION_PROMPT, ZENODO_MULTIAPP_GOAL_GENERATION_PROMPT],
 }
 
 
@@ -256,7 +257,10 @@ class KimiActor:
 
         example_goals_str = "\n".join(f"- {g}" for g in example_goals)
 
-        prompt_text = GOAL_PROMPT[self.generation_mode].format(
+        prompt = GOAL_PROMPT[self.generation_mode]
+        if isinstance(prompt, list):
+            prompt = random.choice(prompt)
+        prompt_text = prompt.format(
             osworld_config=json.dumps(osworld_config, indent=4),
             prev_requirements=prev_req_str,
             example_goals=example_goals_str,
