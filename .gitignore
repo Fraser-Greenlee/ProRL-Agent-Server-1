@@ -263,3 +263,7 @@ containers/runtime/code
 **/spreadsheetbench/*.jsonl
 **/spreadsheetbench/*.png
 **/spreadsheetbench/all_data_912_v0.1/
+**/zenodo/*.jsonl
+**/zenodo/*.png
+**/zenodo/raw_data/
+**/ubuntu_osworld_file_cache/

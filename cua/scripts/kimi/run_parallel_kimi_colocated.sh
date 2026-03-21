@@ -20,8 +20,8 @@
 #
 # Usage:
 #   bash run_parallel_kimi_colocated.sh
-#   RUNTIME=nvcf GENERATION_MODE=zenodo bash run_parallel_kimi_colocated.sh
-#
+#   MAX_PARALLEL=12 RUNTIME=nvcf GENERATION_MODE=zenodo bash run_parallel_kimi_colocated.sh
+#   MAX_PARALLEL=16 RUNTIME=singularity GENERATION_MODE=zenodo bash run_parallel_kimi_colocated.sh
 # Log files:
 #   logs/slurm-<jobid>-server.out
 #   logs/slurm-<jobid>-collector-1.out
@@ -208,7 +208,7 @@ echo "[colocated] All nodes: ${NODES_ARRAY[*]}"
 # --- 3. Wait for vLLM health ---
 echo "[colocated] Waiting for vLLM health at $MODEL_NODE:$KIMI_PORT..."
 ELAPSED=0
-MAX_HEALTH_WAIT=7200  # 2 hours
+MAX_HEALTH_WAIT=3600  # 2 hours
 
 while [ $ELAPSED -lt $MAX_HEALTH_WAIT ]; do
     if curl -sf "http://$MODEL_NODE:$KIMI_PORT/health" > /dev/null 2>&1; then
