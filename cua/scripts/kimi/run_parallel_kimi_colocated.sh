@@ -48,7 +48,7 @@ GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"
 MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
 TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_$GENERATION_MODE}"
-NVCF_FUNCTION_NAME_PREFIX="${NVCF_FUNCTION_NAME_PREFIX:-data-collection}"
+# NVCF_FUNCTION_NAME_PREFIX is set after KIMI_JOB_ID is known (see below)
 
 # Validate NVCF credentials if nvcf runtime
 if [ "$RUNTIME" = "nvcf" ]; then
@@ -110,10 +110,16 @@ cleanup() {
         fi
     fi
 
-    # 3. Remove head node file
+    # 3. Cleanup NVCF functions for this job
+    if [ "$RUNTIME" = "nvcf" ] && [ -n "$NVCF_FUNCTION_NAME_PREFIX" ]; then
+        echo "[colocated] Cleaning up NVCF functions with prefix: $NVCF_FUNCTION_NAME_PREFIX"
+        python "$SCRIPT_DIR/cleanup_nvcf_functions.py" --name-prefix "$NVCF_FUNCTION_NAME_PREFIX" 2>&1 || true
+    fi
+
+    # 4. Remove head node file
     rm -f "$LOG_DIR/head_node_${KIMI_JOB_ID}"
 }
-trap cleanup EXIT
+trap cleanup EXIT SIGTERM SIGINT
 
 
 # --- 1. Submit Kimi vLLM server ---
@@ -145,6 +151,11 @@ if [ -z "$KIMI_JOB_ID" ]; then
     exit 1
 fi
 echo "[colocated] Kimi vLLM job submitted: $KIMI_JOB_ID"
+
+# Set job-specific NVCF function name prefix for isolated cleanup
+NVCF_FUNCTION_NAME_PREFIX="kimi-${KIMI_JOB_ID}"
+export NVCF_FUNCTION_NAME_PREFIX
+echo "[colocated] NVCF function prefix: $NVCF_FUNCTION_NAME_PREFIX"
 
 # --- 2. Wait for job to start and discover nodes ---
 HEAD_NODE_FILE="$LOG_DIR/head_node_${KIMI_JOB_ID}"
