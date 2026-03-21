@@ -135,22 +135,30 @@ class DataCollector:
             nvcf_version_id=nvcf_version_id,
         )
 
-        # Get screen size
-        width, height = EnvController.get_screen_size(env_or_runtime)
+        try:
+            # Get screen size
+            width, height = EnvController.get_screen_size(env_or_runtime)
 
-        trajectory = {
-            "trajectory_id": trajectory_id,
-            "metadata": {
-                "vm_image": self.vm_image_path,
-                "screen_size": f"{width}x{height}",
-                "osworld_setup": osworld_setup,
-                "pipeline": "kimi",
-            },
-            "goal": None,
-            "steps": [],
-        }
+            trajectory = {
+                "trajectory_id": trajectory_id,
+                "metadata": {
+                    "vm_image": self.vm_image_path,
+                    "screen_size": f"{width}x{height}",
+                    "osworld_setup": osworld_setup,
+                    "pipeline": "kimi",
+                },
+                "goal": None,
+                "steps": [],
+            }
 
-        return env_or_runtime, trajectory, trajectory_save_dir, trajectory_id, osworld_setup
+            return env_or_runtime, trajectory, trajectory_save_dir, trajectory_id, osworld_setup
+        except Exception:
+            # Clean up partially-created runtime to avoid leaking NVCF functions
+            try:
+                env_or_runtime.close()
+            except Exception:
+                pass
+            raise
 
     async def collect_trajectory(
         self, runtime, trajectory: Dict, trajectory_save_dir: Path, osworld_setup: Dict

@@ -84,7 +84,11 @@ echo ""
 
 
 # --- Cleanup: cancel server on exit ---
+_CLEANUP_DONE=false
 cleanup() {
+    if $_CLEANUP_DONE; then return; fi
+    _CLEANUP_DONE=true
+
     echo ""
     echo "[colocated] Cleaning up..."
 
@@ -119,7 +123,8 @@ cleanup() {
     # 4. Remove head node file
     rm -f "$LOG_DIR/head_node_${KIMI_JOB_ID}"
 }
-trap cleanup EXIT SIGTERM SIGINT
+trap cleanup EXIT
+trap 'cleanup; exit 130' SIGTERM SIGINT
 
 
 # --- 1. Submit Kimi vLLM server ---
