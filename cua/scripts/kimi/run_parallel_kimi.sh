@@ -81,9 +81,9 @@ trap cleanup EXIT
 # --- 1. Submit Kimi vLLM server ---
 echo "[run_parallel_kimi.sh] Submitting Kimi vLLM sbatch job..."
 KIMI_JOB_ID=$(sbatch \
-    --account=llmservice_fm_vision \
-    --partition=batch_short \
-    --time=02:00:00 \
+    --account=nvr_lpr_agentic \
+    --partition=batch_block1 \
+    --time=04:00:00 \
     --output="$LOG_DIR/slurm-%j-server.out" \
     --error="$LOG_DIR/slurm-%j-server.out" \
     --parsable \

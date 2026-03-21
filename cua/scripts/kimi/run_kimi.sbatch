@@ -105,8 +105,6 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     --host 0.0.0.0 \
     --port $api_port \
     --mm-encoder-tp-mode data \
-    --compilation_config.pass_config.fuse_allreduce_rms true \
-    --compilation_config.cache_dir /lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/vllm_cache \
     --tool-call-parser kimi_k2 \
     --reasoning-parser kimi_k2 \
     --enable-auto-tool-choice \

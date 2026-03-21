@@ -168,10 +168,39 @@ New Goal: [your new goal]
 Requirements: ["your requirement 1", "your requirement 2", ... max 5 requirements]
 """
 
+OFFICE_GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data for OS World environment. One or more office documents have been opened in a LibreOffice application (Calc, Impress, or Writer). Your task is to generate a concise but challenging instruction that starts from the open document and naturally involves multiple applications.
+
+### Information on New Environment
+- **OS Setup (Configuration)**:
+{osworld_config}
+  *Schema Reference*: `upload_file` (file on disk), `open` (app active), `launch` (command run), `execute` (shell command).
+
+- **Visual State (Screenshot)**:
+  The provided screenshot shows the current state of the desktop. Carefully examine what application is open, what document content is visible (data, slides, text, tables, images, filenames), and any other visible context. Use this to ground your instruction in what actually exists.
+
+- **Previous Requirements**:
+{prev_requirements}
+
+### Example Goals (for style and length reference)
+{example_goals}
+
+### INSTRUCTIONS
+1. **Ground in Reality**: Your instruction MUST reference actual content visible in the screenshot. Do not invent files, sheets, slides, or data that don't exist.
+2. **Length and Style**: Aim for 2-4 sentences. State the desired outcome clearly without dictating step-by-step navigation.
+3. **Multi-App Workflow**: The task MUST span at least 2 different applications. Start from the open document, then naturally extend to one or more other apps. The transition between apps should feel like a coherent workflow, not a forced checklist. Available apps include LibreOffice Calc/Impress/Writer, Chrome, the file manager, and the terminal.
+4. **Complexity**: The task should require meaningful work in each app involved — not just opening an app and doing one trivial action. Each app step should build on or transform the output of the previous step.
+5. **Learn from Failures**: Review 'Previous Requirements' — do not generate a goal relying on conditions proven impossible.
+6. **Define Requirements**: List specific, objective pre-conditions as binary (True/False) questions that can be verified by inspecting the environment.
+
+Your final response should be formatted as follows:
+New Goal: [your new goal]
+Requirements: ["your requirement 1", "your requirement 2", ... max 5 requirements]
+"""
+
 GOAL_PROMPT = {
     "vanilla": GOAL_GENERATION_PROMPT,
-    "spreadsheetbench": SPREADSHEETBENCH_GOAL_GENERATION_PROMPT,
-    "zenodo": ZENODO_GOAL_GENERATION_PROMPT,
+    "spreadsheetbench": OFFICE_GOAL_GENERATION_PROMPT,
+    "zenodo": OFFICE_GOAL_GENERATION_PROMPT,
 }
 
 
