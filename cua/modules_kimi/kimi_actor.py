@@ -153,14 +153,15 @@ ZENODO_GOAL_GENERATION_PROMPT = """You are an agent generating synthetic data fo
 {example_goals}
 
 ### INSTRUCTIONS
-1. **Ground in the Presentation**: Your instruction MUST reference the actual content visible in the screenshot (slide titles, text, images, layouts). Do not invent slides or content that don't exist.
+1. **Ground in the Presentation**: Do not invent slides or content that don't exist.
 2. **Length and Style**: Aim for 2-4 sentences, matching the example goals in length. Describe the end result clearly, mentioning specific slides/content, but do not dictate every click or menu navigation.
 3. **Complexity**: The task should involve 2-3 distinct sub-tasks that build on each other. Pick a core presentation challenge AND a meaningful follow-up — either within the presentation or in another app:
-   - Core challenges: slide restructuring, content editing across multiple slides, applying/modifying themes, adding animations or transitions, creating new slides from existing content, working with master slides
-   - Follow-ups that add depth: export as PDF, create a summary document in Writer, insert charts or tables derived from slide content, use terminal to check exported files
+   - Core challenges: slide restructuring, content editing across multiple slides, applying/modifying themes, adding animations or transitions, image operations, creating new slides from existing content, changing content layout, ...
+   - You are encouraged to add follow-ups that add depth: export the slide, create a summary document in Writer, insert charts or tables derived from slide content, use terminal to check exported files, ...
    - Avoid: pure formatting tasks, single-slide edits, or chaining 5+ unrelated steps
 4. **Learn from Failures**: Review 'Previous Requirements' — do not generate a goal relying on conditions proven impossible.
 5. **Define Requirements**: List specific, objective pre-conditions as binary (True/False) questions that can be verified by inspecting the environment.
+6. **Leverage Example Goals**: Try to come up with a new goal similar in style with the given example(s), while being more LibreOffice-themed and more complex.
 
 Your final response should be formatted as follows:
 New Goal: [your new goal]

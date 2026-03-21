@@ -153,6 +153,22 @@ if [ $ELAPSED -ge $MAX_HEALTH_WAIT ]; then
     exit 1
 fi
 
+# Compute collector timeout from server's remaining wall time
+SERVER_END=$(squeue -j "$KIMI_JOB_ID" -h -o %e 2>/dev/null)
+if [ -n "$SERVER_END" ]; then
+    SERVER_END_EPOCH=$(date -d "$SERVER_END" +%s)
+    NOW_EPOCH=$(date +%s)
+    TIMEOUT=$((SERVER_END_EPOCH - NOW_EPOCH - 300))  # 5 min buffer
+    if [ "$TIMEOUT" -lt 600 ]; then
+        echo "[run_parallel_kimi.sh] WARNING: Only ${TIMEOUT}s left on server. Setting minimum 600s."
+        TIMEOUT=600
+    fi
+    echo "[run_parallel_kimi.sh] Server ends at $SERVER_END, collector timeout: ${TIMEOUT}s"
+else
+    TIMEOUT=14400
+    echo "[run_parallel_kimi.sh] WARNING: Could not determine server end time. Using default ${TIMEOUT}s."
+fi
+
 # --- 3. Launch N Collector Instances ---
 echo "[run_parallel_kimi.sh] Launching $NUM_COLLECTORS collector(s)..."
 export MODEL_NODE
@@ -167,6 +183,7 @@ for i in $(seq 1 "$NUM_COLLECTORS"); do
     MAX_PARALLEL="$MAX_PARALLEL" \
     MAX_TRAJECTORIES="$MAX_TRAJECTORIES" \
     TRAJECTORY_SAVE_DIR="$TRAJECTORY_SAVE_DIR" \
+    TIMEOUT="$TIMEOUT" \
         bash "./run_collector_kimi.sh" "$i" &> "$CURRENT_LOG" &
 
     COLLECTOR_PIDS+=($!)

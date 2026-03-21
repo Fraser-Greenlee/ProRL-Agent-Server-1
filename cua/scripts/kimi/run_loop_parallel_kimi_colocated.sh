@@ -12,9 +12,10 @@
 
 NUM_INSTANCES="${NUM_INSTANCES:-4}"
 NUM_ROUNDS="${NUM_ROUNDS:-20}"
-COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-600}"  # 10 minutes
-ROUND_TIMEOUT="${ROUND_TIMEOUT:-7200}"      # 2 hours — timeout for one round of NUM_INSTANCES runs
-GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this
+COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-300}"  # 50 minutes
+ROUND_TIMEOUT="${ROUND_TIMEOUT:-14400}"      # 4 hours — timeout for one round of NUM_INSTANCES runs
+RUNTIME="${RUNTIME:-singularity}"
+GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"
 MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
 TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_$GENERATION_MODE}"
@@ -56,6 +57,7 @@ for round in $(seq 1 "$NUM_ROUNDS"); do
     PIDS=()
     for inst in $(seq 1 "$NUM_INSTANCES"); do
         echo "[loop] Starting instance $inst..."
+        RUNTIME="$RUNTIME" \
         GENERATION_MODE="$GENERATION_MODE" \
         MAX_PARALLEL="$MAX_PARALLEL" \
         MAX_TRAJECTORIES="$MAX_TRAJECTORIES" \

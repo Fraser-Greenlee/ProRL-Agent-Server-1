@@ -4,7 +4,9 @@
 # ===============================================================================
 # Uses 2 reserved GPU nodes for both:
 #   - Kimi vLLM Ray cluster (TP=16 across both nodes, using GPUs)
-#   - Data collection on both nodes (using CPU + /dev/kvm)
+#   - Data collection on both nodes (using CPU)
+#
+# Supports both singularity (local KVM) and nvcf (remote NVCF VMs) runtimes.
 #
 # Flow:
 #   1. Submits run_kimi.sbatch (with reservation) for 2 GPU nodes
@@ -12,9 +14,13 @@
 #   3. SSH+enroot execs into each node's container to run data collection
 #   4. Waits for both collectors, then cancels the server job
 #
+# Required env vars (for nvcf runtime):
+#   NGC_API_KEY       - NVCF API key
+#   NGC_ORG           - NVCF organization
+#
 # Usage:
 #   bash run_parallel_kimi_colocated.sh
-#   MAX_PARALLEL=8 MAX_TRAJECTORIES=1000 bash run_parallel_kimi_colocated.sh
+#   RUNTIME=nvcf GENERATION_MODE=zenodo bash run_parallel_kimi_colocated.sh
 #
 # Log files:
 #   logs/slurm-<jobid>-server.out
@@ -24,11 +30,37 @@
 
 export LOG_DIR="${LOG_DIR:-./logs}"
 
+# Load .env as defaults (won't override existing env vars)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../../.env"
+if [ -f "$ENV_FILE" ]; then
+    while IFS='=' read -r key value; do
+        [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+        if [ -z "${!key+x}" ]; then
+            export "$key=$value"
+        fi
+    done < "$ENV_FILE"
+fi
+
 # Configurable parameters
-GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"  # todo change this - vanilla, spreadsheetbench
+RUNTIME="${RUNTIME:-singularity}"
+GENERATION_MODE="${GENERATION_MODE:-spreadsheetbench}"
 MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
 TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_$GENERATION_MODE}"
+NVCF_FUNCTION_NAME_PREFIX="${NVCF_FUNCTION_NAME_PREFIX:-data-collection}"
+
+# Validate NVCF credentials if nvcf runtime
+if [ "$RUNTIME" = "nvcf" ]; then
+    if [ -z "$NGC_API_KEY" ]; then
+        echo "[colocated] ERROR: NGC_API_KEY not set. Required for NVCF runtime."
+        exit 1
+    fi
+    if [ -z "$NGC_ORG" ]; then
+        echo "[colocated] ERROR: NGC_ORG not set. Required for NVCF runtime."
+        exit 1
+    fi
+fi
 
 # Create logs directory
 mkdir -p "$LOG_DIR"
@@ -43,8 +75,11 @@ PROJECT_DIR="$PROJECT_ROOT/cua"
 echo "============================================"
 echo "Kimi-K2.5 Colocated (vLLM + Collection)"
 echo "============================================"
+echo "RUNTIME:           $RUNTIME"
+echo "GENERATION_MODE:   $GENERATION_MODE"
 echo "MAX_PARALLEL:      $MAX_PARALLEL (per node)"
 echo "MAX_TRAJECTORIES:  $MAX_TRAJECTORIES (per node)"
+echo "TRAJECTORY_SAVE_DIR: $TRAJECTORY_SAVE_DIR"
 echo ""
 
 
@@ -81,16 +116,29 @@ cleanup() {
 trap cleanup EXIT
 
 
-# --- 1. Submit Kimi vLLM server (with reservation for /dev/kvm) ---
-echo "[colocated] Submitting Kimi vLLM sbatch job (reserved nodes)..."
-KIMI_JOB_ID=$(sbatch \
-    --account=llmservice_fm_vision \
-    --reservation=sla_res_osworld_agent_vlm \
-    --partition=batch_block1 \
-    --output="$LOG_DIR/slurm-%j-server.out" \
-    --error="$LOG_DIR/slurm-%j-server.out" \
-    --parsable \
-    "./run_kimi.sbatch")
+# --- 1. Submit Kimi vLLM server ---
+if [ "$RUNTIME" = "nvcf" ]; then
+    echo "[colocated] Submitting Kimi vLLM sbatch job (NVCF runtime)..."
+    KIMI_JOB_ID=$(sbatch \
+        --account=nvr_lpr_agentic \
+        --partition=batch_block1 \
+        --time=04:00:00 \
+        --output="$LOG_DIR/slurm-%j-server.out" \
+        --error="$LOG_DIR/slurm-%j-server.out" \
+        --parsable \
+        "./run_kimi.sbatch")
+else
+    echo "[colocated] Submitting Kimi vLLM sbatch job (KVM runtime, reserved nodes)..."
+    KIMI_JOB_ID=$(sbatch \
+        --account=llmservice_fm_vision \
+        --reservation=sla_res_osworld_agent_vlm \
+        --partition=batch_block1 \
+        --time=04:00:00 \
+        --output="$LOG_DIR/slurm-%j-server.out" \
+        --error="$LOG_DIR/slurm-%j-server.out" \
+        --parsable \
+        "./run_kimi.sbatch")
+fi
 
 if [ -z "$KIMI_JOB_ID" ]; then
     echo "[colocated] ERROR: Kimi sbatch submission failed."
@@ -181,16 +229,26 @@ for i in "${!NODES_ARRAY[@]}"; do
     done
     echo "[colocated] Container on $node ready, PID: $CONTAINER_PID"
 
+    # Build NVCF env exports if needed
+    NVCF_EXPORTS=""
+    RUNTIME_ARG=""
+    if [ "$RUNTIME" = "nvcf" ]; then
+        NVCF_EXPORTS="export NGC_API_KEY=$NGC_API_KEY; export NGC_ORG=$NGC_ORG; export NVCF_FUNCTION_NAME_PREFIX=$NVCF_FUNCTION_NAME_PREFIX; export OSWORLD_SETUP_CACHE_DIR=/tmp/osworld_cache;"
+        RUNTIME_ARG="--runtime nvcf"
+    fi
+
     ssh -t -q -o StrictHostKeyChecking=no "$node" \
         "enroot exec $CONTAINER_PID /bin/bash -c '
             set -e
             export PYTHONUNBUFFERED=1
+            $NVCF_EXPORTS
 
-            echo \"[Collector $COLLECTOR_IDX] Starting data collection on $node...\"
+            echo \"[Collector $COLLECTOR_IDX] Starting data collection on $node ($RUNTIME)...\"
             cd $PROJECT_DIR
             python parallel_collect_kimi.py \
                 --model_node $MODEL_NODE \
                 --generation_mode $GENERATION_MODE \
+                $RUNTIME_ARG \
                 --max_parallel $MAX_PARALLEL \
                 --max_trajectories $MAX_TRAJECTORIES \
                 --trajectory_save_dir $TRAJECTORY_SAVE_DIR

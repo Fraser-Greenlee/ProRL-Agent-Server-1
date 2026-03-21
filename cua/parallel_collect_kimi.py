@@ -290,6 +290,8 @@ def parse_args():
     parser.add_argument("--max_parallel", type=int, default=24, help="Max concurrent VMs")
     parser.add_argument("--max_trajectories", type=int, default=10000,
                         help="Total trajectories to generate")
+    parser.add_argument("--timeout", type=int, default=14400,
+                        help="Global timeout in seconds (default: 14400 = 4 hours)")
 
     args = parser.parse_args()
 
@@ -324,7 +326,13 @@ async def main():
     logger.info("DataCollector initialized (datasets loaded)")
 
     generator = ParallelTrajectoryGenerator(args, data_collector)
-    await generator.run()
+
+    try:
+        await asyncio.wait_for(generator.run(), timeout=args.timeout)
+    except asyncio.TimeoutError:
+        logger.info(f"Global timeout reached ({args.timeout}s). Shutting down...")
+    finally:
+        generator.stop_workers()
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 # ============================================================================
 # Kimi Collector Launcher (SSH+Enroot Pattern)
 # ============================================================================
-# Submits a holder "sleep infinity" job on a reserved node, waits for
+# Submits a holder "sleep infinity" job on a reserved CPU node, waits for
 # the container to be ready, then SSH+enroot execs into it to run:
 #   - Data collection via parallel_collect_kimi.py (no local vLLM needed)
 #
@@ -31,6 +31,7 @@ COLLECTOR_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/
 GENERATION_MODE=${GENERATION_MODE:-vanilla}
 MAX_PARALLEL=${MAX_PARALLEL:-10}
 MAX_TRAJECTORIES=${MAX_TRAJECTORIES:-10000}
+TIMEOUT=${TIMEOUT:-14400}
 
 KIMI_PORT=8000
 
@@ -53,7 +54,7 @@ COLLECTOR_JOB_ID=$(sbatch --parsable \
     --partition=cpu_short \
     --reservation=sla_res_osworld_agent_vlm_cpu_only \
     --mem=0 \
-    --time=01:30:00 \
+    --time=04:00:00 \
     --exclusive \
     --output="/dev/null" \
     --error="/dev/null" \
@@ -139,7 +140,8 @@ ssh -t -q -o StrictHostKeyChecking=no "$COLLECTOR_NODE" \
             --generation_mode $GENERATION_MODE \
             --max_parallel $MAX_PARALLEL \
             --max_trajectories $MAX_TRAJECTORIES \
-            --trajectory_save_dir $TRAJECTORY_SAVE_DIR
+            --trajectory_save_dir $TRAJECTORY_SAVE_DIR \
+            --timeout $TIMEOUT
 
         COLLECT_EXIT=\$?
         echo \"[Collector $COLLECTOR_IDX] Data collection finished with exit code \$COLLECT_EXIT\"

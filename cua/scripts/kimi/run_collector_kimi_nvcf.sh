@@ -77,7 +77,7 @@ COLLECTOR_JOB_ID=$(sbatch --parsable \
     --account=nvr_lpr_agentic \
     --partition=cpu_short \
     --mem=0 \
-    --time=01:30:00 \
+    --time=04:00:00 \
     --exclusive \
     --output=/dev/null \
     --error=/dev/null \

@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=gpu_server
-#SBATCH --account=nvr_lacr_llm
-#SBATCH --partition=batch_short
+#SBATCH --account=nvr_lpr_agentic
+#SBATCH --partition=batch_block1
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=8
 #SBATCH --mem=0
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --exclusive
 #SBATCH --output=logs/slurm-%A-server.out
 #SBATCH --error=logs/slurm-%A-server.out
@@ -17,8 +17,7 @@ TOTAL_TP=$(( SLURM_JOB_NUM_NODES * 8 ))
 TOTAL_PP=1
 #TOTAL_TP=8
 #TOTAL_PP=$SLURM_JOB_NUM_NODES
-# CONTAINER_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.16.0.sqsh"
-CONTAINER_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/bcui/images/cua-vllm-0.16.0.sqsh"
+CONTAINER_IMAGE="/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/images/cua-vllm-0.16.0.sqsh"
 CONTAINER_MOUNTS="/lustre:/lustre,/tmp:/tmp"
 
 
@@ -107,6 +106,7 @@ srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
     --port $api_port \
     --mm-encoder-tp-mode data \
     --compilation_config.pass_config.fuse_allreduce_rms true \
+    --compilation_config.cache_dir /lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/vllm_cache \
     --tool-call-parser kimi_k2 \
     --reasoning-parser kimi_k2 \
     --enable-auto-tool-choice \
