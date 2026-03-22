@@ -6,7 +6,7 @@
 # Total GPU nodes per round: NUM_INSTANCES * 2 (default: 4 * 2 = 8)
 #
 # Usage:
-#   with nvcf: MAX_PARALLEL=12 RUNTIME=nvcf GENERATION_MODE=zenodo bash run_loop_parallel_kimi_colocated.sh
+#   with nvcf: MAX_PARALLEL=16 RUNTIME=nvcf GENERATION_MODE=zenodo bash run_loop_parallel_kimi_colocated.sh
 #   with kvm: MAX_PARALLEL=16 RUNTIME=singularity GENERATION_MODE=zenodo bash run_loop_parallel_kimi_colocated.sh
 # ===============================================================================
 
