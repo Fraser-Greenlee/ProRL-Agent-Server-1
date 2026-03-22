@@ -76,7 +76,7 @@ EXPECTED_NODES=$SLURM_JOB_NUM_NODES
 MAX_WAIT=300
 ELAPSED=0
 while [ $ELAPSED -lt $MAX_WAIT ]; do
-  NODE_COUNT=$(srun --overlap --nodes=1 --ntasks=1 -w "$head_node" \
+  NODE_COUNT=$(srun --overlap --mem=0 --nodes=1 --ntasks=1 -w "$head_node" \
     --container-image="$CONTAINER_IMAGE" --container-mounts="$CONTAINER_MOUNTS" \
     bash -c "export VLLM_HOST_IP=$head_node_ip; ray status 2>/dev/null | grep -c 'node_'" 2>/dev/null || echo 0)
   if [ "$NODE_COUNT" -ge "$EXPECTED_NODES" ] 2>/dev/null; then
