@@ -10,6 +10,18 @@
 #   with kvm: MAX_PARALLEL=16 RUNTIME=singularity GENERATION_MODE=zenodo bash run_loop_parallel_kimi_colocated.sh
 # ===============================================================================
 
+# Load .env as defaults (won't override existing env vars)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/../../.env"
+if [ -f "$ENV_FILE" ]; then
+    while IFS='=' read -r key value; do
+        [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+        if [ -z "${!key+x}" ]; then
+            export "$key=$value"
+        fi
+    done < "$ENV_FILE"
+fi
+
 NUM_INSTANCES="${NUM_INSTANCES:-4}"
 NUM_ROUNDS="${NUM_ROUNDS:-20}"
 COOLDOWN_SECONDS="${COOLDOWN_SECONDS:-300}"  # 50 minutes
@@ -20,6 +32,11 @@ MAX_PARALLEL="${MAX_PARALLEL:-16}"
 MAX_TRAJECTORIES="${MAX_TRAJECTORIES:-10000}"
 TRAJECTORY_SAVE_DIR="${TRAJECTORY_SAVE_DIR:-/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_$GENERATION_MODE}"
 
+# Clean up any stale NVCF functions before starting
+if [ "$RUNTIME" = "nvcf" ]; then
+    echo "[loop] Cleaning up stale NVCF functions before starting..."
+    python "$SCRIPT_DIR/cleanup_nvcf_functions.py" --name-prefix "" 2>&1 || true
+fi
 
 PIDS=()
 
@@ -99,6 +116,11 @@ for round in $(seq 1 "$NUM_ROUNDS"); do
     echo "[loop] Round $round done. $ROUND_FAILED/$NUM_INSTANCES failed."
 
     if [ "$round" -lt "$NUM_ROUNDS" ]; then
+        # Clean up leaked NVCF functions between rounds
+        if [ "$RUNTIME" = "nvcf" ]; then
+            echo "[loop] Cleaning up leaked NVCF functions between rounds..."
+            python "$SCRIPT_DIR/cleanup_nvcf_functions.py" --name-prefix "" 2>&1 || true
+        fi
         echo "[loop] Cooldown: ${COOLDOWN_SECONDS}s..."
         sleep "$COOLDOWN_SECONDS"
     fi
