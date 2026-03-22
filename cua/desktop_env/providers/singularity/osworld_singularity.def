@@ -1,0 +1,70 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%environment
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    
+    # SSL certificates
+    export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+    export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
+%post
+    # Configure APT to work in container environment
+    export DEBIAN_FRONTEND=noninteractive
+    export APT_KEY_DONT_WARN_ON_DANGEROUS_USAGE=1
+    
+    # Fix APT user/group switching issues in containers
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99sandboxdisable
+    
+    # Update package manager
+    apt-get update -o APT::Sandbox::User=root
+    
+    # Install QEMU and OVMF for VM support
+    apt-get install -y --no-install-recommends -o APT::Sandbox::User=root \
+        qemu-system-x86 \
+        ovmf \
+        python3 \
+        python3-pip \
+        curl \
+        ca-certificates \
+        netcat-openbsd
+    
+    # Update CA certificates
+    update-ca-certificates
+    
+    # Create directory for mounting QCOW2 VM images
+    mkdir -p /OS_images
+    
+    # Clean up
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%runscript
+    # This runscript will be called to start QEMU VM
+    # The actual QEMU command will be passed as arguments
+    exec "$@"
+
+%labels
+    Author OSWorld Team
+    Version 1.0
+    Description OSWorld Singularity Runtime Environment with QEMU Support
+
+%help
+    This is an OSWorld runtime environment container with QEMU support.
+    
+    The container expects a QCOW2 VM image to be mounted at /OS_images/
+    
+    Prerequisites:
+    - Singularity/Apptainer installed
+    - KVM access recommended (check with: ls -la /dev/kvm)
+    - QCOW2 VM image (Ubuntu.qcow2 or Windows-10-x64.qcow2)
+    
+    Build this image:
+        singularity build osworld_runtime.sif osworld_singularity.def
+    
+    Run example:
+        singularity exec --bind /path/to/vm:/OS_images osworld_runtime.sif \
+            qemu-system-x86_64 -bios /usr/share/ovmf/OVMF.fd ...

@@ -125,9 +125,6 @@ class EnvController:
         logger.debug(f"[initialize_runtime] Creating {runtime_type} runtime for {job_id}")
 
         if runtime_type == "nvcf":
-            _osworld_path = "/lustre/fsw/portfolios/nvr/users/bcui/OSWorld"
-            if _osworld_path not in sys.path:
-                sys.path.insert(0, _osworld_path)
             from desktop_env.desktop_env import DesktopEnv
 
             if nvcf_api_key:
@@ -144,19 +141,28 @@ class EnvController:
             if nvcf_version_id:
                 os.environ["NVCF_VERSION_ID"] = nvcf_version_id
 
-            env = DesktopEnv(
-                provider_name="nvcf",
-                path_to_vm="",
-                action_space="pyautogui",
-                headless=True,
-                os_type="Ubuntu" if os_type == "linux" else os_type,
-                require_a11y_tree=False,
-            )
+            env = None
+            try:
+                env = DesktopEnv(
+                    provider_name="nvcf",
+                    path_to_vm="",
+                    action_space="pyautogui",
+                    headless=True,
+                    os_type="Ubuntu" if os_type == "linux" else os_type,
+                    require_a11y_tree=False,
+                )
 
-            logger.debug(f"[initialize_runtime] DesktopEnv created, resetting with OSWorld setup...")
-            env.reset(task_config=osworld_setup)
-            logger.debug(f"[initialize_runtime] DesktopEnv reset complete for {job_id}")
-            return env
+                logger.debug(f"[initialize_runtime] DesktopEnv created, resetting with OSWorld setup...")
+                env.reset(task_config=osworld_setup)
+                logger.debug(f"[initialize_runtime] DesktopEnv reset complete for {job_id}")
+                return env
+            except Exception:
+                if env is not None:
+                    try:
+                        env.close()
+                    except Exception:
+                        pass
+                raise
 
         else:
             # Singularity backend
