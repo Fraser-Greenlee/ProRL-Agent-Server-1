@@ -130,14 +130,23 @@ trap 'cleanup; exit 130' SIGTERM SIGINT
 # --- 1. Submit Kimi vLLM server ---
 if [ "$RUNTIME" = "nvcf" ]; then
     echo "[colocated] Submitting Kimi vLLM sbatch job (NVCF runtime)..."
+#    KIMI_JOB_ID=$(sbatch \
+#        --account=nvr_lpr_agentic \
+#        --partition=batch_block1 \
+#        --time=04:00:00 \
+#        --output="$LOG_DIR/slurm-%j-server.out" \
+#        --error="$LOG_DIR/slurm-%j-server.out" \
+#        --parsable \
+#        "./run_kimi.sbatch")
     KIMI_JOB_ID=$(sbatch \
-        --account=nvr_lpr_agentic \
-        --partition=batch_block1 \
-        --time=04:00:00 \
-        --output="$LOG_DIR/slurm-%j-server.out" \
-        --error="$LOG_DIR/slurm-%j-server.out" \
-        --parsable \
-        "./run_kimi.sbatch")
+    --account=llmservice_fm_vision \
+    --reservation=sla_res_osworld_agent_vlm \
+    --partition=batch_block1 \
+    --time=04:00:00 \
+    --output="$LOG_DIR/slurm-%j-server.out" \
+    --error="$LOG_DIR/slurm-%j-server.out" \
+    --parsable \
+    "./run_kimi.sbatch")
 else
     echo "[colocated] Submitting Kimi vLLM sbatch job (KVM runtime, reserved nodes)..."
     KIMI_JOB_ID=$(sbatch \

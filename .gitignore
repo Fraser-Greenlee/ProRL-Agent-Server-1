@@ -259,7 +259,7 @@ containers/runtime/code
 **/screenshots/*
 **/annotated_images/*
 **/trajectories/*
-**/postprocess/*
+**/postprocess/*.jsonl
 **/spreadsheetbench/*.jsonl
 **/spreadsheetbench/*.png
 **/spreadsheetbench/all_data_912_v0.1/
