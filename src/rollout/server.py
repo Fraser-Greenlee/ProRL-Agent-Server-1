@@ -28,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-config = RolloutConfig(os.environ.get("CONFIG_PATH", "config.yaml"))
+config = RolloutConfig.from_environment()
 scheduler = NodeScheduler(bootstrap_nodes=config.bootstrap_nodes)
 pipeline = Pipeline(
     callback_url=f"{config.public_url}/callbacks/session_result",
@@ -86,7 +86,7 @@ async def register_node(request: NodeRegistrationRequest):
 @app.post("/nodes/{node_id}/heartbeat", response_model=GatewayNodeInfo)
 async def node_heartbeat(node_id: str, request: NodeHeartbeatRequest):
     try:
-        return scheduler.heartbeat(node_id, active_sessions=request.active_sessions)
+        return scheduler.heartbeat(node_id, metrics=request.metrics)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

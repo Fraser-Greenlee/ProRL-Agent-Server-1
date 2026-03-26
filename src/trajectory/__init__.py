@@ -1,11 +1,10 @@
 """Trajectory builders, evaluators, and shared rollout schemas."""
 
 from trajectory.models import (
-    AgentRunResult,
-    AgentSpec,
     CompletionRecord,
     CompletionSession,
     EvalResult,
+    EvaluatorSpec,
     StrategySpec,
     Trace,
     Trajectory,
@@ -13,11 +12,10 @@ from trajectory.models import (
 from trajectory.registry import StrategyRegistry
 
 __all__ = [
-    "AgentRunResult",
-    "AgentSpec",
     "CompletionRecord",
     "CompletionSession",
     "EvalResult",
+    "EvaluatorSpec",
     "StrategyRegistry",
     "StrategySpec",
     "Trace",

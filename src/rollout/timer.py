@@ -19,23 +19,39 @@ class StageTimer:
         self._marks[f"{stage}_{event}"] = time.monotonic()
 
     def to_session_timing(self) -> SessionTiming:
-        """Return durations for the run/build/eval lifecycle."""
+        """Return durations for the init/run/post-run lifecycle."""
+        init_ms = self._duration_ms("init")
         run_ms = self._duration_ms("run")
         build_ms = self._duration_ms("build")
         eval_ms = self._duration_ms("eval")
-        total_start = self._marks.get("dispatch_started") or self._marks.get("run_started")
+        postrun_ms = self._duration_ms("postrun")
+        teardown_ms = self._duration_ms("teardown")
+        total_start = (
+            self._marks.get("dispatch_started")
+            or self._marks.get("init_started")
+            or self._marks.get("run_started")
+            or self._marks.get("build_started")
+            or self._marks.get("eval_started")
+            or self._marks.get("postrun_started")
+        )
         total_end = (
             self._marks.get("return_finished")
+            or self._marks.get("teardown_finished")
+            or self._marks.get("postrun_finished")
             or self._marks.get("eval_finished")
             or self._marks.get("build_finished")
             or self._marks.get("run_finished")
+            or self._marks.get("init_finished")
             or total_start
         )
         total_ms = max(0.0, ((total_end or 0.0) - (total_start or total_end or 0.0)) * 1000.0)
         return SessionTiming(
+            init_ms=init_ms,
             run_ms=run_ms,
             build_ms=build_ms,
             eval_ms=eval_ms,
+            postrun_ms=postrun_ms,
+            teardown_ms=teardown_ms,
             total_ms=total_ms,
         )
 

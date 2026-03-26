@@ -82,7 +82,15 @@ class SessionRegistry:
                     info.task_id = task_id
                 info.registered = info.registered or registered
                 info.status = status or info.status
-                if status in {"REGISTERED", "RUNNING", "BUILDING", "EVALUATING"}:
+                if status in {
+                    "REGISTERED",
+                    "INITIALIZING",
+                    "READY",
+                    "RUNNING",
+                    "POST_RUN",
+                    "BUILDING",
+                    "EVALUATING",
+                }:
                     info.result = None
                 return info
 
@@ -139,7 +147,7 @@ class SessionRegistry:
 
 
 def extract_api_key(headers: dict[str, str]) -> str | None:
-    """Extract API key from Authorization or X-Api-Key headers."""
+    """Extract API key from Authorization, X-Api-Key, or x-goog-api-key headers."""
     lower_headers = {k.lower(): v for k, v in headers.items()}
 
     auth = lower_headers.get("authorization", "")
@@ -150,6 +158,11 @@ def extract_api_key(headers: dict[str, str]) -> str | None:
     x_api_key = lower_headers.get("x-api-key") or lower_headers.get("x_api_key")
     if x_api_key:
         return x_api_key.strip() or None
+
+    # Google APIs use x-goog-api-key header
+    goog_key = lower_headers.get("x-goog-api-key")
+    if goog_key:
+        return goog_key.strip() or None
 
     return None
 

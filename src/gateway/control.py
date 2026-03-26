@@ -22,14 +22,20 @@ class RolloutControlClient:
         rollout_server_url: str,
         node_id: str,
         gateway_url: str,
-        capacity: int,
+        max_init_workers: int,
+        max_run_workers: int,
+        max_postrun_workers: int,
+        ready_buffer_target: int,
         heartbeat_interval_seconds: int,
         node_manager: GatewayNodeManager,
     ) -> None:
         self.rollout_server_url = rollout_server_url.rstrip("/")
         self.node_id = node_id
         self.gateway_url = gateway_url.rstrip("/")
-        self.capacity = capacity
+        self.max_init_workers = max_init_workers
+        self.max_run_workers = max_run_workers
+        self.max_postrun_workers = max_postrun_workers
+        self.ready_buffer_target = ready_buffer_target
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.node_manager = node_manager
         self._client = httpx.AsyncClient(base_url=self.rollout_server_url, timeout=15.0)
@@ -52,7 +58,10 @@ class RolloutControlClient:
                 json=NodeRegistrationRequest(
                     node_id=self.node_id,
                     gateway_url=self.gateway_url,
-                    capacity=self.capacity,
+                    max_init_workers=self.max_init_workers,
+                    max_run_workers=self.max_run_workers,
+                    max_postrun_workers=self.max_postrun_workers,
+                    ready_buffer_target=self.ready_buffer_target,
                     heartbeat_interval_seconds=self.heartbeat_interval_seconds,
                 ).model_dump(mode="json"),
             )
@@ -64,10 +73,10 @@ class RolloutControlClient:
         while True:
             await asyncio.sleep(self.heartbeat_interval_seconds)
             try:
-                active_sessions = await self.node_manager.active_sessions()
+                metrics = await self.node_manager.stage_metrics()
                 response = await self._client.post(
                     f"/nodes/{self.node_id}/heartbeat",
-                    json=NodeHeartbeatRequest(active_sessions=active_sessions).model_dump(mode="json"),
+                    json=NodeHeartbeatRequest(metrics=metrics).model_dump(mode="json"),
                 )
                 if response.status_code == 404:
                     await self._register()

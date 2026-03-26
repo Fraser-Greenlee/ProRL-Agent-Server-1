@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import defaultdict, deque
 from typing import Any
 
@@ -9,66 +10,61 @@ from trajectory.builder.base import BaseTrajectoryBuilder
 from trajectory.builder.record_utils import build_trace_from_completion
 from trajectory.models import CompletionSession, Trace, Trajectory
 
+_GROUPING_IGNORED_ROLES = frozenset({"tool"})
 
-def _edit_distance_within_budget(
-    a: tuple[int, ...], b: tuple[int, ...], budget: int
-) -> int | None:
-    """Levenshtein distance if <= *budget*, else ``None``.
 
-    Uses banded DP so the cost is O(n * budget) rather than O(n * m).
+def _flatten_message_content(content: Any) -> str:
+    """Extract text from a message content field (string or content-part array)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        )
+    return str(content) if content is not None else ""
+
+
+def _normalize_messages(
+    messages: list[dict[str, Any]],
+    ignore_patterns: list[re.Pattern[str]],
+) -> str:
+    """Flatten a message list into a deterministic key string.
+
+    Format: ``role:content<SEP>role:content<SEP>...``
+
+    *ignore_patterns* are applied to the final string so that matched regions
+    (e.g. harness-injected cache headers) are stripped before comparison.
     """
-    n, m = len(a), len(b)
-    if abs(n - m) > budget:
-        return None
-    if n == 0:
-        return m if m <= budget else None
-    if m == 0:
-        return n if n <= budget else None
-
-    if n > m:
-        a, b = b, a
-        n, m = m, n
-
-    INF = budget + 1
-    prev = [INF] * (m + 1)
-    for j in range(min(m, budget) + 1):
-        prev[j] = j
-
-    for i in range(1, n + 1):
-        curr = [INF] * (m + 1)
-        if i <= budget:
-            curr[0] = i
-
-        lo = max(1, i - budget)
-        hi = min(m, i + budget)
-
-        for j in range(lo, hi + 1):
-            if a[i - 1] == b[j - 1]:
-                curr[j] = prev[j - 1]
-            else:
-                curr[j] = 1 + min(prev[j], curr[j - 1], prev[j - 1])
-
-        prev = curr
-
-    return prev[m] if prev[m] <= budget else None
+    parts = []
+    for msg in messages:
+        role = msg.get("role", "")
+        content = _flatten_message_content(msg.get("content"))
+        parts.append(f"{role}:{content}")
+    key = "<SEP>".join(parts)
+    for pattern in ignore_patterns:
+        key = pattern.sub("", key)
+    return key
 
 
-def _sequence_similarity(
-    a: tuple[int, ...], b: tuple[int, ...], *, min_ratio: float = 0.0
-) -> float:
-    """Token-level similarity: ``1 - edit_distance(a, b) / max(len(a), len(b))``.
+def _grouping_key(
+    messages: list[dict[str, Any]],
+    ignore_patterns: list[re.Pattern[str]],
+) -> str:
+    """Normalize the structural conversation context used for chaining.
 
-    *min_ratio* enables early termination: when the similarity provably cannot
-    reach *min_ratio* the function returns ``0.0`` without a full DP pass.
+    Tool-result messages are omitted because they are harness artifacts that
+    appear between assistant turns in the next request prompt.
     """
-    max_len = max(len(a), len(b))
-    if max_len == 0:
-        return 1.0
-    budget = int(max_len * (1.0 - min_ratio))
-    dist = _edit_distance_within_budget(a, b, budget)
-    if dist is None:
-        return 0.0
-    return 1.0 - dist / max_len
+    return _normalize_messages(
+        [
+            message
+            for message in messages
+            if message.get("role") not in _GROUPING_IGNORED_ROLES
+        ],
+        ignore_patterns,
+    )
 
 
 def _merge_chain(chain: list[Trace]) -> Trace:
@@ -105,20 +101,29 @@ def _merge_chain(chain: list[Trace]) -> Trace:
 class PrefixMergingBuilder(BaseTrajectoryBuilder):
     """Merge chained completions into contiguous traces, splitting on compaction.
 
+    Matching is based on the **message list** rather than raw token IDs.
+    Each message is normalized to ``role:content`` and the list is joined
+    into a single string key for O(1) dict lookup.  Optional
+    *ignore_patterns* strip harness-injected noise (e.g. cache headers,
+    preamble text) before comparison so that minor differences do not
+    prevent chaining.
+
     Parameters
     ----------
-    match_tolerance:
-        Minimum token-level similarity (``1 − edit_distance / max_len``) for
-        two consecutive turns to be considered part of the same chain.
-        ``1.0`` (default) requires an exact id-by-id match.  Lower values
-        (e.g. ``0.99``) tolerate small request-id or token tweaks between
-        turns.
+    ignore_patterns:
+        Regex strings (compiled with ``re.DOTALL``) applied to the
+        normalized key.  Matched regions are deleted before lookup.
     """
 
-    def __init__(self, *, match_tolerance: float = 1.0) -> None:
-        if not 0.0 < match_tolerance <= 1.0:
-            raise ValueError("match_tolerance must be in (0, 1]")
-        self._match_tolerance = match_tolerance
+    def __init__(
+        self,
+        *,
+        ignore_patterns: list[str] | None = None,
+    ) -> None:
+        self._ignore_pattern_text = list(ignore_patterns or [])
+        self._ignore_patterns: list[re.Pattern[str]] = [
+            re.compile(p, re.DOTALL) for p in self._ignore_pattern_text
+        ]
 
     async def build(self, session: CompletionSession) -> Trajectory:
         if not session.completions:
@@ -134,13 +139,14 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
             )
 
         chains: list[list[Trace]] = []
-        waiting_chains: dict[tuple[int, ...], deque[int]] = defaultdict(deque)
-        exact = self._match_tolerance >= 1.0
+        waiting_chains: dict[str, deque[int]] = defaultdict(deque)
 
         for completion in session.completions:
             trace = build_trace_from_completion(completion)
-            prompt_key = tuple(trace.prompt_ids)
-            chain_idx = self._find_chain(prompt_key, waiting_chains, exact)
+            prompt_key = _grouping_key(
+                trace.prompt_messages, self._ignore_patterns
+            )
+            chain_idx = self._pop_chain(prompt_key, waiting_chains)
 
             if chain_idx is not None:
                 chains[chain_idx].append(trace)
@@ -148,8 +154,11 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 chain_idx = len(chains)
                 chains.append([trace])
 
-            next_prompt_key = tuple(trace.prompt_ids + trace.response_ids)
-            waiting_chains[next_prompt_key].append(chain_idx)
+            next_key = _grouping_key(
+                trace.prompt_messages + trace.response_messages,
+                self._ignore_patterns,
+            )
+            waiting_chains[next_key].append(chain_idx)
 
         merged = [_merge_chain(chain) for chain in chains]
 
@@ -164,41 +173,20 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 "model_used": session.model_used,
                 "record_count": len(session.completions),
                 "trace_count": len(merged),
-                "match_tolerance": self._match_tolerance,
             },
             traces=merged,
         )
 
-    def _find_chain(
-        self,
-        prompt_key: tuple[int, ...],
-        waiting_chains: dict[tuple[int, ...], deque[int]],
-        exact: bool,
+    @staticmethod
+    def _pop_chain(
+        prompt_key: str,
+        waiting_chains: dict[str, deque[int]],
     ) -> int | None:
         """Pop and return the chain index whose expected-next-prompt matches *prompt_key*."""
-        if exact:
-            queue = waiting_chains.get(prompt_key)
-            if queue:
-                chain_idx = queue.popleft()
-                if not queue:
-                    waiting_chains.pop(prompt_key, None)
-                return chain_idx
-            return None
-
-        best_key: tuple[int, ...] | None = None
-        best_sim = 0.0
-
-        for key in waiting_chains:
-            sim = _sequence_similarity(prompt_key, key, min_ratio=self._match_tolerance)
-            if sim >= self._match_tolerance and sim > best_sim:
-                best_sim = sim
-                best_key = key
-
-        if best_key is not None:
-            queue = waiting_chains[best_key]
+        queue = waiting_chains.get(prompt_key)
+        if queue:
             chain_idx = queue.popleft()
             if not queue:
-                del waiting_chains[best_key]
+                waiting_chains.pop(prompt_key, None)
             return chain_idx
-
         return None

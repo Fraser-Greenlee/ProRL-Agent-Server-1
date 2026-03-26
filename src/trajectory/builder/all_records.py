@@ -33,6 +33,7 @@ class AllRecordsBuilder(BaseTrajectoryBuilder):
                 "model_requested": session.model_requested,
                 "model_used": session.model_used,
                 "record_count": len(session.completions),
+                "trace_count": len(session.completions),
             },
             traces=[
                 build_trace_from_completion(completion)

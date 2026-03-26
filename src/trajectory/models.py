@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
-# Strategy / agent / eval specs
+# Strategy / evaluator specs
 # ---------------------------------------------------------------------------
 
 
@@ -19,12 +19,19 @@ class StrategySpec(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
 
 
-class AgentSpec(BaseModel):
-    """Agent execution specification."""
+class EvaluatorSpec(BaseModel):
+    """Evaluator configuration for a rollout session."""
 
-    run_cmd: str
-    timeout: float = 600.0
-    env: dict[str, Any] = Field(default_factory=dict)
+    strategy: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    env: dict[str, str] = Field(default_factory=dict)
+    timeout: float | None = None
+    refresh_runtime: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Evaluator result
+# ---------------------------------------------------------------------------
 
 
 class EvalResult(BaseModel):
@@ -35,13 +42,9 @@ class EvalResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class AgentRunResult(BaseModel):
-    """Terminal result for the local agent subprocess."""
-
-    status: Literal["completed", "failed", "timeout"]
-    return_code: int
-    error: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+# ---------------------------------------------------------------------------
+# Completion and trajectory models
+# ---------------------------------------------------------------------------
 
 
 class CompletionRecord(BaseModel):

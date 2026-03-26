@@ -117,18 +117,14 @@ class Pipeline:
             self._pending[session.session_id] = future
 
         session.timer.mark("dispatch", "started")
-        node_id: str | None = None
         try:
             dispatch_request = await self._dispatch_session(session)
-            node_id = session.node_id
             session.timer.mark("dispatch", "finished")
             result = await self._wait_for_result(session, dispatch_request, future)
         except Exception as exc:
             logger.exception("Dispatch failed for session %s", session.session_id)
             result = self._failure_result(session, error=str(exc))
         finally:
-            if node_id:
-                self.scheduler.release_session(node_id)
             async with self._pending_lock:
                 self._pending.pop(session.session_id, None)
 
@@ -162,7 +158,9 @@ class Pipeline:
             dispatch_request = SessionDispatchRequest(
                 session_id=session.session_id,
                 task_id=session.task_id,
+                instruction=session.request.instruction,
                 callback_url=self.callback_url,
+                runtime=session.request.runtime,
                 agent=session.request.agent,
                 builder=session.request.builder,
                 evaluator=session.request.evaluator,
@@ -176,7 +174,7 @@ class Pipeline:
                 return dispatch_request
             except Exception as exc:
                 last_error = str(exc)
-                self.scheduler.release_session(node.node_id)
+                self.scheduler.release_reservation(node.node_id)
                 self.scheduler.mark_unhealthy(node.node_id)
                 if asyncio.get_running_loop().time() >= deadline:
                     raise RuntimeError(last_error) from exc
@@ -260,12 +258,29 @@ class Pipeline:
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(result.model_dump(), separators=(",", ":"), default=str))
+        path.write_text(
+            json.dumps(self._storage_payload(result), separators=(",", ":"), default=str)
+        )
 
     def _result_path(self, task_id: str, session_id: str) -> Path | None:
         if self.save_dir is None:
             return None
-        return self.save_dir / f"task_{task_id}" / f"rollout_{session_id}.json"
+        return self.save_dir / f"task_{task_id}" / f"ses_{session_id}.json"
+
+    @staticmethod
+    def _storage_payload(result: SessionResult) -> dict[str, object]:
+        """Return the persisted session artifact shape.
+
+        The on-disk rollout result keeps session-level status/error only.
+        Trajectory payloads store the structured trace data without duplicating
+        terminal status information.
+        """
+        payload = result.model_dump(mode="json")
+        trajectory = payload.get("trajectory")
+        if isinstance(trajectory, dict):
+            trajectory.pop("status", None)
+            trajectory.pop("error", None)
+        return payload
 
     @staticmethod
     def _failure_result(

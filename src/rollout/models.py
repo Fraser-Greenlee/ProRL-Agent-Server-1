@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from trajectory.models import AgentSpec, StrategySpec, Trajectory
+from integration.models import AgentSpec
+from runtime.models import RuntimeSpec
+from trajectory.models import EvaluatorSpec, StrategySpec, Trajectory
 
 if TYPE_CHECKING:
     from rollout.timer import StageTimer
@@ -29,11 +31,13 @@ class TaskRequest(BaseModel):
     """Task submitted by the trainer."""
 
     task_id: str
+    instruction: str
     num_rollouts: int = Field(default=1, ge=1)
     timeout_seconds: float = Field(default=600.0, gt=0)
+    runtime: RuntimeSpec | None = None
     agent: AgentSpec
     builder: StrategySpec = Field(default_factory=_default_builder_spec)
-    evaluator: StrategySpec | None = None
+    evaluator: EvaluatorSpec | None = None
 
 
 class SessionDispatchRequest(BaseModel):
@@ -41,9 +45,11 @@ class SessionDispatchRequest(BaseModel):
 
     session_id: str
     task_id: str
+    instruction: str
+    runtime: RuntimeSpec | None = None
     agent: AgentSpec
     builder: StrategySpec = Field(default_factory=_default_builder_spec)
-    evaluator: StrategySpec | None = None
+    evaluator: EvaluatorSpec | None = None
     callback_url: str | None = None
 
 
@@ -59,9 +65,12 @@ class SessionDispatchResponse(BaseModel):
 class SessionTiming(BaseModel):
     """Per-session durations in milliseconds."""
 
+    init_ms: float = 0.0
     run_ms: float = 0.0
     build_ms: float = 0.0
     eval_ms: float = 0.0
+    postrun_ms: float = 0.0
+    teardown_ms: float = 0.0
     total_ms: float = 0.0
 
 
@@ -102,14 +111,39 @@ class NodeRegistrationRequest(BaseModel):
 
     node_id: str
     gateway_url: str
-    capacity: int = Field(ge=1)
+    max_init_workers: int = Field(ge=1)
+    max_run_workers: int = Field(ge=1)
+    max_postrun_workers: int = Field(ge=1)
+    ready_buffer_target: int = Field(ge=1)
     heartbeat_interval_seconds: int = Field(default=30, ge=1)
+
+
+class NodeStageMetrics(BaseModel):
+    """Per-node stage occupancy and queue depths."""
+
+    init_queue_depth: int = Field(default=0, ge=0)
+    init_inflight: int = Field(default=0, ge=0)
+    ready_depth: int = Field(default=0, ge=0)
+    run_inflight: int = Field(default=0, ge=0)
+    postrun_queue_depth: int = Field(default=0, ge=0)
+    postrun_inflight: int = Field(default=0, ge=0)
+
+    @property
+    def total_sessions(self) -> int:
+        return (
+            self.init_queue_depth
+            + self.init_inflight
+            + self.ready_depth
+            + self.run_inflight
+            + self.postrun_queue_depth
+            + self.postrun_inflight
+        )
 
 
 class NodeHeartbeatRequest(BaseModel):
     """Heartbeat payload sent by a gateway node."""
 
-    active_sessions: int | None = Field(default=None, ge=0)
+    metrics: NodeStageMetrics = Field(default_factory=NodeStageMetrics)
 
 
 class GatewayNodeInfo(BaseModel):
@@ -117,8 +151,12 @@ class GatewayNodeInfo(BaseModel):
 
     node_id: str
     gateway_url: str
-    capacity: int
-    active_sessions: int
+    max_init_workers: int
+    max_run_workers: int
+    max_postrun_workers: int
+    ready_buffer_target: int
+    metrics: NodeStageMetrics = Field(default_factory=NodeStageMetrics)
+    dispatch_reservations: int = Field(default=0, ge=0)
     healthy: bool
     draining: bool = False
     heartbeat_interval_seconds: int

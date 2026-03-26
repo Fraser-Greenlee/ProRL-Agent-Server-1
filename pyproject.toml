@@ -1,7 +1,7 @@
 [project]
 name = "arp"
-version = "0.1.0"
-description = "Agent Rollout Protocol"
+version = "0.2.0"
+description = "Agent Rollout Protocol — runtime and agent integration refactor"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.0",

@@ -54,7 +54,7 @@ class RolloutManager:
 
         sessions = [
             SessionContext(
-                session_id=str(uuid.uuid4()),
+                session_id=f"sk-arp-{uuid.uuid4()}",
                 task_id=request.task_id,
                 request=request,
             )

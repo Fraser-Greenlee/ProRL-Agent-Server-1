@@ -44,6 +44,7 @@ from gateway.streaming import StreamAccumulator
 from gateway.transform import TransformManager
 from gateway.transform.base import BaseTransformer
 from rollout.models import SessionDispatchRequest, SessionDispatchResponse
+from runtime.models import RuntimeSpec
 from trajectory.registry import default_builder_registry, default_evaluator_registry
 
 logging.basicConfig(
@@ -79,18 +80,25 @@ def _build_state(config: Config) -> GatewayState:
     node_manager = GatewayNodeManager(
         node_id=node.id,
         gateway_url=node.public_url,
-        capacity=node.capacity,
+        max_init_workers=node.max_init_workers,
+        max_run_workers=node.max_run_workers,
+        max_postrun_workers=node.max_postrun_workers,
+        ready_buffer_target=node.ready_buffer_target,
         storage=storage,
         session_registry=session_registry,
         builders=builder_registry,
         evaluators=evaluator_registry,
+        default_runtime=node.default_runtime,
     )
     control_client = (
         RolloutControlClient(
             rollout_server_url=config.rollout_server_url,
             node_id=node.id,
             gateway_url=node.public_url,
-            capacity=node.capacity,
+            max_init_workers=node.max_init_workers,
+            max_run_workers=node.max_run_workers,
+            max_postrun_workers=node.max_postrun_workers,
+            ready_buffer_target=node.ready_buffer_target,
             heartbeat_interval_seconds=config.heartbeat_interval_seconds,
             node_manager=node_manager,
         )
@@ -112,7 +120,7 @@ def _build_state(config: Config) -> GatewayState:
 def get_state() -> GatewayState:
     global _state
     if _state is None:
-        config = Config(os.environ.get("CONFIG_PATH", "config.yaml"))
+        config = Config.from_environment()
         _state = _build_state(config)
     return _state
 
@@ -120,6 +128,7 @@ def get_state() -> GatewayState:
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     state = get_state()
+    await state.node_manager.start()
     if state.control_client is not None:
         await state.control_client.start()
     try:
@@ -334,13 +343,15 @@ async def list_models():
 @app.get("/health")
 async def health():
     state = get_state()
-    active_sessions = await state.node_manager.active_sessions()
+    metrics = await state.node_manager.stage_metrics()
     return {
         "status": "ok",
         "node_id": state.node.id,
         "gateway_url": state.node.public_url,
-        "active_sessions": active_sessions,
-        "available_capacity": max(0, state.node.capacity - active_sessions),
+        "metrics": metrics.model_dump(mode="json"),
+        "available_init": max(0, state.node.max_init_workers - metrics.init_inflight),
+        "available_run": max(0, state.node.max_run_workers - metrics.run_inflight),
+        "available_postrun": max(0, state.node.max_postrun_workers - metrics.postrun_inflight),
     }
 
 
@@ -445,7 +456,10 @@ async def proxy_request(request: Request, path: str):
         session_id = _resolve_session_id(
             headers,
             body,
-            query_session_id=request.query_params.get("session_id"),
+            query_session_id=(
+                request.query_params.get("session_id")
+                or request.query_params.get("key")
+            ),
         )
     except InvalidSessionIdError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -667,7 +681,7 @@ def main() -> None:
     import uvicorn
 
     config_path = os.environ.get("CONFIG_PATH", "config.yaml")
-    config = Config(config_path)
+    config = Config.from_environment() if "CONFIG_PATH" in os.environ else Config(config_path)
     if config.has_multiple_gateway_nodes and "GATEWAY_NODE_ID" not in os.environ:
         raise SystemExit(_run_gateway_supervisor(config_path, config))
 

@@ -13,8 +13,8 @@ class BaseTrajectoryEvaluator(ABC):
 
     Evaluators are instantiated per-request with ``**config`` from the
     :class:`~trajectory.models.StrategySpec` and receive runtime context
-    (session_id, task_id, session_dir, artifacts_dir, agent_result) as
-    keyword arguments in :meth:`evaluate`.
+    (session_id, task_id, session_dir, artifacts_dir, agent_result, runtime,
+    runtime_spec) as keyword arguments in :meth:`evaluate`.
     """
 
     def __init__(self, **config: Any) -> None:  # noqa: B027
