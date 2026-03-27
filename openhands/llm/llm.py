@@ -228,22 +228,46 @@ class LLM(RetryMixin, DebugMixin):
             kwargs['chat_template_kwargs'] = {'enable_thinking': False}
 
         if self.token_level_generation:
-            if 'qwen2.5-vl' in self.config.model.lower() or 'qwen2_5_vl' in self.config.model.lower():
-                from openhands.llm.nvidia.qwen2_5_vl import request_response_tokens
-            else:
-                from openhands.llm.nvidia.qwen3 import request_response_tokens
+            if self.config.use_gym_api:
+                from openhands.llm.nvidia.gym_vllm import (
+                    request_response_tokens,
+                )
 
-            self._completion = partial(
-                request_response_tokens,
-                model=self.config.model,
-                tokenizer=self.tokenizer,
-                base_url=self.config.base_url,
-                timeout=self.config.timeout,
-                top_p=self.config.top_p,
-                seed=self.config.seed,
-                max_model_len=self.config.max_model_len,
-                **kwargs,
-            )
+                logger.info(
+                    f'Using Gym-compatible vLLM API for token-level generation '
+                    f'(model={self.config.model}, base_url={self.config.base_url})'
+                )
+                self._completion = partial(
+                    request_response_tokens,
+                    model=self.config.model,
+                    tokenizer=self.tokenizer,
+                    base_url=self.config.base_url,
+                    timeout=self.config.timeout,
+                    top_p=self.config.top_p,
+                    seed=self.config.seed,
+                    max_model_len=self.config.max_model_len,
+                    api_key=self.config.api_key.get_secret_value()
+                    if self.config.api_key
+                    else None,
+                    **kwargs,
+                )
+            else:
+                if 'VL' or 'vl' in self.config.model:
+                    from openhands.llm.nvidia.qwen2_5_vl import request_response_tokens
+                else:
+                    from openhands.llm.nvidia.qwen3 import request_response_tokens
+
+                self._completion = partial(
+                    request_response_tokens,
+                    model=self.config.model,
+                    tokenizer=self.tokenizer,
+                    base_url=self.config.base_url,
+                    timeout=self.config.timeout,
+                    top_p=self.config.top_p,
+                    seed=self.config.seed,
+                    max_model_len=self.config.max_model_len,
+                    **kwargs,
+                )
         else:
             self._completion = partial(
                 litellm_completion,
