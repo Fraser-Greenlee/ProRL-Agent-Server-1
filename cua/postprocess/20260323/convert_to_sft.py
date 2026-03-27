@@ -1,4 +1,5 @@
 import json
+import random
 from pathlib import Path
 from typing import Dict, List
 
@@ -222,7 +223,6 @@ if __name__ == "__main__":
         base_dir / "kimi_spreadsheetbench",
         base_dir / "kimi_zenodo",
     ]
-    save_dir = "train.jsonl"
 
     # load all samples from input_dirs
     all_jsonl_files = []
@@ -234,6 +234,7 @@ if __name__ == "__main__":
 
     # format samples
     samples = []
+    num_image_not_exist = 0
     for filename in tqdm(all_jsonl_files):
         with open(filename, "r") as f:
             trajectory_json = json.load(f)
@@ -241,6 +242,15 @@ if __name__ == "__main__":
         screenshots = [str(filename.parent / "0-0.png")]  # initial screenshot
         for step in trajectory_json["steps"][0]["actions"]:
             screenshots.append(step["screenshot"])
+
+        # fix the screenshot paths - kimi_spreadsheet => kimi_spreadsheetbench
+        for idx, screenshot_path in enumerate(screenshots):
+            if screenshot_path.startswith("/lustre/fs1/portfolios/nvr/projects/nvr_lacr_llm/users/jaehunj/cua/prorl-agent-server-v2/cua/trajectories/kimi_spreadsheet/"):
+                screenshots[idx] = screenshot_path.replace("/kimi_spreadsheet/", "/kimi_spreadsheetbench/")
+
+        if any(not Path(screenshot).exists() for screenshot in screenshots):
+            num_image_not_exist += 1
+            continue
 
         steps = [
             {
@@ -257,20 +267,24 @@ if __name__ == "__main__":
         }
         samples.append(sample)
 
+    print(f"Skipped {num_image_not_exist} samples due to non-existing screenshots.")
+
     # format into ShareGPT
     all_sft_samples = []
     for sample in tqdm(samples, desc="ShareGPT formatting"):
         all_sft_samples += sample_to_sft_samples(sample)
 
-    ipdb.set_trace()
-    pass
-
     print(f"Number of unique trajectories: {len(samples)}")
     print(f"Number of SFT samples: {len(all_sft_samples)}")
 
-    with jsonlines.open(save_dir, "w") as f:
-        f.write_all(all_sft_samples)
+    random.shuffle(all_sft_samples)
+    print(f"Shuffling `all_sft_samples` done.")
 
-    print(f"Saved {len(all_sft_samples)} SFT samples to {save_dir}.")
+    for shard_idx in range(0, len(all_sft_samples), 50000):
+        shard_samples = all_sft_samples[shard_idx:shard_idx+50000]
+        save_dir = f"./data/train_shard_{shard_idx}.jsonl"
+        with jsonlines.open(save_dir, "w") as f:
+            f.write_all(shard_samples)
+        print(f"Saved {len(shard_samples)} SFT samples to {save_dir}.")
 
 
