@@ -8,7 +8,7 @@ patch evaluation** pattern into ARP's current architecture:
 
 - each sampled task uses its own benchmark image derived from `instance_id`
 - the agent runs inside that benchmark image
-- evaluation uses ARP's `git_diff_patch` evaluator in `benchmark: "swe"` mode
+- evaluation uses ARP's `swegym_git_diff` evaluator with the task `instance`
 - `refresh_runtime=true` replays the same runtime image and prepare flow before grading
 
 Current scope:
@@ -16,7 +16,7 @@ Current scope:
 - harnesses:
   - ARP built-in `swe_agent` CLI harness
   - ARP built-in `openhands_sdk` harness on the compatible benchmark-image subset
-- evaluator: ARP built-in `git_diff_patch` SWE path
+- evaluator: ARP built-in `swegym_git_diff`
 - sample: 10 curated text-only SWE-Gym tasks across multiple repos
 
 This is **not** a full ProRL/OpenHands-controller parity port yet. The
@@ -57,7 +57,8 @@ Both vLLM servers should host `MiniMaxAI/MiniMax-M2.5`.
 
 1. **Two vLLM servers** on ports `8000` and `8001`.
 2. **Docker** available for pulling the benchmark images and building the derived
-   `swe_agent` images.
+   harness images. For `apptainer` runtime sessions, the submitter rewrites local
+   Docker image tags to `docker-daemon:<tag>` URIs.
 3. **ARP installed** in a Python environment with access to `src/`.
 4. **SWE-Gym evaluator package** installed in the same Python environment used to
    run the rollout and gateway servers.
@@ -201,8 +202,8 @@ For each sampled instance, the submitter:
    - `openhands_sdk`: dedicated `/opt/openhands-sdk-venv` built from the
      benchmark image's native `testbed` Python when compatible
 6. evaluates with:
-   - `strategy: git_diff_patch`
-   - `benchmark: "swe"`
+   - `strategy: swegym_git_diff`
+   - `instance: <task-metadata>`
    - `repo_dir: /testbed`
    - `refresh_runtime: true`
 

@@ -16,6 +16,6 @@ PY
 
 RUN /opt/miniconda3/envs/testbed/bin/python -m venv /opt/openhands-sdk-venv \
     && /opt/openhands-sdk-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/openhands-sdk-venv/bin/pip install --no-cache-dir openhands-sdk
+    && /opt/openhands-sdk-venv/bin/pip install --no-cache-dir openhands-sdk openhands-tools
 
 WORKDIR /arp/session

@@ -44,16 +44,16 @@ class AgentSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate_agent_source(self) -> AgentSpec:
-        sources = sum(
-            1
-            for source in (self.harness, self.import_path, self.custom_shell)
-            if source is not None
-        )
+        sources = sum(1 for source in (self.harness, self.import_path) if source is not None)
         if sources != 1:
             raise ValueError(
-                "exactly one of harness, import_path, or custom_shell must be provided"
+                "exactly one of harness or import_path must be provided"
             )
         if self.custom_shell is not None:
+            if self.harness != "shell":
+                raise ValueError(
+                    "custom_shell is only valid when agent.harness is 'shell'"
+                )
             if self.mcp_servers:
                 raise ValueError(
                     "mcp_servers must be omitted when custom_shell is used"
@@ -62,6 +62,8 @@ class AgentSpec(BaseModel):
                 raise ValueError(
                     "skills_path must be omitted when custom_shell is used"
                 )
+        elif self.harness == "shell":
+            raise ValueError("agent.harness='shell' requires custom_shell")
         return self
 
 

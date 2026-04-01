@@ -159,6 +159,7 @@ class Pipeline:
                 session_id=session.session_id,
                 task_id=session.task_id,
                 instruction=session.request.instruction,
+                timeout_seconds=session.request.timeout_seconds,
                 callback_url=self.callback_url,
                 runtime=session.request.runtime,
                 agent=session.request.agent,

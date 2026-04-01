@@ -379,6 +379,15 @@ class OpenAIResponsesTransformer(BaseTransformer):
                 messages.append({"role": role, "content": content})
 
             elif item_type == "function_call":
+                if pending_tool_outputs:
+                    messages.extend(
+                        self._flush_tool_block(
+                            pending_tool_calls,
+                            pending_tool_outputs,
+                        )
+                    )
+                    pending_tool_calls = []
+                    pending_tool_outputs = []
                 pending_tool_calls.append({
                     "id": item.get("call_id", f"call_{uuid.uuid4().hex[:24]}"),
                     "type": "function",
@@ -396,6 +405,15 @@ class OpenAIResponsesTransformer(BaseTransformer):
                 })
 
             else:
+                if pending_tool_calls or pending_tool_outputs:
+                    messages.extend(
+                        self._flush_tool_block(
+                            pending_tool_calls,
+                            pending_tool_outputs,
+                        )
+                    )
+                    pending_tool_calls = []
+                    pending_tool_outputs = []
                 message = self._convert_response_item_to_message(item)
                 if message:
                     messages.append(message)

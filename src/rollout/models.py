@@ -46,6 +46,7 @@ class SessionDispatchRequest(BaseModel):
     session_id: str
     task_id: str
     instruction: str
+    timeout_seconds: float = Field(default=600.0, gt=0)
     runtime: RuntimeSpec | None = None
     agent: AgentSpec
     builder: StrategySpec = Field(default_factory=_default_builder_spec)

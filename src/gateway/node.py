@@ -33,6 +33,10 @@ from trajectory.registry import StrategyRegistry
 logger = logging.getLogger(__name__)
 
 
+class GatewayExecutionTimeout(TimeoutError):
+    """Raised when a session exhausts its gateway-managed execution budget."""
+
+
 class GatewayNodeManager:
     """Run the INIT/READY/RUN/POST_RUN lifecycle on one gateway node."""
 
@@ -68,6 +72,7 @@ class GatewayNodeManager:
             ready_buffer_target=ready_buffer_target,
         )
         self._dispatcher.on_init = self._handle_init
+        self._dispatcher.on_eval_prewarm = self._handle_eval_prewarm
         self._dispatcher.on_run = self._handle_run
         self._dispatcher.on_postrun = self._handle_postrun
 
@@ -133,12 +138,15 @@ class GatewayNodeManager:
         self.session_registry.set_status(request.session_id, "INITIALIZING")
         managed.timer.mark("init", "started")
         try:
+            self._start_execution_budget(managed)
             runtime_spec = self._resolve_runtime_spec(request)
             runtime = create_runtime(runtime_spec, request.session_id, managed.session_dir)
             managed.runtime = runtime
-            await runtime.start()
+            await self._await_with_budget(runtime.start(), managed)
             # Run ordered prepare actions
             await self._run_runtime_prepare(runtime, runtime_spec, request, managed)
+        except GatewayExecutionTimeout as exc:
+            managed.final_result = self._timeout_result(request, managed.timer, str(exc))
         except Exception as exc:
             if managed.cancel_requested:
                 logger.info("Initialization cancelled for session %s", request.session_id)
@@ -171,7 +179,7 @@ class GatewayNodeManager:
         managed: ManagedSession,
     ) -> None:
         """Execute the ordered prepare action list."""
-        base_env = self._runtime_env(request, managed)
+        base_env = self._runtime_env(request, managed, runtime_override=runtime)
         for i, action in enumerate(spec.prepare):
             if managed.cancel_requested:
                 return
@@ -184,11 +192,12 @@ class GatewayNodeManager:
                 # Use action.cwd, falling back to runtime session dir
                 # (not spec.workdir which may not exist during prepare)
                 effective_cwd = action.cwd or runtime.runtime_session_dir
+                effective_timeout = self._effective_timeout(managed, action.timeout_sec)
                 result = await runtime.exec(
                     action.command,
                     cwd=effective_cwd,
                     env=merged_env,
-                    timeout_sec=action.timeout_sec,
+                    timeout_sec=effective_timeout,
                 )
                 log_dir = managed.session_dir / "logs"
                 log_dir.mkdir(parents=True, exist_ok=True)
@@ -213,19 +222,17 @@ class GatewayNodeManager:
         self.session_registry.set_status(request.session_id, "RUNNING")
         managed.timer.mark("run", "started")
 
-        # Start evaluator runtime prewarm if needed
-        self._maybe_start_eval_runtime_prewarm(managed)
-
         harness: BaseHarness | None = None
         try:
             runtime = managed.runtime
             if runtime is None:
                 raise RuntimeError("runtime is required for execution")
 
+            await self._maybe_start_eval_runtime_prewarm(managed)
             harness = self._resolve_agent_harness(request)
 
             # Setup
-            await harness.setup(runtime)
+            await self._await_with_budget(harness.setup(runtime), managed)
 
             # Run
             steps = harness.run_steps(request.instruction)
@@ -235,9 +242,11 @@ class GatewayNodeManager:
             )
 
             # Postprocess
-            await harness.postprocess(runtime, agent_result)
+            await self._await_with_budget(harness.postprocess(runtime, agent_result), managed)
             managed.agent_result = agent_result
 
+        except GatewayExecutionTimeout as exc:
+            managed.final_result = self._timeout_result(request, managed.timer, str(exc))
         except Exception as exc:
             if managed.cancel_requested:
                 logger.info("Agent execution cancelled for session %s", request.session_id)
@@ -249,21 +258,8 @@ class GatewayNodeManager:
                     f"agent execution failed: {exc}",
                 )
         finally:
-            # Cleanup
             if harness is not None:
-                cleanup_steps = harness.cleanup_steps()
-                if cleanup_steps and managed.runtime is not None:
-                    for step in cleanup_steps:
-                        try:
-                            await managed.runtime.exec(
-                                step.command, cwd=step.cwd, env=step.env
-                            )
-                        except Exception:
-                            logger.debug(
-                                "Cleanup step failed for session %s",
-                                request.session_id,
-                                exc_info=True,
-                            )
+                managed.teardown_steps = harness.teardown_steps()
             managed.timer.mark("run", "finished")
 
     def _resolve_agent_harness(self, request: SessionDispatchRequest) -> BaseHarness:
@@ -288,7 +284,10 @@ class GatewayNodeManager:
                     status="failed", return_code=-1, error="cancelled"
                 )
             merged_env = {**env, **(step.env or {})}
-            effective_timeout = step.timeout_sec or timeout
+            effective_timeout = self._effective_timeout(
+                managed,
+                step.timeout_sec if step.timeout_sec is not None else timeout,
+            )
             result = await runtime.exec(
                 step.command,
                 cwd=step.cwd,
@@ -323,59 +322,73 @@ class GatewayNodeManager:
     # Evaluator runtime prewarm
     # ------------------------------------------------------------------
 
-    def _maybe_start_eval_runtime_prewarm(self, managed: ManagedSession) -> None:
+    async def _maybe_start_eval_runtime_prewarm(self, managed: ManagedSession) -> None:
         request = managed.request
         if request.evaluator is None or not request.evaluator.refresh_runtime:
             return
-        lease = PreparedRuntimeLease(
-            owner_session_id=request.session_id,
-            purpose="evaluator_refresh",
-        )
-        managed.eval_runtime_lease = lease
-        managed.eval_prewarm_task = asyncio.create_task(
-            self._prewarm_eval_runtime(managed, lease)
-        )
+        if managed.eval_runtime_lease is None:
+            managed.eval_runtime_lease = PreparedRuntimeLease(
+                owner_session_id=request.session_id,
+                purpose="evaluator_refresh",
+            )
+        await self._dispatcher.request_eval_prewarm(request.session_id)
 
-    async def _prewarm_eval_runtime(
-        self, managed: ManagedSession, lease: PreparedRuntimeLease
-    ) -> None:
+    async def _handle_eval_prewarm(self, managed: ManagedSession) -> None:
         """Prepare a fresh runtime for evaluator use."""
         request = managed.request
+        lease = managed.eval_runtime_lease
+        if lease is None:
+            lease = PreparedRuntimeLease(
+                owner_session_id=request.session_id,
+                purpose="evaluator_refresh",
+            )
+            managed.eval_runtime_lease = lease
+        eval_runtime: BaseRuntime | None = None
         try:
-            # Acquire a ready slot
-            acquired = await self._dispatcher.acquire_ready_slot_for_eval(
+            acquired = await self._dispatcher.acquire_eval_prewarm_slot(
                 request.session_id
             )
             if not acquired or lease.cancelled:
                 return
-            try:
-                runtime_spec = self._resolve_runtime_spec(request)
-                eval_session_dir = managed.session_dir / "eval_runtime"
-                eval_artifacts_dir = eval_session_dir / "artifacts"
-                eval_artifacts_dir.mkdir(parents=True, exist_ok=True)
+            lease.slot_held = True
 
-                eval_runtime = create_runtime(
-                    runtime_spec, f"{request.session_id}-eval", eval_session_dir
-                )
-                await eval_runtime.start()
-                # Run prepare actions for the fresh runtime
-                await self._run_runtime_prepare(
-                    eval_runtime, runtime_spec, request, managed
-                )
+            runtime_spec = self._resolve_runtime_spec(request)
+            eval_session_dir = managed.session_dir / "eval_runtime"
+            eval_artifacts_dir = eval_session_dir / "artifacts"
+            eval_artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-                lease.runtime = eval_runtime
-                lease.session_dir = eval_session_dir
-                lease.artifacts_dir = eval_artifacts_dir
-            except Exception as exc:
-                lease.error = str(exc)
-                logger.warning(
-                    "Eval runtime prewarm failed for session %s: %s",
-                    request.session_id,
-                    exc,
-                )
-            finally:
-                self._dispatcher.release_ready_slot()
+            eval_runtime = create_runtime(
+                runtime_spec, f"{request.session_id}-eval", eval_session_dir
+            )
+            await self._await_with_budget(eval_runtime.start(), managed)
+            await self._run_runtime_prepare(
+                eval_runtime, runtime_spec, request, managed
+            )
+
+            lease.runtime = eval_runtime
+            lease.session_dir = eval_session_dir
+            lease.artifacts_dir = eval_artifacts_dir
+            lease.error = None
+        except GatewayExecutionTimeout as exc:
+            lease.error = str(exc)
+            logger.warning(
+                "Eval runtime prewarm timed out for session %s: %s",
+                request.session_id,
+                exc,
+            )
+        except Exception as exc:
+            lease.error = str(exc)
+            logger.warning(
+                "Eval runtime prewarm failed for session %s: %s",
+                request.session_id,
+                exc,
+            )
         finally:
+            if lease.error is not None and eval_runtime is not None:
+                with suppress(Exception):
+                    await eval_runtime.stop()
+            if lease.error is not None and lease.slot_held:
+                await self._dispatcher.consume_eval_prewarm(request.session_id)
             lease.ready.set()
 
     async def _acquire_prepared_eval_runtime(
@@ -385,7 +398,16 @@ class GatewayNodeManager:
         lease = managed.eval_runtime_lease
         if lease is None:
             return None
-        await lease.ready.wait()
+        try:
+            await asyncio.wait_for(
+                lease.ready.wait(),
+                timeout=self._remaining_budget(managed),
+            )
+        except asyncio.TimeoutError as exc:
+            raise GatewayExecutionTimeout(
+                "timed out waiting for a fresh evaluator runtime"
+            ) from exc
+        lease = await self._dispatcher.consume_eval_prewarm(managed.request.session_id) or lease
         if lease.error or lease.cancelled or lease.runtime is None:
             return None
         return lease.runtime
@@ -405,36 +427,38 @@ class GatewayNodeManager:
                     result = self._cancelled_result(request, managed.timer)
                 else:
                     result = await self._build_session_result(managed)
-            await asyncio.to_thread(self._persist_trajectory, managed.session_dir, result.trajectory)
+            await asyncio.to_thread(
+                self._persist_trajectory, managed.session_dir, result.trajectory
+            )
+        except GatewayExecutionTimeout as exc:
+            result = self._timeout_result(request, managed.timer, str(exc))
         except Exception as exc:
             logger.exception("Post-run handling failed for session %s", request.session_id)
             result = self._error_result(request, managed.timer, f"post-run failed: {exc}")
         finally:
             managed.timer.mark("postrun", "finished")
             managed.timer.mark("teardown", "started")
-            # Destroy eval runtime if acquired
+            await self._run_teardown_steps(managed)
+            stop_tasks = []
             if managed.eval_runtime_lease is not None:
                 managed.eval_runtime_lease.cancelled = True
+                if managed.eval_runtime_lease.slot_held:
+                    await self._dispatcher.consume_eval_prewarm(request.session_id)
                 eval_rt = managed.eval_runtime_lease.runtime
                 if eval_rt is not None:
-                    try:
-                        await eval_rt.stop()
-                    except Exception:
-                        logger.warning(
-                            "Failed to stop eval runtime for session %s",
-                            request.session_id,
-                            exc_info=True,
+                    stop_tasks.append(
+                        self._stop_runtime_best_effort(
+                            eval_rt, request.session_id, "eval runtime"
                         )
-            # Destroy main runtime
-            if managed.runtime is not None:
-                try:
-                    await managed.runtime.stop()
-                except Exception:
-                    logger.warning(
-                        "Failed to stop runtime for session %s",
-                        request.session_id,
-                        exc_info=True,
                     )
+            if managed.runtime is not None:
+                stop_tasks.append(
+                    self._stop_runtime_best_effort(
+                        managed.runtime, request.session_id, "runtime"
+                    )
+                )
+            if stop_tasks:
+                await asyncio.gather(*stop_tasks, return_exceptions=True)
             managed.timer.mark("teardown", "finished")
             managed.timer.mark("return", "finished")
 
@@ -461,7 +485,10 @@ class GatewayNodeManager:
         self.session_registry.set_status(request.session_id, "BUILDING")
         managed.timer.mark("build", "started")
         try:
-            trajectory = await asyncio.to_thread(self._build_trajectory, request)
+            trajectory = await self._await_with_budget(
+                asyncio.to_thread(self._build_trajectory, request),
+                managed,
+            )
         finally:
             managed.timer.mark("build", "finished")
 
@@ -519,17 +546,26 @@ class GatewayNodeManager:
         if evaluator_spec is None:
             return trajectory
 
-        # Resolve evaluator runtime
+        live_runtime = managed.runtime
+        if live_runtime is None:
+            raise RuntimeError("runtime is required for evaluation")
+
+        fresh_eval_runtime: BaseRuntime | None = None
         if evaluator_spec.refresh_runtime:
-            eval_runtime = await self._acquire_prepared_eval_runtime(managed)
-            if eval_runtime is None:
-                logger.warning(
-                    "Eval runtime prewarm failed for session %s, falling back to agent runtime",
-                    request.session_id,
+            fresh_eval_runtime = await self._acquire_prepared_eval_runtime(managed)
+            if fresh_eval_runtime is None:
+                lease = managed.eval_runtime_lease
+                failure = (
+                    lease.error
+                    if lease is not None and lease.error
+                    else "fresh evaluator runtime was unavailable"
                 )
-                eval_runtime = managed.runtime
-        else:
-            eval_runtime = managed.runtime
+                return trajectory.model_copy(
+                    update={
+                        "status": "ERROR",
+                        "error": f"refresh_runtime=true requires a fresh runtime: {failure}",
+                    }
+                )
 
         # Convert EvaluatorSpec to StrategySpec for registry
         strategy_spec = StrategySpec(
@@ -539,15 +575,25 @@ class GatewayNodeManager:
 
         try:
             evaluator = self.evaluators.create(strategy_spec)
-            eval_result = await evaluator.evaluate(
-                trajectory,
-                session_id=request.session_id,
-                task_id=request.task_id,
-                session_dir=managed.session_dir,
-                artifacts_dir=managed.artifacts_dir,
-                agent_result=agent_result,
-                runtime=eval_runtime,
-                runtime_spec=request.runtime or self.default_runtime,
+            eval_result = await self._await_with_budget(
+                evaluator.evaluate(
+                    trajectory,
+                    session_id=request.session_id,
+                    task_id=request.task_id,
+                    session_dir=managed.session_dir,
+                    artifacts_dir=managed.artifacts_dir,
+                    agent_result=agent_result,
+                    env=dict(evaluator_spec.env),
+                    timeout_seconds=self._effective_timeout(
+                        managed, evaluator_spec.timeout
+                    ),
+                    runtime=live_runtime,
+                    fresh_eval_runtime=fresh_eval_runtime,
+                    runtime_spec=request.runtime or self.default_runtime,
+                    refresh_runtime=evaluator_spec.refresh_runtime,
+                ),
+                managed,
+                explicit_timeout=evaluator_spec.timeout,
             )
         except Exception as exc:
             logger.exception(
@@ -608,8 +654,9 @@ class GatewayNodeManager:
         managed: ManagedSession,
         *,
         include_agent_env: bool = False,
+        runtime_override: BaseRuntime | None = None,
     ) -> dict[str, str]:
-        runtime = managed.runtime
+        runtime = runtime_override or managed.runtime
         if runtime is None:
             session_dir = str(managed.session_dir)
             artifacts_dir = str(managed.artifacts_dir)
@@ -678,6 +725,27 @@ class GatewayNodeManager:
             error=error,
         )
 
+    def _timeout_result(
+        self,
+        request: SessionDispatchRequest,
+        timer: StageTimer,
+        error: str,
+    ) -> SessionResult:
+        return SessionResult(
+            session_id=request.session_id,
+            task_id=request.task_id,
+            status="TIMEOUT",
+            trajectory=Trajectory(
+                status="TIMEOUT",
+                metadata={"builder": request.builder.strategy, "record_count": 0},
+                traces=[],
+                error=error,
+            ),
+            timing=timer.to_session_timing(),
+            node_id=self.node_id,
+            error=error,
+        )
+
     def _cancelled_result(self, request: SessionDispatchRequest, timer: StageTimer) -> SessionResult:
         return self._error_result(request, timer, "session cancelled")
 
@@ -710,3 +778,93 @@ class GatewayNodeManager:
             postrun_queue_depth=snapshot.postrun_queue_depth,
             postrun_inflight=snapshot.postrun_inflight,
         )
+
+    def _start_execution_budget(self, managed: ManagedSession) -> None:
+        if managed.execution_deadline is not None:
+            return
+        managed.execution_deadline = (
+            asyncio.get_running_loop().time() + managed.request.timeout_seconds
+        )
+
+    def _remaining_budget(self, managed: ManagedSession) -> float:
+        deadline = managed.execution_deadline
+        if deadline is None:
+            self._start_execution_budget(managed)
+            deadline = managed.execution_deadline
+        assert deadline is not None
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise GatewayExecutionTimeout("session execution deadline exceeded")
+        return remaining
+
+    def _effective_timeout(
+        self,
+        managed: ManagedSession,
+        requested_timeout: float | None,
+    ) -> float:
+        remaining = self._remaining_budget(managed)
+        if requested_timeout is None:
+            return remaining
+        effective = min(float(requested_timeout), remaining)
+        if effective <= 0:
+            raise GatewayExecutionTimeout("session execution deadline exceeded")
+        return effective
+
+    async def _await_with_budget(
+        self,
+        awaitable,
+        managed: ManagedSession,
+        *,
+        explicit_timeout: float | None = None,
+    ):
+        try:
+            return await asyncio.wait_for(
+                awaitable,
+                timeout=self._effective_timeout(managed, explicit_timeout),
+            )
+        except asyncio.TimeoutError as exc:
+            raise GatewayExecutionTimeout("session execution deadline exceeded") from exc
+
+    async def _run_teardown_steps(self, managed: ManagedSession) -> None:
+        if not managed.teardown_steps or managed.runtime is None:
+            return
+        log_dir = managed.session_dir / "logs" / "teardown"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        env = self._runtime_env(managed.request, managed, include_agent_env=True)
+        for i, step in enumerate(managed.teardown_steps):
+            try:
+                merged_env = {**env, **(step.env or {})}
+                result = await managed.runtime.exec(
+                    step.command,
+                    cwd=step.cwd,
+                    env=merged_env,
+                    timeout_sec=step.timeout_sec or managed.request.agent.timeout,
+                )
+                self._write_exec_log(
+                    log_dir,
+                    f"step.{i:02d}",
+                    result.stdout,
+                    result.stderr,
+                )
+            except Exception:
+                logger.debug(
+                    "Teardown step failed for session %s",
+                    managed.request.session_id,
+                    exc_info=True,
+                )
+
+    async def _stop_runtime_best_effort(
+        self,
+        runtime: BaseRuntime,
+        session_id: str,
+        label: str,
+    ) -> None:
+        try:
+            await runtime.stop()
+        except Exception:
+            logger.warning(
+                "Failed to stop %s for session %s",
+                label,
+                session_id,
+                exc_info=True,
+            )

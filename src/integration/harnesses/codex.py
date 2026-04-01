@@ -57,6 +57,15 @@ class CodexHarness(BaseHarness):
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
+            "-c 'model_provider=\"harness_proxy\"'",
+            "-c 'model_providers.harness_proxy.name=\"Harness Proxy\"'",
+            '-c "model_providers.harness_proxy.base_url=\\"$OPENAI_BASE_URL\\""',
+            "-c 'model_providers.harness_proxy.env_key=\"OPENAI_API_KEY\"'",
+            "-c 'model_providers.harness_proxy.wire_api=\"responses\"'",
+            '-c "model_providers.harness_proxy.http_headers={\\"X-Session-Id\\"=\\"$SESSION_ID\\"}"',
+            "--disable responses_websockets",
+            "--disable responses_websockets_v2",
+            "--disable enable_request_compression",
         ]
         model = self.model_name or "o4-mini"
         flags.append(f"--model {shlex.quote(model)}")

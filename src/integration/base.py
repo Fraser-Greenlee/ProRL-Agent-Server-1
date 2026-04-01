@@ -42,6 +42,10 @@ class BaseHarness(ABC):
         """Return commands to run best-effort in finally after the agent."""
         return []
 
+    def teardown_steps(self) -> list[ExecInput]:
+        """Return best-effort commands to run after evaluation has finished."""
+        return self.cleanup_steps()
+
     async def postprocess(
         self, runtime: BaseRuntime, result: AgentRunResult
     ) -> None:

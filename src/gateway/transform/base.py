@@ -51,15 +51,11 @@ class BaseTransformer(ABC):
         - logprobs: enable log probability collection
         - return_token_ids: return raw token ID sequences
         - include_stop_str_in_output: include stop strings in output
-        - prompt_logprobs: return prompt token logprobs (non-streaming only)
         - stream_options.include_usage: return usage in streaming
         """
         request["logprobs"] = True
         request["include_stop_str_in_output"] = True
         request["return_token_ids"] = True
-        # vLLM does not support prompt_logprobs with stream=True
-        if not request.get("stream"):
-            request["prompt_logprobs"] = 1
         if request.get("stream"):
             request.setdefault("stream_options", {})["include_usage"] = True
         return request

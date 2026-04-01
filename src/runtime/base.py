@@ -47,6 +47,18 @@ class BaseRuntime(ABC):
     def can_disable_internet(self) -> bool:
         return False
 
+    @property
+    def supports_cpu_limits(self) -> bool:
+        return False
+
+    @property
+    def supports_memory_limits(self) -> bool:
+        return False
+
+    @property
+    def supports_storage_limits(self) -> bool:
+        return False
+
     @abstractmethod
     async def start(self) -> None:
         """Create and start the runtime instance."""

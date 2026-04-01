@@ -1,7 +1,7 @@
 # ProRL Agent Rollout Protocol
 
 A lightweight and ultra-flexible protocol for running **massively parallel LLM agent rollouts**
-on **ANY** agent harness. It sits between your agent harness (Claude Code, OpenCode, Codex, Aider, OpenHands ...)
+on **ANY** agent harness. It sits between your agent harness (Claude Code, OpenCode, Codex, OpenHands ...)
 and your model, transparently proxying any supported API format while capturing
 every completion for trajectory construction and reward assignment.
 
@@ -28,14 +28,14 @@ Register your agent harnesses through a structured `AgentSpec` with named harnes
 | `opencode` | OpenAI Chat | OpenCode |
 | `claude_code` | Anthropic Messages | Claude Code |
 | `codex` | OpenAI Responses | Codex CLI |
-| `aider` | OpenAI Chat / Anthropic | Aider |
 | `gemini_cli` | Google Generative AI | Gemini CLI |
 | `openhands_sdk` | OpenAI Chat | OpenHands SDK |
 | `qwen_code` | OpenAI Chat | Qwen Code |
 | `swe_agent` | OpenAI Chat | SWE-Agent |
 | `shell` | Any | Custom shell command |
 
-Custom harnesses can be registered via `import_path` or the `custom_shell` escape hatch.
+Custom harnesses can be registered via `import_path`. For shell-defined agents,
+use `harness: "shell"` together with `custom_shell`.
 
 ### Async Stage Pipelining
 
@@ -92,7 +92,7 @@ localhost calculator harness matrix, or
   },
   "builder": {"strategy": "prefix_merging"},
   "evaluator": {
-    "strategy": "git_diff_patch",
+    "strategy": "swegym_git_diff",
     "config": {"repo_dir": "/arp/session/workspace"},
     "refresh_runtime": true
   }
@@ -105,10 +105,10 @@ localhost calculator harness matrix, or
 
 ```
 src/
-  runtime/          # Container runtime abstraction (Docker, Singularity)
+  runtime/          # Container runtime abstraction (Docker, Apptainer)
     base.py         #   BaseRuntime: start/stop/exec/upload/download
     docker.py       #   DockerRuntime
-    singularity.py  #   SingularityRuntime
+    apptainer.py    #   ApptainerRuntime
     models.py       #   RuntimeSpec, ExecInput, ExecResult, PrepareAction
     factory.py      #   create_runtime()
 
@@ -117,7 +117,7 @@ src/
     factory.py      #   create_harness()
     models.py       #   AgentSpec, MCPServerSpec, AgentRunResult
     harnesses/      #   Built-in harness implementations
-      opencode.py, claude_code.py, codex.py, aider.py,
+      opencode.py, claude_code.py, codex.py,
       gemini_cli.py, qwen_code.py, openhands_sdk.py,
       swe_agent.py, shell.py
 
@@ -135,7 +135,7 @@ src/
   trajectory/       # Trajectory building & evaluation
     models.py       #   EvaluatorSpec, Trajectory, Trace
     builder/        #   all_records, prefix_merging
-    evaluator/      #   git_diff_patch, status_outcome
+    evaluator/      #   swegym_git_diff, status_outcome
 ```
 
 ---

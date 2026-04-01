@@ -33,11 +33,21 @@ class DockerRuntime(BaseRuntime):
     def can_disable_internet(self) -> bool:
         return True
 
+    @property
+    def supports_cpu_limits(self) -> bool:
+        return True
+
+    @property
+    def supports_memory_limits(self) -> bool:
+        return True
+
     async def start(self) -> None:
         if self._destroyed:
             raise RuntimeError("docker runtime was already destroyed")
         create_args = ["docker", "create", "--name", self._container_name]
-        if self.spec.network:
+        if not self.spec.allow_internet:
+            create_args.extend(["--network", "none"])
+        elif self.spec.network:
             create_args.extend(["--network", self.spec.network])
         if self.spec.gpus > 0:
             create_args.extend(["--gpus", str(self.spec.gpus)])

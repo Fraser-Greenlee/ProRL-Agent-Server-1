@@ -84,11 +84,11 @@ def default_evaluator_registry() -> StrategyRegistry:
     """Pre-populated registry with built-in trajectory evaluators."""
     from trajectory.evaluator import (
         BaseTrajectoryEvaluator,
-        GitDiffPatchEvaluator,
         StatusOutcomeEvaluator,
+        SweGymGitDiffEvaluator,
     )
 
     registry: StrategyRegistry[BaseTrajectoryEvaluator] = StrategyRegistry(BaseTrajectoryEvaluator)
-    registry.register("git_diff_patch", GitDiffPatchEvaluator)
+    registry.register("swegym_git_diff", SweGymGitDiffEvaluator)
     registry.register("status_outcome", StatusOutcomeEvaluator)
     return registry

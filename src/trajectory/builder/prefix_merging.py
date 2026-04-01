@@ -1,4 +1,4 @@
-"""Trajectory builder that merges chained completion records into contiguous traces."""
+"""Trajectory builder that groups chained completions by prompt prefix."""
 
 from __future__ import annotations
 
@@ -40,7 +40,10 @@ def _normalize_messages(
     parts = []
     for msg in messages:
         role = msg.get("role", "")
-        content = _flatten_message_content(msg.get("content"))
+        if role == "assistant" and msg.get("tool_calls"):
+            content = ""
+        else:
+            content = _flatten_message_content(msg.get("content"))
         parts.append(f"{role}:{content}")
     key = "<SEP>".join(parts)
     for pattern in ignore_patterns:
@@ -59,47 +62,55 @@ def _grouping_key(
     """
     return _normalize_messages(
         [
-            message
+            expanded_message
             for message in messages
-            if message.get("role") not in _GROUPING_IGNORED_ROLES
+            for expanded_message in _expand_messages_for_grouping(message)
+            if not _is_grouping_noise_message(expanded_message)
         ],
         ignore_patterns,
     )
 
 
-def _merge_chain(chain: list[Trace]) -> Trace:
-    """Merge a chain of consecutively-chained traces into one."""
-    if len(chain) == 1:
-        return chain[0]
+def _expand_messages_for_grouping(message: dict[str, Any]) -> list[dict[str, Any]]:
+    role = message.get("role")
+    if role != "assistant" or not message.get("tool_calls"):
+        return [message]
 
-    head = chain[0]
-    tail = chain[-1]
-
-    response_ids: list[int] = []
-    response_messages: list[dict[str, Any]] = []
-    all_logprobs: list[dict[str, Any]] = []
-    all_have_logprobs = True
-
-    for trace in chain:
-        response_ids.extend(trace.response_ids)
-        response_messages.extend(trace.response_messages)
-        if trace.response_logprobs is not None:
-            all_logprobs.extend(trace.response_logprobs)
-        else:
-            all_have_logprobs = False
-
-    return Trace(
-        prompt_ids=head.prompt_ids,
-        prompt_messages=head.prompt_messages,
-        response_ids=response_ids,
-        response_messages=response_messages,
-        finish_reason=tail.finish_reason,
-        response_logprobs=all_logprobs if all_have_logprobs else None,
+    expanded: list[dict[str, Any]] = []
+    content = message.get("content")
+    if content not in (None, "", []):
+        expanded.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+    expanded.append(
+        {
+            "role": role,
+            "content": None,
+            "tool_calls": message.get("tool_calls"),
+        }
     )
+    return expanded
+
+
+def _is_grouping_noise_message(message: dict[str, Any]) -> bool:
+    role = message.get("role")
+    if role in _GROUPING_IGNORED_ROLES:
+        return True
+    if role == "assistant" and message.get("tool_calls"):
+        return False
+    content = _flatten_message_content(message.get("content")).strip()
+    if role == "assistant" and content.startswith("<think>"):
+        return True
+    if role == "assistant" and not content and not message.get("tool_calls"):
+        return True
+    return False
 
 
 class PrefixMergingBuilder(BaseTrajectoryBuilder):
-    """Merge chained completions into contiguous traces, splitting on compaction.
+    """Group chained completions and emit the final trace from each group.
 
     Matching is based on the **message list** rather than raw token IDs.
     Each message is normalized to ``role:content`` and the list is joined
@@ -138,7 +149,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 error="no completions",
             )
 
-        chains: list[list[Trace]] = []
+        chains: list[Trace] = []
         waiting_chains: dict[str, deque[int]] = defaultdict(deque)
 
         for completion in session.completions:
@@ -149,18 +160,16 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
             chain_idx = self._pop_chain(prompt_key, waiting_chains)
 
             if chain_idx is not None:
-                chains[chain_idx].append(trace)
+                chains[chain_idx] = trace
             else:
                 chain_idx = len(chains)
-                chains.append([trace])
+                chains.append(trace)
 
             next_key = _grouping_key(
                 trace.prompt_messages + trace.response_messages,
                 self._ignore_patterns,
             )
             waiting_chains[next_key].append(chain_idx)
-
-        merged = [_merge_chain(chain) for chain in chains]
 
         return Trajectory(
             status="COMPLETED",
@@ -172,9 +181,9 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 "model_requested": session.model_requested,
                 "model_used": session.model_used,
                 "record_count": len(session.completions),
-                "trace_count": len(merged),
+                "trace_count": len(chains),
             },
-            traces=merged,
+            traces=chains,
         )
 
     @staticmethod

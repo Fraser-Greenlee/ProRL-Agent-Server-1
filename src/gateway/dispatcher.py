@@ -13,6 +13,7 @@ from integration.models import AgentRunResult
 from rollout.models import SessionDispatchRequest, SessionResult
 from rollout.timer import StageTimer
 from runtime.base import BaseRuntime
+from runtime.models import ExecInput
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,17 @@ class SessionStage(str, Enum):
     POSTRUNNING = "POSTRUNNING"
 
 
+class InitWorkKind(str, Enum):
+    SESSION_INIT = "SESSION_INIT"
+    EVAL_PREWARM = "EVAL_PREWARM"
+
+
+@dataclass(slots=True)
+class InitWorkItem:
+    session_id: str
+    kind: InitWorkKind = InitWorkKind.SESSION_INIT
+
+
 @dataclass(slots=True)
 class PreparedRuntimeLease:
     """A fresh runtime prepared for evaluator refresh."""
@@ -41,6 +53,7 @@ class PreparedRuntimeLease:
     ready: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: bool = False
     error: str | None = None
+    slot_held: bool = False
 
 
 @dataclass(slots=True)
@@ -75,9 +88,14 @@ class ManagedSession:
     runtime: BaseRuntime | None = None
     agent_result: AgentRunResult | None = None
     final_result: SessionResult | None = None
+    teardown_steps: list[ExecInput] = field(default_factory=list)
     eval_runtime_lease: PreparedRuntimeLease | None = None
-    eval_prewarm_task: asyncio.Task | None = None
+    eval_prewarm_requested: bool = False
+    eval_prewarm_inflight: bool = False
+    eval_prewarm_ready: bool = False
     cancel_requested: bool = False
+    execution_deadline: float | None = None
+    ready_entered_at: float | None = None
     stage: SessionStage = SessionStage.INIT_PENDING
 
     @property
@@ -105,12 +123,14 @@ class SessionDispatcher:
         self.max_postrun_workers = max_postrun_workers
         self.ready_buffer_target = ready_buffer_target
         self.on_init: StageCallback | None = None
+        self.on_eval_prewarm: StageCallback | None = None
         self.on_run: StageCallback | None = None
         self.on_postrun: StageCallback | None = None
-        self._init_queue: asyncio.Queue[str | object] = asyncio.Queue()
+        self._init_queue: asyncio.Queue[InitWorkItem | object] = asyncio.Queue()
         self._ready_queue: asyncio.Queue[str | object] = asyncio.Queue()
         self._postrun_queue: asyncio.Queue[str | object] = asyncio.Queue()
         self._ready_slots = asyncio.Semaphore(ready_buffer_target)
+        self._eval_prewarm_slots = asyncio.Semaphore(max_run_workers)
         self._sessions: dict[str, ManagedSession] = {}
         self._lock = asyncio.Lock()
         self._workers: list[asyncio.Task[None]] = []
@@ -149,7 +169,7 @@ class SessionDispatcher:
             if managed.session_id in self._sessions:
                 raise ValueError(f"session {managed.session_id} is already enqueued")
             self._sessions[managed.session_id] = managed
-        await self._init_queue.put(managed.session_id)
+        await self._init_queue.put(InitWorkItem(session_id=managed.session_id))
 
     async def cancel(self, session_id: str) -> bool:
         async with self._lock:
@@ -161,6 +181,7 @@ class SessionDispatcher:
             managed.cancel_requested = True
             should_enqueue_postrun = False
             if managed.stage == SessionStage.READY:
+                managed.ready_entered_at = None
                 self._ready_slots.release()
             if managed.stage in {SessionStage.INIT_PENDING, SessionStage.READY}:
                 managed.stage = SessionStage.POSTRUN_PENDING
@@ -191,23 +212,51 @@ class SessionDispatcher:
                     snapshot.postrun_inflight += 1
             return snapshot
 
-    async def acquire_ready_slot_for_eval(self, session_id: str) -> bool:
-        """Acquire a ready slot for an evaluator runtime prewarm."""
-        return await self._wait_for_ready_slot(session_id)
+    async def request_eval_prewarm(self, session_id: str) -> bool:
+        async with self._lock:
+            managed = self._sessions.get(session_id)
+            if managed is None or managed.cancel_requested or managed.final_result is not None:
+                return False
+            if managed.eval_prewarm_requested or managed.eval_prewarm_inflight or managed.eval_prewarm_ready:
+                return False
+            managed.eval_prewarm_requested = True
+        await self._init_queue.put(
+            InitWorkItem(session_id=session_id, kind=InitWorkKind.EVAL_PREWARM)
+        )
+        return True
 
-    def release_ready_slot(self) -> None:
-        """Release a ready slot used by an evaluator runtime."""
-        self._ready_slots.release()
+    async def acquire_eval_prewarm_slot(self, session_id: str) -> bool:
+        return await self._wait_for_slot(self._eval_prewarm_slots, session_id)
+
+    async def consume_eval_prewarm(self, session_id: str) -> PreparedRuntimeLease | None:
+        async with self._lock:
+            managed = self._sessions.get(session_id)
+            if managed is None:
+                return None
+            lease = managed.eval_runtime_lease
+            managed.eval_prewarm_ready = False
+            managed.eval_prewarm_requested = False
+            if lease is not None and lease.slot_held:
+                lease.slot_held = False
+                release_slot = True
+            else:
+                release_slot = False
+        if release_slot:
+            self._eval_prewarm_slots.release()
+        return lease
 
     async def _init_worker(self, worker_id: int) -> None:
-        await self._worker_loop(
-            worker_id,
-            queue=self._init_queue,
-            expected=SessionStage.INIT_PENDING,
-            inflight=SessionStage.INITIALIZING,
-            callback=self.on_init,
-            next_stage=SessionStage.READY,
-        )
+        del worker_id
+        while True:
+            item = await self._init_queue.get()
+            if item is _STOP:
+                return
+            if not isinstance(item, InitWorkItem):
+                continue
+            if item.kind == InitWorkKind.EVAL_PREWARM:
+                await self._process_eval_prewarm_item(item.session_id)
+            else:
+                await self._process_session_init_item(item.session_id)
 
     async def _run_worker(self, worker_id: int) -> None:
         await self._worker_loop(
@@ -303,9 +352,17 @@ class SessionDispatcher:
             managed = self._sessions.get(session_id)
             if managed is None or managed.stage != expected:
                 return None
+            now = asyncio.get_running_loop().time()
             if release_ready:
+                managed.ready_entered_at = None
                 self._ready_slots.release()
+            if expected == SessionStage.READY and managed.ready_entered_at is not None:
+                if managed.execution_deadline is not None:
+                    managed.execution_deadline += max(0.0, now - managed.ready_entered_at)
+                managed.ready_entered_at = None
             managed.stage = new_stage
+            if new_stage == SessionStage.READY:
+                managed.ready_entered_at = now
             return managed
 
     async def _move_to_postrun(self, session_id: str) -> None:
@@ -314,6 +371,7 @@ class SessionDispatcher:
             if managed is None:
                 return
             if managed.stage == SessionStage.READY:
+                managed.ready_entered_at = None
                 self._ready_slots.release()
             if managed.stage in {SessionStage.POSTRUN_PENDING, SessionStage.POSTRUNNING}:
                 return
@@ -321,6 +379,13 @@ class SessionDispatcher:
         await self._postrun_queue.put(session_id)
 
     async def _wait_for_ready_slot(self, session_id: str) -> bool:
+        return await self._wait_for_slot(self._ready_slots, session_id)
+
+    async def _wait_for_slot(
+        self,
+        semaphore: asyncio.Semaphore,
+        session_id: str,
+    ) -> bool:
         while True:
             async with self._lock:
                 managed = self._sessions.get(session_id)
@@ -329,20 +394,93 @@ class SessionDispatcher:
                 if managed.cancel_requested or managed.final_result is not None:
                     return False
             try:
-                await asyncio.wait_for(self._ready_slots.acquire(), timeout=0.25)
+                await asyncio.wait_for(semaphore.acquire(), timeout=0.25)
                 return True
             except asyncio.TimeoutError:
                 continue
 
     async def _cancel_managed_resources(self, managed: ManagedSession) -> None:
-        # Cancel eval prewarm
-        if managed.eval_prewarm_task is not None and not managed.eval_prewarm_task.done():
-            managed.eval_prewarm_task.cancel()
         if managed.eval_runtime_lease is not None:
             managed.eval_runtime_lease.cancelled = True
+            if managed.eval_runtime_lease.slot_held:
+                managed.eval_runtime_lease.slot_held = False
+                self._eval_prewarm_slots.release()
             rt = managed.eval_runtime_lease.runtime
             if rt is not None:
                 await rt.cancel()
         # Cancel main runtime
         if managed.runtime is not None:
             await managed.runtime.cancel()
+
+    async def _process_session_init_item(self, session_id: str) -> None:
+        managed = await self._advance_stage(
+            session_id,
+            expected=SessionStage.INIT_PENDING,
+            new_stage=SessionStage.INITIALIZING,
+        )
+        if managed is None:
+            return
+        try:
+            if self.on_init is None:
+                raise RuntimeError("missing callback for init stage")
+            await self.on_init(managed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Dispatcher stage %s failed for session %s",
+                SessionStage.INITIALIZING,
+                session_id,
+            )
+        if managed.cancel_requested or managed.final_result is not None:
+            await self._move_to_postrun(session_id)
+            return
+        acquired = await self._wait_for_ready_slot(session_id)
+        if not acquired:
+            await self._move_to_postrun(session_id)
+            return
+        transitioned = await self._advance_stage(
+            session_id,
+            expected=SessionStage.INITIALIZING,
+            new_stage=SessionStage.READY,
+        )
+        if transitioned is None:
+            self._ready_slots.release()
+            return
+        await self._ready_queue.put(session_id)
+
+    async def _process_eval_prewarm_item(self, session_id: str) -> None:
+        async with self._lock:
+            managed = self._sessions.get(session_id)
+            if managed is None:
+                return
+            if managed.cancel_requested or managed.final_result is not None:
+                return
+            if (
+                not managed.eval_prewarm_requested
+                or managed.eval_prewarm_inflight
+                or managed.eval_prewarm_ready
+            ):
+                return
+            managed.eval_prewarm_inflight = True
+        try:
+            if self.on_eval_prewarm is None:
+                raise RuntimeError("missing callback for eval prewarm stage")
+            await self.on_eval_prewarm(managed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Dispatcher eval prewarm failed for session %s", session_id)
+        finally:
+            async with self._lock:
+                current = self._sessions.get(session_id)
+                if current is None:
+                    return
+                current.eval_prewarm_inflight = False
+                lease = current.eval_runtime_lease
+                current.eval_prewarm_ready = bool(
+                    lease is not None
+                    and lease.runtime is not None
+                    and lease.error is None
+                    and not lease.cancelled
+                )

@@ -70,6 +70,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent-timeout", type=float, default=1800.0)
     parser.add_argument("--evaluator-timeout", type=float, default=1800.0)
     parser.add_argument(
+        "--runtime-backend",
+        choices=["docker", "apptainer"],
+        default=os.environ.get("RUNTIME_BACKEND", "docker"),
+        help="Container runtime backend for the session",
+    )
+    parser.add_argument(
         "--output-dir",
         default=None,
         help="Directory for request/response files. Defaults to examples/swegym/<harness>/batches/<timestamp>/",
@@ -102,6 +108,23 @@ def agent_env_for_harness(harness: str) -> dict[str, str]:
     if harness in {"openhands_sdk", "openhands"}:
         return {"WORKSPACE_BASE": "/arp/session/workspace"}
     return {}
+
+
+def builder_spec_for_harness(harness: str) -> dict[str, Any]:
+    config: dict[str, Any] = {}
+    return {"strategy": "prefix_merging", **({"config": config} if config else {})}
+
+
+def evaluator_exclude_patterns_for_harness(harness: str) -> list[str]:
+    patterns: list[str] = []
+    if harness == "swe_agent":
+        patterns.extend(
+            [
+                "trajectories/**",
+                "**/trajectories/**",
+            ]
+        )
+    return patterns
 
 
 def agent_settings_for_harness(harness: str) -> dict[str, Any]:
@@ -143,8 +166,8 @@ def build_task_request(
         "num_rollouts": args.num_rollouts,
         "timeout_seconds": args.timeout_seconds,
         "runtime": {
-            "backend": "docker",
-            "image": derived_image,
+            "backend": args.runtime_backend,
+            "image": runtime_image_for_backend(derived_image, args.runtime_backend),
             "prepare": [
                 {
                     "type": "exec",
@@ -163,19 +186,27 @@ def build_task_request(
             "settings": agent_settings_for_harness(args.harness),
             "env": agent_env_for_harness(args.harness),
         },
-        "builder": {"strategy": "prefix_merging"},
+        "builder": builder_spec_for_harness(args.harness),
         "evaluator": {
-            "strategy": "git_diff_patch",
+            "strategy": "swegym_git_diff",
             "config": {
-                "benchmark": "swe",
                 "repo_dir": "/testbed",
                 "patch_command": "cd /testbed && git diff --binary --submodule=diff",
                 "instance": instance,
+                "exclude_patterns": evaluator_exclude_patterns_for_harness(args.harness),
             },
             "timeout": args.evaluator_timeout,
             "refresh_runtime": True,
         },
     }
+
+
+def runtime_image_for_backend(image: str, backend: str) -> str:
+    if backend != "apptainer":
+        return image
+    if image.startswith(("docker-daemon:", "docker://", "oras://")):
+        return image
+    return f"docker-daemon:{image}"
 
 
 def summarize_result(response: dict[str, Any]) -> dict[str, Any]:

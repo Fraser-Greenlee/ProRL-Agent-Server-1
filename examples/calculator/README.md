@@ -20,7 +20,7 @@ Each agent receives the same instruction:
 > ```
 
 A canonical test file (`shared/assets/test_calculator.py`) is uploaded into
-every runtime via `runtime.prepare` and executed by the `git_diff_patch`
+every runtime via `runtime.prepare` and executed by the `swegym_git_diff`
 evaluator with `refresh_runtime=true`.
 
 ## Topology
@@ -91,14 +91,13 @@ cd examples/calculator/opencode
 bash setup.sh
 
 # 2. Submit the task (from the repo root)
-cd /path/to/nv-arp
-PYTHONPATH=src python examples/calculator/opencode/submit_tasks.py \
+python examples/calculator/opencode/submit_tasks.py \
   --num-rollouts 16
 ```
 
 The submit script delegates to `shared/submit_calculator_task.py`, which
-constructs a `TaskRequest` with the correct harness name, Docker image,
-`runtime.prepare` actions, and `git_diff_patch` evaluator config.
+constructs a `TaskRequest` with the correct harness name, container image,
+`runtime.prepare` actions, and `swegym_git_diff` evaluator config.
 
 Results are written to `<harness>/batches/<timestamp>/`.
 
@@ -109,7 +108,6 @@ Results are written to `<harness>/batches/<timestamp>/`.
 | `opencode` | `opencode` | OpenAI Chat | `arp-localhost-opencode:latest` |
 | `claude_code` | `claude` | Anthropic Messages | `arp-localhost-claude_code:latest` |
 | `codex` | `codex` | OpenAI Responses | `arp-localhost-codex:latest` |
-| `aider` | `aider` | OpenAI Chat (litellm) | `arp-localhost-aider:latest` |
 | `gemini_cli` | `gemini` | Google GenerativeAI | `arp-localhost-gemini_cli:latest` |
 | `qwen_code` | `qwen` | OpenAI Chat | `arp-localhost-qwen_code:latest` |
 | `openhands_sdk` | OpenHands SDK | OpenAI Chat | `arp-localhost-openhands_sdk:latest` |
@@ -129,11 +127,11 @@ python examples/calculator/opencode/submit_tasks.py \
 
 ## Evaluator
 
-All examples use the `git_diff_patch` evaluator in `r2egym` mode with
+All examples use the `swegym_git_diff` evaluator in expected-output mode with
 `refresh_runtime=true`:
 
 1. The agent runtime's git diff is captured (`git add -A && git diff --cached`).
 2. A fresh evaluator runtime replays `runtime.start() + runtime.prepare`.
 3. The patch is applied to the fresh runtime.
 4. `python3 test_calculator.py` runs the canonical test suite.
-5. Reward is 1 if the test prints `PASSED test_calculator`, else 0.
+5. Reward is 1 if the output parser observes `PASSED test_calculator`, else 0.
