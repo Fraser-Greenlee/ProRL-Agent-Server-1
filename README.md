@@ -1,4 +1,4 @@
-# Agent Rollout Server
+# Polar
 
 An ultra-flexible rollout protocol for running **full async** agent RL
 on **ANY** agent harness.  It sits between your agent harness (Claude Code, OpenCode, Codex, OpenHands ...)
@@ -120,8 +120,8 @@ gateway:
 {
   "task_id": "example-task-001",
   "instruction": "Write a calculator and save it as calculator.py",
-  "num_rollouts": 8,
-  "timeout_seconds": 900,
+  "num_rollouts": 16,
+  "timeout_seconds": 180,
   "runtime": {
     "backend": "docker",
     "image": "polar-localhost-codex:latest",
@@ -130,7 +130,7 @@ gateway:
   },
   "agent": {
     "harness": "codex",
-    "model_name": "openai/MiniMaxAI/MiniMax-M2.5"
+    "model_name": "openai/gpt-5"
   },
   "builder": {"strategy": "prefix_merging"}
 }
