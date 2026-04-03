@@ -16,4 +16,4 @@ RUN apt-get update \
 RUN npm install -g @openai/codex@latest \
     && codex --version
 
-WORKDIR /arp/session
+WORKDIR /polar/session

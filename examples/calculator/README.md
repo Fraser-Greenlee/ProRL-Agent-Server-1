@@ -1,137 +1,80 @@
 # Calculator Example
 
-End-to-end rollout example that validates every built-in agent harness on a
-simple Python calculator task.
+This is the fastest way to prove that the packaged `polar` workflow works on one machine.
 
-## Task
+The example uses:
 
-Each agent receives the same instruction:
+- one rollout service on `:8080`
+- two gateway nodes on `:8100` and `:8101`
+- two local vLLM backends on `:8000` and `:8001`
+- one topology file at [topology.yaml](topology.yaml)
 
-> Write a Python calculator with no extra imports. Support arithmetic
-> expressions over integers and parentheses. Save it as `calculator.py`.
->
-> Expose a `Calculator` class that can be called with a string expression.
->
-> Example:
-> ```python
-> from calculator import Calculator
-> cal = Calculator()
-> print(cal("4*3-3"))  # should print 9
-> ```
+## Quick Start
 
-A canonical test file (`shared/assets/test_calculator.py`) is uploaded into
-every runtime via `runtime.prepare` and executed by the `swegym_git_diff`
-evaluator with `refresh_runtime=true`.
-
-## Topology
-
-All examples share the same localhost topology:
-
-| Component | Address |
-|-----------|---------|
-| Rollout server | `http://127.0.0.1:8080` |
-| Gateway node 01 | `http://127.0.0.1:8100` → vLLM `:8000` |
-| Gateway node 02 | `http://127.0.0.1:8101` → vLLM `:8001` |
-
-Both vLLM servers host `MiniMaxAI/MiniMax-M2.5`.
-
-Gateway and rollout configs live in `shared/gateway_server.yaml` and
-`shared/rollout_server.yaml`.
-
-## Prerequisites
-
-1. **Two vLLM servers** on ports 8000 and 8001 serving MiniMax-M2.5:
+1. Install the package:
 
    ```bash
-   CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve MiniMaxAI/MiniMax-M2.5 \
-     --tensor-parallel-size 4 --tool-call-parser minimax_m2 \
-     --reasoning-parser minimax_m2_append_think --enable-auto-tool-choice \
-     --trust-remote-code --port 8000
-
-   CUDA_VISIBLE_DEVICES=4,5,6,7 vllm serve MiniMaxAI/MiniMax-M2.5 \
-     --tensor-parallel-size 4 --tool-call-parser minimax_m2 \
-     --reasoning-parser minimax_m2_append_think --enable-auto-tool-choice \
-     --trust-remote-code --port 8001
+   uv sync
    ```
 
-2. **Docker** available for building and running agent containers.
-
-3. **ARP installed** in a Python environment with access to `src/`:
+2. Start the services in three terminals:
 
    ```bash
-   export PYTHONPATH=/path/to/nv-arp/src
+   uv run polar serve_rollout -c examples/calculator/topology.yaml
+   uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-01
+   uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-02
+   ```
+   
+   Monitor with:
+
+   ```bash
+   watch -n 1 uv run polar status -c examples/calculator/topology.yaml
    ```
 
-## Starting the servers
 
-```bash
-# Terminal 1 — rollout server
-CONFIG_PATH=examples/calculator/shared/rollout_server.yaml \
-  python -m rollout.server
+3. Build one harness image:
 
-# Terminal 2 — gateway node 01
-CONFIG_PATH=examples/calculator/shared/gateway_server.yaml \
-  GATEWAY_NODE_ID=localhost-node-01 \
-  python -m gateway.server
+   ```bash
+   bash examples/calculator/codex/setup.sh
+   ```
 
-# Terminal 3 — gateway node 02
-CONFIG_PATH=examples/calculator/shared/gateway_server.yaml \
-  GATEWAY_NODE_ID=localhost-node-02 \
-  python -m gateway.server
-```
+4. Submit rollout:
 
-## Running an agent
+   ```bash
+   uv run python examples/calculator/codex/submit_tasks.py --num-rollouts 32
+   ```
 
-Each harness directory contains a `Dockerfile`, `setup.sh`, and
-`submit_tasks.py`.
+The helper writes `request.json`, submits it through `polar submit`, and stores `response.json` next to it.
 
-```bash
-# 1. Build the Docker image
-cd examples/calculator/opencode
-bash setup.sh
+## What The Task Does
 
-# 2. Submit the task (from the repo root)
-python examples/calculator/opencode/submit_tasks.py \
-  --num-rollouts 16
-```
+Each session gets the same instruction: write `calculator.py`, expose a `Calculator` class, and pass the canonical test file in `assets/test_calculator.py`.
 
-The submit script delegates to `shared/submit_calculator_task.py`, which
-constructs a `TaskRequest` with the correct harness name, container image,
-`runtime.prepare` actions, and `swegym_git_diff` evaluator config.
+The runtime is prepared by:
 
-Results are written to `<harness>/batches/<timestamp>/`.
+- creating `/polar/session/workspace`
+- initializing a fresh git repo
+- uploading the test file
+- grading the resulting patch with `swegym_git_diff`
 
-## Harnesses
+## Harness Matrix
 
 | Harness | CLI | API | Docker image |
 |---------|-----|-----|-------------|
-| `opencode` | `opencode` | OpenAI Chat | `arp-localhost-opencode:latest` |
-| `claude_code` | `claude` | Anthropic Messages | `arp-localhost-claude_code:latest` |
-| `codex` | `codex` | OpenAI Responses | `arp-localhost-codex:latest` |
-| `gemini_cli` | `gemini` | Google GenerativeAI | `arp-localhost-gemini_cli:latest` |
-| `qwen_code` | `qwen` | OpenAI Chat | `arp-localhost-qwen_code:latest` |
-| `openhands_sdk` | OpenHands SDK | OpenAI Chat | `arp-localhost-openhands_sdk:latest` |
-| `swe_agent` | `sweagent` | OpenAI Chat | `arp-localhost-swe_agent:latest` |
+| `codex` | `codex` | OpenAI Responses | `polar-localhost-codex:latest` |
+| `opencode` | `opencode` | OpenAI Chat | `polar-localhost-opencode:latest` |
+| `claude_code` | `claude` | Anthropic Messages | `polar-localhost-claude_code:latest` |
+| `gemini_cli` | `gemini` | Google Generative AI | `polar-localhost-gemini_cli:latest` |
+| `qwen_code` | `qwen` | OpenAI Chat | `polar-localhost-qwen_code:latest` |
+| `openhands_sdk` | OpenHands SDK | OpenAI Chat | `polar-localhost-openhands_sdk:latest` |
+| `swe_agent` | `sweagent` | OpenAI Chat | `polar-localhost-swe_agent:latest` |
 
-### Custom flags
+## Outputs
 
-Pass extra arguments through to the shared submit script:
+Each run lands in:
 
-```bash
-python examples/calculator/opencode/submit_tasks.py \
-  --num-rollouts 4 \
-  --timeout-seconds 600 \
-  --agent-timeout 300 \
-  --model-name openai/MiniMaxAI/MiniMax-M2.5
+```text
+examples/calculator/<harness>/batches/<timestamp>/
+  request.json
+  response.json
 ```
-
-## Evaluator
-
-All examples use the `swegym_git_diff` evaluator in expected-output mode with
-`refresh_runtime=true`:
-
-1. The agent runtime's git diff is captured (`git add -A && git diff --cached`).
-2. A fresh evaluator runtime replays `runtime.start() + runtime.prepare`.
-3. The patch is applied to the fresh runtime.
-4. `python3 test_calculator.py` runs the canonical test suite.
-5. Reward is 1 if the output parser observes `PASSED test_calculator`, else 0.

@@ -16,4 +16,4 @@ RUN apt-get update \
 RUN npm install -g @google/gemini-cli@latest \
     && gemini --version
 
-WORKDIR /arp/session
+WORKDIR /polar/session

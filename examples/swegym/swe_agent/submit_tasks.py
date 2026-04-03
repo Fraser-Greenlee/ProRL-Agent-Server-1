@@ -8,13 +8,13 @@ import sys
 from pathlib import Path
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
-SHARED_DIR = EXAMPLE_DIR.parent / "shared"
+EXAMPLE_ROOT = EXAMPLE_DIR.parent
 
 sys.exit(
     subprocess.call(
         [
             sys.executable,
-            str(SHARED_DIR / "submit_swegym_tasks.py"),
+            str(EXAMPLE_ROOT / "submit_swegym_tasks.py"),
             "--harness",
             "swe_agent",
             *sys.argv[1:],

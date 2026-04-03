@@ -17,8 +17,8 @@ RUN npm install -g @anthropic-ai/claude-code@latest \
     && claude --version
 
 # Claude Code refuses --dangerously-skip-permissions as root
-RUN useradd -m -s /bin/bash arp && \
-    mkdir -p /arp/session && chown -R arp:arp /arp/session
-USER arp
+RUN useradd -m -s /bin/bash polar && \
+    mkdir -p /polar/session && chown -R polar:polar /polar/session
+USER polar
 
-WORKDIR /arp/session
+WORKDIR /polar/session

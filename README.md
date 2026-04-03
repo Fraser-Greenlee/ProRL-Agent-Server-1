@@ -1,9 +1,8 @@
-# ProRL Agent Rollout Protocol
+# Agent Rollout Server
 
-A lightweight and ultra-flexible protocol for running **massively parallel LLM agent rollouts**
-on **ANY** agent harness. It sits between your agent harness (Claude Code, OpenCode, Codex, OpenHands ...)
-and your model, transparently proxying any supported API format while capturing
-every completion for trajectory construction and reward assignment.
+An ultra-flexible rollout protocol for running **full async** agent RL
+on **ANY** agent harness.  It sits between your agent harness (Claude Code, OpenCode, Codex, OpenHands ...)
+and your model, transparently listening to LLM calls and reconstruct completions into trainable agent trajectories and rewards.
 
 <p align="center">
   <img src="assets/arp.svg" alt="Agent Rollout Protocol logo" width="800"/>
@@ -21,23 +20,9 @@ Submit a single task request and the rollout server handles the rest — dispatc
 ### Framework Agnostic Agent Rollout
 
 With the unique proxy-rerouting design, ARP can be used to rollout **ANY** agent harness and environments by subscribing to internal requests.
-Register your agent harnesses through a structured `AgentSpec` with named harness types, model names, MCP servers, and skills. Or use any of the built-in harnesses:
+Register your own agent harnesses as a shell command or reuse our integrated ones.
 
-| Harness | API Wire Format | Agent CLI |
-|---------|----------------|-----------|
-| `opencode` | OpenAI Chat | OpenCode |
-| `claude_code` | Anthropic Messages | Claude Code |
-| `codex` | OpenAI Responses | Codex CLI |
-| `gemini_cli` | Google Generative AI | Gemini CLI |
-| `openhands_sdk` | OpenAI Chat | OpenHands SDK |
-| `qwen_code` | OpenAI Chat | Qwen Code |
-| `swe_agent` | OpenAI Chat | SWE-Agent |
-| `shell` | Any | Custom shell command |
-
-Custom harnesses can be registered via `import_path`. For shell-defined agents,
-use `harness: "shell"` together with `custom_shell`.
-
-### Async Stage Pipelining
+### Async Staging
 
 Inspired by [ProRL Agent Server](https://github.com/NVIDIA-NeMo/ProRL-Agent-Server) and SkyRL, `INIT` submits prepared runtimes to `READY` buffer for async `RUN` collection, sending time-consuming CPU-bound docker / apptainer initializations to the background, and maximizing system GPU utilization.
 
@@ -47,106 +32,106 @@ Inspired by [ProRL Agent Server](https://github.com/NVIDIA-NeMo/ProRL-Agent-Serv
 
 ### Flexible Trajectory Construction
 
-Completion records are assembled into structured traces via pluggable builders:
+Completion records are assembled into structured traces via extensible builders:
 
 | Builder | Behavior |
 |---------|----------|
 | `all_records` | One trace per completion — simple and lossless |
 | `prefix_merging` | Merges consecutive completions into longer multi-turn traces when each prompt is exactly the prior prompt + response; splits on context compaction |
 
-Custom trajectory builders can be registered through a plugin registry (`module:ClassName`).
-
 ---
 
 ## Quick Start
 
-See [`examples/calculator/README.md`](examples/calculator/README.md) for the
-localhost calculator harness matrix, or
-[`examples/swegym/README.md`](examples/swegym/README.md) for the curated
-10-task SWE-Gym benchmark example with per-instance runtime images.
+1. Install the package:
 
----
+   ```bash
+   uv sync
+   ```
 
-## Request Interface
+2. Start the rollout service:
+
+   ```bash
+   uv run polar serve_rollout -c examples/calculator/topology.yaml
+   ```
+
+3. Start two gateway nodes in separate terminals:
+
+   ```bash
+   uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-01
+   uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-02
+   ```
+
+4. Build one example harness image and submit a task:
+
+   ```bash
+   bash examples/calculator/codex/setup.sh
+   uv run python examples/calculator/codex/submit_tasks.py --num-rollouts 8
+   ```
+
+5. Inspect the live cluster:
+
+   ```bash
+   uv run polar status -c examples/calculator/topology.yaml
+   ```
+
+For a fuller walkthrough, see [examples/calculator/README.md](examples/calculator/README.md) and [examples/swegym/README.md](examples/swegym/README.md).
+
+## CLI
+
+```bash
+polar serve_rollout -c topology.yaml
+polar serve_gateway -c topology.yaml --node-id node-a
+polar submit task.json -c topology.yaml
+polar status -c topology.yaml
+```
+
+`polar submit` accepts JSON and YAML task files. `polar status` shows rollout health, registered nodes, queue pressure, and task states.
+
+## Example Topology File
+
+```yaml
+rollout:
+  host: 127.0.0.1
+  port: 8080
+  public_url: http://127.0.0.1:8080
+  save_dir: ./rollout_results
+
+gateway:
+  heartbeat_interval_seconds: 30
+  nodes:
+    - id: localhost-node-01
+      host: 127.0.0.1
+      port: 8100
+      public_url: http://127.0.0.1:8100
+      model_served: MiniMaxAI/MiniMax-M2.5
+      max_init_workers: 8
+      max_run_workers: 4
+      max_postrun_workers: 4
+      ready_buffer_target: 4
+      vllm:
+        base_url: http://127.0.0.1:8000
+        timeout: 300
+```
+
+## Example Task Shape
 
 ```json
 {
   "task_id": "example-task-001",
   "instruction": "Write a calculator and save it as calculator.py",
-  "num_rollouts": 16,
+  "num_rollouts": 8,
   "timeout_seconds": 900,
   "runtime": {
     "backend": "docker",
-    "image": "arp-localhost-opencode:latest",
-    "prepare": [
-      {"type": "upload_file", "source": "/host/path/test.py", "target": "/arp/session/workspace/test.py"},
-      {"type": "exec", "command": "cd /arp/session/workspace && git init", "timeout_sec": 30}
-    ],
-    "workdir": "/arp/session/workspace",
+    "image": "polar-localhost-codex:latest",
+    "workdir": "/polar/session/workspace",
     "network": "host"
   },
   "agent": {
-    "harness": "opencode",
-    "model_name": "openai/MiniMaxAI/MiniMax-M2.5",
-    "timeout": 300
+    "harness": "codex",
+    "model_name": "openai/MiniMaxAI/MiniMax-M2.5"
   },
-  "builder": {"strategy": "prefix_merging"},
-  "evaluator": {
-    "strategy": "swegym_git_diff",
-    "config": {"repo_dir": "/arp/session/workspace"},
-    "refresh_runtime": true
-  }
+  "builder": {"strategy": "prefix_merging"}
 }
 ```
-
----
-
-## Architecture
-
-```
-src/
-  runtime/          # Container runtime abstraction (Docker, Apptainer)
-    base.py         #   BaseRuntime: start/stop/exec/upload/download
-    docker.py       #   DockerRuntime
-    apptainer.py    #   ApptainerRuntime
-    models.py       #   RuntimeSpec, ExecInput, ExecResult, PrepareAction
-    factory.py      #   create_runtime()
-
-  integration/      # Agent harness framework
-    base.py         #   BaseHarness: setup/run_steps/cleanup_steps/postprocess
-    factory.py      #   create_harness()
-    models.py       #   AgentSpec, MCPServerSpec, AgentRunResult
-    harnesses/      #   Built-in harness implementations
-      opencode.py, claude_code.py, codex.py,
-      gemini_cli.py, qwen_code.py, openhands_sdk.py,
-      swe_agent.py, shell.py
-
-  gateway/          # FastAPI proxy & node execution manager
-    server.py       #   Proxy routes, API detection & transformation
-    node.py         #   INIT/READY/RUN/POSTRUN lifecycle
-    dispatcher.py   #   Stage-isolated worker pools
-    config.py       #   YAML + env var configuration
-
-  rollout/          # Dispatch & collection pipeline
-    server.py       #   Rollout HTTP server
-    pipeline.py     #   Dispatch + result collection
-    models.py       #   TaskRequest, SessionDispatchRequest
-
-  trajectory/       # Trajectory building & evaluation
-    models.py       #   EvaluatorSpec, Trajectory, Trace
-    builder/        #   all_records, prefix_merging
-    evaluator/      #   swegym_git_diff, status_outcome
-```
-
----
-
-## Auto-Detected Proxies
-
-The gateway auto-detects the incoming API format and transforms it to OpenAI Chat for vLLM:
-
-| API Type | Detection | Transformer |
-|----------|-----------|-------------|
-| `anthropic` | `/v1/messages`, `anthropic-version` header | Anthropic Messages ↔ OpenAI Chat |
-| `openai_chat` | `/v1/chat/completions` | Passthrough |
-| `openai_responses` | `/v1/responses` | OpenAI Responses ↔ OpenAI Chat |
-| `google` | `generateContent` in path, `x-goog-api-key` header | Google Generative AI ↔ OpenAI Chat |

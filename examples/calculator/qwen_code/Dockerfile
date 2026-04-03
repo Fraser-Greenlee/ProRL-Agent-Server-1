@@ -16,4 +16,4 @@ RUN apt-get update \
 RUN npm install -g @qwen-code/qwen-code@latest \
     && qwen --version
 
-WORKDIR /arp/session
+WORKDIR /polar/session

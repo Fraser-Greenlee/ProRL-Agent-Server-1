@@ -17,4 +17,4 @@ RUN apt-get update \
 RUN npm install -g opencode-ai@latest \
     && opencode --version
 
-WORKDIR /arp/session
+WORKDIR /polar/session

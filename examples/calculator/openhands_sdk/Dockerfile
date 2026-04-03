@@ -12,4 +12,4 @@ RUN apt-get update \
 
 RUN pip install --no-cache-dir openhands-sdk openhands-tools
 
-WORKDIR /arp/session
+WORKDIR /polar/session

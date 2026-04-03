@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from trajectory.builder.prefix_merging import PrefixMergingBuilder
-from trajectory.models import CompletionRecord, CompletionSession
+from polar.trajectory.builder.prefix_merging import PrefixMergingBuilder
+from polar.trajectory.models import CompletionRecord, CompletionSession
 
 
 def _completion(

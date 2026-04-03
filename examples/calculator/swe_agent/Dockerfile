@@ -20,4 +20,4 @@ RUN pip install --no-cache-dir "git+https://github.com/SWE-agent/SWE-agent.git" 
     && mkdir -p "$SITE/trajectories" \
     && rm -rf /tmp/swe-agent-src
 
-WORKDIR /arp/session
+WORKDIR /polar/session
