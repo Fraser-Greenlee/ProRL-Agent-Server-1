@@ -79,6 +79,17 @@ class DockerRuntime(BaseRuntime):
         if self._destroyed:
             return
         self._destroyed = True
+        await self._run_local_command(
+            "docker",
+            "exec",
+            "--user",
+            "root",
+            self._container_name,
+            "chmod",
+            "-R",
+            "a+rwX",
+            self.runtime_session_dir,
+        )
         await self._run_local_command("docker", "rm", "-f", self._container_name)
 
     async def exec(

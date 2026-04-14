@@ -10,6 +10,6 @@ RUN apt-get update \
         git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir openhands-sdk openhands-tools
+RUN pip install --no-cache-dir openhands-sdk openhands-tools fastapi
 
 WORKDIR /polar/session

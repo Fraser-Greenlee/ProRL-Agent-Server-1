@@ -10,7 +10,21 @@ from polar.trajectory.models import CompletionRecord, Trace
 
 def _extract_response_ids(response: dict[str, Any], choice: dict[str, Any]) -> list[int]:
     token_ids = choice.get("token_ids", response.get("token_ids"))
-    return list(token_ids) if isinstance(token_ids, list) else []
+    if isinstance(token_ids, list):
+        return list(token_ids)
+
+    logprobs = choice.get("logprobs")
+    if isinstance(logprobs, dict):
+        content = logprobs.get("content")
+        if isinstance(content, list):
+            extracted = [
+                int(item["token_id"])
+                for item in content
+                if isinstance(item, dict) and item.get("token_id") is not None
+            ]
+            if extracted:
+                return extracted
+    return []
 
 
 def _extract_response_logprobs(choice: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -29,6 +43,13 @@ def _extract_prompt_messages(request: dict[str, Any]) -> list[dict[str, Any]]:
     return [deepcopy(message) for message in messages if isinstance(message, dict)]
 
 
+def _extract_tools(request: dict[str, Any]) -> list[dict[str, Any]] | None:
+    tools = request.get("tools")
+    if not isinstance(tools, list) or not tools:
+        return None
+    return [deepcopy(tool) for tool in tools if isinstance(tool, dict)]
+
+
 def build_trace_from_completion(completion: CompletionRecord) -> Trace:
     """Normalize one stored completion record into a trajectory trace."""
 
@@ -40,7 +61,7 @@ def build_trace_from_completion(completion: CompletionRecord) -> Trace:
         if isinstance(choices, list) and choices and isinstance(choices[0], dict)
         else {}
     )
-    prompt_ids = response.get("prompt_token_ids")
+    prompt_ids = first_choice.get("input_token_ids") or response.get("prompt_token_ids")
     response_message = first_choice.get("message")
     finish_reason = first_choice.get("finish_reason")
 
@@ -49,6 +70,7 @@ def build_trace_from_completion(completion: CompletionRecord) -> Trace:
         response_ids=_extract_response_ids(response, first_choice),
         prompt_messages=_extract_prompt_messages(request),
         response_messages=[deepcopy(response_message)] if isinstance(response_message, dict) else [],
+        tools=_extract_tools(request),
         finish_reason=str(finish_reason) if finish_reason is not None else None,
         response_logprobs=_extract_response_logprobs(first_choice),
     )

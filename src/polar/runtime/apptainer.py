@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
 import shlex
 import shutil
 from pathlib import Path
@@ -15,8 +17,11 @@ class ApptainerRuntime(BaseRuntime):
 
     def __init__(self, spec: RuntimeSpec, session_id: str, session_dir: Path) -> None:
         super().__init__(spec, session_id, session_dir)
-        safe_name = session_id.replace("/", "-")[:40]
-        self._instance_name = f"polar-{safe_name}"
+        # Use a hash suffix to guarantee uniqueness even when session IDs
+        # share a long prefix (e.g. "sk-polar-...-eval" vs "sk-polar-...").
+        short_hash = hashlib.sha256(session_id.encode()).hexdigest()[:8]
+        safe_name = session_id.replace("/", "-")[:30]
+        self._instance_name = f"polar-{safe_name}-{short_hash}"
         self._binary = self._resolve_binary()
 
     @property
@@ -34,7 +39,12 @@ class ApptainerRuntime(BaseRuntime):
     async def start(self) -> None:
         if self._destroyed:
             raise RuntimeError("apptainer runtime was already destroyed")
-        args = [self._binary, "instance", "start"]
+        # Use a host-backed overlay directory instead of --writable-tmpfs
+        # (default tmpfs overlay is only 64 MB, too small for most workloads).
+        self._overlay_dir = self.session_dir / "overlay"
+        self._overlay_dir.mkdir(parents=True, exist_ok=True)
+        args = [self._binary, "instance", "start",
+                "--overlay", str(self._overlay_dir)]
         if self.spec.gpus > 0:
             args.append("--nv")
         network_name: str | None
@@ -160,6 +170,13 @@ class ApptainerRuntime(BaseRuntime):
 
     @staticmethod
     def _resolve_binary() -> str:
-        if shutil.which("apptainer"):
-            return "apptainer"
+        override = os.environ.get("POLAR_APPTAINER_BIN")
+        if override:
+            return override
+        for candidate in ("/usr/bin/apptainer", "/bin/apptainer"):
+            if Path(candidate).is_file():
+                return candidate
+        resolved = shutil.which("apptainer")
+        if resolved:
+            return resolved
         return "apptainer"

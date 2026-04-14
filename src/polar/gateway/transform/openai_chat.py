@@ -1,4 +1,4 @@
-"""OpenAI Chat Completions transformer — mostly passthrough with token enhancement."""
+"""OpenAI Chat Completions transformer with SGLang training enhancements."""
 
 from __future__ import annotations
 
@@ -8,11 +8,14 @@ from polar.gateway.transform.base import BaseTransformer
 
 
 class OpenAIChatTransformer(BaseTransformer):
-    """Transform OpenAI Chat requests (passthrough + token params)."""
+    """Transform OpenAI Chat requests (passthrough + training params)."""
 
     def transform_request(self, body: dict[str, Any]) -> dict[str, Any]:
         result = body.copy()
-        return self._enhance_token_params(result)
+        return self._enhance_for_training(
+            result,
+            body.get("_polar_model_served"),
+        )
 
     def transform_response(
         self,

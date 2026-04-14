@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import threading
 import time
 import uuid
@@ -16,6 +18,8 @@ from polar.rollout.models import (
     TaskStatus,
 )
 from polar.rollout.pipeline import Pipeline
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -42,7 +46,8 @@ class RolloutManager:
         self._tasks: dict[str, _TaskRecord] = {}
         self._lock = threading.RLock()
 
-    async def execute_task(self, request: TaskRequest) -> TaskResult:
+    async def submit_task(self, request: TaskRequest) -> str:
+        """Register a task and run it in the background. Returns task_id immediately."""
         with self._lock:
             existing = self._tasks.get(request.task_id)
             if existing is not None and existing.status == "running":
@@ -50,8 +55,30 @@ class RolloutManager:
             self._tasks[request.task_id] = _TaskRecord(
                 task_id=request.task_id,
                 status="running",
-                total_sessions=request.num_rollouts,
+                total_sessions=request.num_samples,
             )
+        asyncio.create_task(self._run_task_background(request))
+        return request.task_id
+
+    async def _run_task_background(self, request: TaskRequest) -> None:
+        """Execute a task in the background, updating the record on completion."""
+        try:
+            result = await self.execute_task(request, _already_registered=True)
+            logger.info("Task %s completed with %d results", request.task_id, len(result.results))
+        except Exception:
+            logger.exception("Background task %s failed", request.task_id)
+
+    async def execute_task(self, request: TaskRequest, *, _already_registered: bool = False) -> TaskResult:
+        if not _already_registered:
+            with self._lock:
+                existing = self._tasks.get(request.task_id)
+                if existing is not None and existing.status == "running":
+                    raise ValueError(f"task {request.task_id} is already running")
+                self._tasks[request.task_id] = _TaskRecord(
+                    task_id=request.task_id,
+                    status="running",
+                    total_sessions=request.num_samples,
+                )
 
         sessions = [
             SessionContext(
@@ -60,7 +87,7 @@ class RolloutManager:
                 request=request,
                 deadline_monotonic=time.monotonic() + request.timeout_seconds,
             )
-            for _ in range(request.num_rollouts)
+            for _ in range(request.num_samples)
         ]
 
         async def _on_result(result: SessionResult) -> None:

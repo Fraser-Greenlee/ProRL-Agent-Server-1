@@ -28,7 +28,7 @@ from polar.rollout.timer import StageTimer
 from polar.runtime.base import BaseRuntime
 from polar.runtime.factory import create_runtime
 from polar.runtime.models import ExecInput, RuntimeSpec
-from polar.trajectory.models import EvalResult, EvaluatorSpec, StrategySpec, Trajectory
+from polar.trajectory.models import CompletionSession, EvalResult, EvaluatorSpec, StrategySpec, Trajectory
 from polar.trajectory.registry import StrategyRegistry
 
 logger = logging.getLogger(__name__)
@@ -279,7 +279,11 @@ class GatewayNodeManager:
             managed.agent_result = agent_result
 
         except GatewayExecutionTimeout as exc:
-            managed.final_result = self._timeout_result(request, managed.timer, str(exc))
+            # Don't set final_result — let _handle_postrun build a partial
+            # trajectory from the completions captured so far.
+            managed.agent_result = AgentRunResult(
+                status="timeout", return_code=-1, error=str(exc),
+            )
         except Exception as exc:
             if managed.cancel_requested:
                 logger.info("Agent execution cancelled for session %s", request.session_id)
@@ -518,9 +522,10 @@ class GatewayNodeManager:
             )
 
         self.session_registry.set_status(request.session_id, "BUILDING")
+        await self.storage.drain_pending_saves(request.session_id)
         managed.timer.mark("build", "started")
         try:
-            trajectory = await self._await_with_budget(
+            trajectory, completion_session = await self._await_with_budget(
                 asyncio.to_thread(self._build_trajectory, request),
                 managed,
             )
@@ -547,6 +552,18 @@ class GatewayNodeManager:
                     agent_result=agent_result,
                     managed=managed,
                 )
+        except GatewayExecutionTimeout as exc:
+            # Preserve the built trajectory even when eval times out.
+            logger.warning("Eval timed out for session %s: %s", request.session_id, exc)
+            if trajectory.status not in ("TIMEOUT", "ERROR"):
+                trajectory = trajectory.model_copy(
+                    update={"status": "TIMEOUT", "error": f"eval timed out: {exc}"}
+                )
+        except Exception as exc:
+            logger.exception("Eval failed for session %s", request.session_id)
+            trajectory = trajectory.model_copy(
+                update={"status": "ERROR", "error": f"evaluator failed: {exc}"}
+            )
         finally:
             managed.timer.mark("eval", "finished")
 
@@ -556,18 +573,23 @@ class GatewayNodeManager:
             task_id=request.task_id,
             status=trajectory.status,
             trajectory=trajectory,
+            completion_session=completion_session,
             timing=managed.timer.to_session_timing(),
             node_id=self.node_id,
             error=error,
         )
 
-    def _build_trajectory(self, request: SessionDispatchRequest) -> Trajectory:
+    def _build_trajectory(
+        self, request: SessionDispatchRequest
+    ) -> tuple[Trajectory, CompletionSession]:
         completion_session = self.storage.load_completion_session(request.session_id)
         builder = self.builders.create(request.builder)
         result = builder.build(completion_session)
         if asyncio.iscoroutine(result):
-            return asyncio.run(result)
-        return Trajectory.model_validate(result)
+            trajectory = asyncio.run(result)
+        else:
+            trajectory = result
+        return Trajectory.model_validate(trajectory), completion_session
 
     async def _run_eval(
         self,

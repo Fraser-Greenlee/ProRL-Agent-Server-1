@@ -1,4 +1,4 @@
-# Polar
+# Agent Rollout Server
 
 An ultra-flexible rollout protocol for running **full async** agent RL
 on **ANY** agent harness.  It sits between your agent harness (Claude Code, OpenCode, Codex, OpenHands ...)
@@ -41,41 +41,18 @@ Completion records are assembled into structured traces via extensible builders:
 
 ---
 
+## Installation
+
+```bash
+uv pip install -e .              # core gateway + rollout server
+uv pip install -e ".[slime]"     # include Slime trainer bridge
+```
+
+Install and run SGLang separately (see the [SGLang docs](https://docs.sglang.ai/)).
+
 ## Quick Start
 
-1. Install the package:
-
-   ```bash
-   uv sync
-   ```
-
-2. Start the rollout service:
-
-   ```bash
-   uv run polar serve_rollout -c examples/calculator/topology.yaml
-   ```
-
-3. Start two gateway nodes in separate terminals:
-
-   ```bash
-   uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-01
-   uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-02
-   ```
-
-4. Build one example harness image and submit a task:
-
-   ```bash
-   bash examples/calculator/codex/setup.sh
-   uv run python examples/calculator/codex/submit_tasks.py --num-rollouts 8
-   ```
-
-5. Inspect the live cluster:
-
-   ```bash
-   uv run polar status -c examples/calculator/topology.yaml
-   ```
-
-For a fuller walkthrough, see [examples/calculator/README.md](examples/calculator/README.md) and [examples/swegym/README.md](examples/swegym/README.md).
+See [examples/calculator/README.md](examples/calculator/README.md) for a minimal example to run with single machine with 2 x (>24G) GPUs.
 
 ## CLI
 
@@ -104,12 +81,12 @@ gateway:
       host: 127.0.0.1
       port: 8100
       public_url: http://127.0.0.1:8100
-      model_served: MiniMaxAI/MiniMax-M2.5
+      model_served: Qwen/Qwen3.5-4B
       max_init_workers: 8
       max_run_workers: 4
       max_postrun_workers: 4
       ready_buffer_target: 4
-      vllm:
+      sglang:
         base_url: http://127.0.0.1:8000
         timeout: 300
 ```
@@ -120,8 +97,8 @@ gateway:
 {
   "task_id": "example-task-001",
   "instruction": "Write a calculator and save it as calculator.py",
-  "num_rollouts": 16,
-  "timeout_seconds": 180,
+  "num_samples": 8,
+  "timeout_seconds": 900,
   "runtime": {
     "backend": "docker",
     "image": "polar-localhost-codex:latest",
@@ -130,7 +107,7 @@ gateway:
   },
   "agent": {
     "harness": "codex",
-    "model_name": "openai/gpt-5"
+    "model_name": "openai/gpt-5.4"
   },
   "builder": {"strategy": "prefix_merging"}
 }

@@ -16,13 +16,13 @@ class OpenCodeHarness(BaseHarness):
 
     def __init__(self, agent_spec: AgentSpec) -> None:
         super().__init__(agent_spec)
-        self._config_dir = "/root/.config/opencode"
+        self._config_dir = "$HOME/.config/opencode"
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._config_dir}")
 
         # Build opencode.json config with provider/model
-        model = self.model_name or "openai/gpt-4o"
+        model = self.model_name or "openai/gpt-5.4"
         provider, model_id = (
             model.split("/", 1)
             if "/" in model
@@ -61,7 +61,7 @@ class OpenCodeHarness(BaseHarness):
 
     def run_steps(self, instruction: str) -> list[ExecInput]:
         escaped = shlex.quote(instruction)
-        model = self.model_name or "openai/gpt-4o"
+        model = self.model_name or "openai/gpt-5.4"
         env: dict[str, str] = {
             **self.env,
             "OPENCODE_FAKE_VCS": "git",

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from polar.agent.models import AgentSpec
 from polar.runtime.models import RuntimeSpec
-from polar.trajectory.models import EvaluatorSpec, StrategySpec, Trajectory
+from polar.trajectory.models import CompletionSession, EvaluatorSpec, StrategySpec, Trajectory
 
 if TYPE_CHECKING:
     from polar.rollout.timer import StageTimer
@@ -33,7 +33,7 @@ class TaskRequest(BaseModel):
 
     task_id: str
     instruction: str
-    num_rollouts: int = Field(default=1, ge=1)
+    num_samples: int = Field(default=1, ge=1)
     timeout_seconds: float = Field(default=600.0, gt=0)
     runtime: RuntimeSpec | None = None
     agent: AgentSpec
@@ -86,6 +86,7 @@ class SessionResult(BaseModel):
     task_id: str
     status: str
     trajectory: Trajectory
+    completion_session: CompletionSession | None = None
     timing: SessionTiming = Field(default_factory=SessionTiming)
     node_id: str | None = None
     error: str | None = None

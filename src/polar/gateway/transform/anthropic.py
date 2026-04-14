@@ -29,7 +29,7 @@ class AnthropicStreamState:
     Anthropic SSE blocks are stateful across chunks: content blocks must be
     explicitly started, optionally receive multiple deltas, and then be closed
     before the final message delta. This helper tracks those open blocks for a
-    single upstream OpenAI/vLLM stream.
+    single upstream OpenAI/SGLang stream.
     """
 
     def __init__(self, model: str, finish_to_stop_reason: dict[str, str]):
@@ -274,10 +274,16 @@ class AnthropicTransformer(BaseTransformer):
         # Tools
         if "tools" in body:
             result["tools"] = self._transform_tools_to_openai(body["tools"])
-        if "tool_choice" in body:
-            result["tool_choice"] = self._transform_tool_choice_to_openai(body["tool_choice"])
+            # Anthropic API defaults tool_choice to "auto" when omitted, but
+            # vLLM/SGLang needs it explicitly to activate tool-call parsing.
+            result["tool_choice"] = self._transform_tool_choice_to_openai(
+                body.get("tool_choice", {"type": "auto"})
+            )
 
-        return self._enhance_token_params(result)
+        return self._enhance_for_training(
+            result,
+            body.get("_polar_model_served"),
+        )
 
     def transform_response(
         self,

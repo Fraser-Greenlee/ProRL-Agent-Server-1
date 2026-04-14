@@ -27,7 +27,7 @@ class OpenHandsSdkHarness(BaseHarness):
         )
 
     def run_steps(self, instruction: str) -> list[ExecInput]:
-        model = self.model_name or "openai/gpt-4o"
+        model = self.model_name or "openai/gpt-5.4"
         env: dict[str, str] = {
             **self.env,
             "LLM_MODEL": model,
@@ -177,7 +177,7 @@ def main():
         sys.exit(1)
 
     instruction = os.environ.get("AGENT_INSTRUCTION", "")
-    model = os.environ.get("LLM_MODEL", "openai/gpt-4o")
+    model = os.environ.get("LLM_MODEL", "openai/gpt-5.4")
     api_key = os.environ.get("LLM_API_KEY", "")
     base_url = os.environ.get("LLM_BASE_URL", "")
     max_iterations = int(os.environ.get("MAX_ITERATIONS", "30"))

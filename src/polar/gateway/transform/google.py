@@ -190,7 +190,10 @@ class GoogleTransformer(BaseTransformer):
         if tool_choice is not None:
             result["tool_choice"] = tool_choice
 
-        return self._enhance_token_params(result)
+        return self._enhance_for_training(
+            result,
+            body.get("_polar_model_served"),
+        )
 
     def transform_response(
         self,

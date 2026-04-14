@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import os
@@ -19,10 +21,10 @@ from polar.gateway.control import RolloutControlClient
 from polar.gateway.detection import APIType, detect, extract_model
 from polar.gateway.node import GatewayNodeManager
 from polar.gateway.proxy import (
+    SGLangClient,
     UpstreamError,
     UpstreamHTTPError,
     UpstreamTimeoutError,
-    VLLMClient,
 )
 from polar.gateway.session import (
     InvalidSessionIdError,
@@ -36,7 +38,9 @@ from polar.gateway.session import (
     resolve_session_id,
 )
 from polar.gateway.storage import SessionStore
-from polar.gateway.streaming import StreamAccumulator
+from polar.gateway.streaming import (
+    StreamAccumulator,
+)
 from polar.gateway.transform import TransformManager
 from polar.gateway.transform.base import BaseTransformer
 from polar.rollout.models import SessionDispatchRequest, SessionDispatchResponse
@@ -56,7 +60,7 @@ logger = logging.getLogger(__name__)
 class GatewayState:
     topology: TopologyConfig
     node: GatewayNodeConfig
-    vllm: VLLMClient
+    sglang: SGLangClient
     storage: SessionStore
     transform_manager: TransformManager
     session_registry: SessionRegistry
@@ -78,7 +82,7 @@ def configure_server(topology_path: str = "topology.yaml", *, node_id: str | Non
 
 def _build_state(topology: TopologyConfig, node_id: str | None) -> GatewayState:
     node = topology.select_gateway_node(node_id)
-    vllm = VLLMClient(node.vllm_base_url, timeout=node.vllm_timeout)
+    sglang = SGLangClient(node.sglang_base_url, timeout=node.sglang_timeout)
     storage = SessionStore()
     transform_manager = TransformManager()
     session_registry = SessionRegistry()
@@ -115,7 +119,7 @@ def _build_state(topology: TopologyConfig, node_id: str | None) -> GatewayState:
     return GatewayState(
         topology=topology,
         node=node,
-        vllm=vllm,
+        sglang=sglang,
         storage=storage,
         transform_manager=transform_manager,
         session_registry=session_registry,
@@ -148,11 +152,16 @@ async def _lifespan(_: FastAPI):
         if state.control_client is not None:
             await state.control_client.close()
         await state.node_manager.close()
-        await state.vllm.close()
+        await state.sglang.close()
         state.storage.close()
 
 
 app = FastAPI(title="Polar Gateway", version="0.1.0", lifespan=_lifespan)
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
+async def root() -> dict[str, str]:
+    return {"status": "ok", "service": "polar-gateway"}
 
 
 def _format_anthropic_events(events: list[dict[str, Any]]) -> str:
@@ -345,7 +354,7 @@ def format_stream_output(
 async def list_models():
     state = get_state()
     try:
-        return await state.vllm.list_models()
+        return await state.sglang.list_models()
     except Exception as exc:
         logger.error("Failed to list models: %s", exc)
         return JSONResponse({"error": str(exc)}, status_code=502)
@@ -355,10 +364,15 @@ async def list_models():
 async def health():
     state = get_state()
     metrics = await state.node_manager.stage_metrics()
+    try:
+        upstream = await state.sglang.health()
+    except Exception as exc:
+        upstream = {"status": "error", "error": str(exc)}
     return {
         "status": "ok",
         "node_id": state.node.id,
         "gateway_url": state.node.public_url,
+        "sglang": upstream,
         "metrics": metrics.model_dump(mode="json"),
         "active_status_counts": state.session_registry.active_status_counts(),
         "active_sessions": state.session_registry.active_sessions(),
@@ -489,7 +503,9 @@ async def proxy_request(request: Request, path: str):
     if api_type == APIType.GOOGLE and "streamGenerateContent" in full_path:
         body["_streaming"] = True
 
-    openai_request = transformer.transform_request(body)
+    transformed_body = body.copy()
+    transformed_body["_polar_model_served"] = state.node.model_served
+    openai_request = transformer.transform_request(transformed_body)
     openai_request["model"] = state.node.model_served
     is_streaming = openai_request.get("stream", False)
 
@@ -526,7 +542,7 @@ async def _handle_non_streaming(
 ) -> JSONResponse:
     state = get_state()
     try:
-        response = await state.vllm.completion(openai_request)
+        response = await state.sglang.completion(openai_request)
     except UpstreamError as exc:
         logger.warning("Non-streaming upstream error for session %s: %s", session_id, exc)
         return _upstream_error_response(api_type, exc)
@@ -535,6 +551,7 @@ async def _handle_non_streaming(
         session_id,
         openai_request,
         response,
+        original_request=original_request,
         model_requested=original_model,
         model_used=openai_request["model"],
         api_type=api_type.value,
@@ -557,7 +574,7 @@ async def _handle_streaming(
 ) -> StreamingResponse | JSONResponse:
     state = get_state()
     try:
-        raw_stream = await state.vllm.open_completion_stream(openai_request)
+        raw_stream = await state.sglang.open_completion_stream(openai_request)
     except UpstreamError as exc:
         logger.warning("Streaming setup error for session %s: %s", session_id, exc)
         return _upstream_error_response(api_type, exc)
@@ -565,6 +582,8 @@ async def _handle_streaming(
     accumulator = StreamAccumulator()
     stream_state = transformer.create_stream_state(original_request)
     outcome = {"persist": False}
+    save_done = asyncio.Event()
+    state.storage.register_pending_save(session_id, save_done)
 
     async def generate():
         is_first = True
@@ -602,23 +621,27 @@ async def _handle_streaming(
                 yield "data: [DONE]\n\n"
             outcome["persist"] = True
 
-    def finalize() -> None:
-        if not outcome["persist"]:
-            return
+    async def finalize() -> None:
         try:
-            response = accumulator.to_response()
-            state.storage.save_message(
-                session_id,
-                openai_request,
-                response,
-                model_requested=original_model,
-                model_used=openai_request["model"],
-                api_type=api_type.value,
-                task_id=session_info.task_id if session_info else None,
-                created_at=session_info.created_at.isoformat() if session_info else None,
-            )
-        except Exception as exc:
-            logger.error("Failed to save streaming response: %s", exc)
+            if not outcome["persist"]:
+                return
+            try:
+                response = accumulator.to_response()
+                state.storage.save_message(
+                    session_id,
+                    openai_request,
+                    response,
+                    original_request=original_request,
+                    model_requested=original_model,
+                    model_used=openai_request["model"],
+                    api_type=api_type.value,
+                    task_id=session_info.task_id if session_info else None,
+                    created_at=session_info.created_at.isoformat() if session_info else None,
+                )
+            except Exception as exc:
+                logger.error("Failed to save streaming response: %s", exc)
+        finally:
+            save_done.set()
 
     return StreamingResponse(
         generate(),

@@ -77,3 +77,15 @@ def default_evaluator_registry() -> StrategyRegistry:
     registry.register("swegym_git_diff", SweGymGitDiffEvaluator)
     registry.register("status_outcome", StatusOutcomeEvaluator)
     return registry
+
+
+def default_adv_estimator_registry() -> StrategyRegistry:
+    """Pre-populated registry with built-in advantage estimators."""
+    from polar.trajectory.adv_estimator import (
+        BaseAdvantageEstimator,
+        HierarchicalGroupAdvantageEstimator,
+    )
+
+    registry: StrategyRegistry[BaseAdvantageEstimator] = StrategyRegistry(BaseAdvantageEstimator)
+    registry.register("hierarchical_group", HierarchicalGroupAdvantageEstimator)
+    return registry

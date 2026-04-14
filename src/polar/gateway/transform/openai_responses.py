@@ -248,7 +248,7 @@ class ResponsesStreamState:
 
 
 class OpenAIResponsesTransformer(BaseTransformer):
-    """Transform OpenAI Responses API to/from vLLM chat completions."""
+    """Transform OpenAI Responses API to/from SGLang chat completions."""
 
     def transform_request(self, body: dict[str, Any]) -> dict[str, Any]:
         messages: list[dict[str, Any]] = []
@@ -282,7 +282,10 @@ class OpenAIResponsesTransformer(BaseTransformer):
         if "tool_choice" in body:
             result["tool_choice"] = body["tool_choice"]
 
-        return self._enhance_token_params(result)
+        return self._enhance_for_training(
+            result,
+            body.get("_polar_model_served"),
+        )
 
     def transform_response(
         self,

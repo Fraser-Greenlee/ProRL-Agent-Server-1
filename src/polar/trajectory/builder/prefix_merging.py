@@ -109,6 +109,20 @@ def _is_grouping_noise_message(message: dict[str, Any]) -> bool:
     return False
 
 
+def _token_aligned_response_messages(trace: Trace) -> list[dict[str, Any]]:
+    if not trace.response_logprobs:
+        return trace.response_messages
+    tokens = [
+        str(item.get("token", ""))
+        for item in trace.response_logprobs
+        if isinstance(item, dict)
+    ]
+    exact_text = "".join(tokens)
+    if not exact_text:
+        return trace.response_messages
+    return [{"role": "assistant", "content": exact_text}]
+
+
 class PrefixMergingBuilder(BaseTrajectoryBuilder):
     """Group chained completions and emit the final trace from each group.
 
@@ -171,6 +185,11 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
             )
             waiting_chains[next_key].append(chain_idx)
 
+        final_traces = [
+            trace.model_copy(update={"response_messages": _token_aligned_response_messages(trace)})
+            for trace in chains
+        ]
+
         return Trajectory(
             status="COMPLETED",
             metadata={
@@ -183,7 +202,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 "record_count": len(session.completions),
                 "trace_count": len(chains),
             },
-            traces=chains,
+            traces=final_traces,
         )
 
     @staticmethod

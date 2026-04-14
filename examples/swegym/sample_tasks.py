@@ -17,8 +17,6 @@ DATASET_PAGE_SIZE = 50
 DEFAULT_CACHE_PATH = Path.home() / ".cache" / "polar" / "swegym_sample_10.json"
 HARNESS_IMAGE_PREFIXES = {
     "swe_agent": "polar-swegym-swe_agent",
-    "openhands_sdk": "polar-swegym-openhands_sdk",
-    "openhands": "polar-swegym-openhands",
 }
 
 # Curated from the 293-row training split to cover multiple repositories while

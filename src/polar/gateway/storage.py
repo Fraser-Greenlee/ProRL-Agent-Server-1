@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import logging
+import asyncio
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from polar.gateway.secrets import redact_value
 from polar.trajectory.models import CompletionRecord, CompletionSession
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -33,10 +30,12 @@ class SessionStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._sessions: dict[str, _SessionState] = {}
+        self._pending_saves: dict[str, list[asyncio.Event]] = {}
 
     def close(self) -> None:
         with self._lock:
             self._sessions.clear()
+            self._pending_saves.clear()
 
     def ensure_session(
         self,
@@ -66,6 +65,7 @@ class SessionStore:
         request: dict[str, Any],
         response: dict[str, Any],
         *,
+        original_request: dict[str, Any] | None = None,
         model_requested: str | None = None,
         model_used: str | None = None,
         api_type: str | None = None,
@@ -73,16 +73,13 @@ class SessionStore:
         created_at: str | None = None,
     ) -> str:
         """Append one completion record to the in-memory session."""
-        redacted_request, redact_count = redact_value(request)
-        if redact_count > 0:
-            logger.info("Redacted %d secret(s) from request in session %s", redact_count, session_id)
-
         effective_model_used = model_used or request.get("model", "unknown")
         record = CompletionRecord.model_validate(
             {
                 "completion_id": f"msg_{uuid.uuid4().hex[:12]}",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "request": redacted_request,
+                "request": request,
+                "original_request": original_request or {},
                 "response": response,
             }
         )
@@ -127,6 +124,18 @@ class SessionStore:
                 for completion in state.completions
             ]
             return CompletionSession.model_validate(payload)
+
+    def register_pending_save(self, session_id: str, done: asyncio.Event) -> None:
+        """Register a pending streaming save so drain can wait for it."""
+        with self._lock:
+            self._pending_saves.setdefault(session_id, []).append(done)
+
+    async def drain_pending_saves(self, session_id: str) -> None:
+        """Wait for all pending streaming saves to finish for *session_id*."""
+        with self._lock:
+            events = self._pending_saves.pop(session_id, [])
+        for event in events:
+            await event.wait()
 
     def delete_session(self, session_id: str) -> int:
         """Drop a session and return how many messages were removed."""

@@ -50,7 +50,7 @@ class SweAgentHarness(BaseHarness):
         )
 
     def run_steps(self, instruction: str) -> list[ExecInput]:
-        model = self.model_name or "openai/gpt-4o"
+        model = self.model_name or "openai/gpt-5.4"
         env: dict[str, str] = {**self.env}
 
         flags: list[str] = []

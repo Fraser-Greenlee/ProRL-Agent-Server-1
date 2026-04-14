@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,15 @@ PREPARE_COMMAND = (
     "ln -sf /opt/miniconda3/envs/testbed/bin/python /root/.venv/bin/python && "
     "ln -sf /opt/miniconda3/envs/testbed/bin/python /root/.venv/bin/python3 && "
     "git config --global core.pager '' && "
-    "cd /polar/session/workspace && git reset --hard"
+    "cd /polar/session/workspace && git reset --hard && "
+    # Fix pydantic version mismatch inside the swe-agent conda env
+    "source /opt/miniconda3/etc/profile.d/conda.sh && "
+    "conda activate polar-sweagent && "
+    "pip install --upgrade pydantic pydantic-core -q 2>/dev/null; "
+    # Patch swe-agent to tolerate chown failure (apptainer user namespace)
+    "sed -i 's/raise RuntimeError(msg)/pass  # chown not needed in apptainer/' "
+    "/opt/miniconda3/envs/polar-sweagent/lib/python3.11/site-packages/sweagent/environment/repo.py; "
+    "true"
 )
 
 
@@ -40,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--harness", default="swe_agent", help="Harness name to submit.")
     parser.add_argument(
         "--model-name",
-        default=os.environ.get("MODEL_NAME", "openai/MiniMaxAI/MiniMax-M2.5"),
+        default=os.environ.get("MODEL_NAME", "openai/gpt-5.4"),
         help="Model name routed through the Polar gateway.",
     )
     parser.add_argument(
@@ -54,10 +63,10 @@ def parse_args() -> argparse.Namespace:
         help="Path to topology.yaml",
     )
     parser.add_argument(
-        "--num-rollouts",
+        "--num-samples",
         type=int,
-        default=int(os.environ.get("NUM_ROLLOUTS", "1")),
-        help="How many rollouts to run per sampled task.",
+        default=int(os.environ.get("NUM_SAMPLES", "1")),
+        help="How many rollout samples to run per task.",
     )
     parser.add_argument(
         "--max-tasks",
@@ -75,7 +84,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--runtime-backend",
         choices=["docker", "apptainer"],
-        default=os.environ.get("RUNTIME_BACKEND", "docker"),
+        default=os.environ.get("RUNTIME_BACKEND", "apptainer"),
         help="Container runtime backend for the session",
     )
     parser.add_argument(
@@ -105,12 +114,6 @@ def docker_image_exists(image_ref: str) -> bool:
         check=False,
     )
     return result.returncode == 0
-
-
-def agent_env_for_harness(harness: str) -> dict[str, str]:
-    if harness in {"openhands_sdk", "openhands"}:
-        return {"WORKSPACE_BASE": "/polar/session/workspace"}
-    return {}
 
 
 def builder_spec_for_harness(harness: str) -> dict[str, Any]:
@@ -166,7 +169,7 @@ def build_task_request(
     return {
         "task_id": f"swegym-{args.harness}-{sanitize_instance_id(instance_id)}-{batch_id}",
         "instruction": str(instance["problem_statement"]).strip(),
-        "num_rollouts": args.num_rollouts,
+        "num_samples": args.num_samples,
         "timeout_seconds": args.timeout_seconds,
         "runtime": {
             "backend": args.runtime_backend,
@@ -185,7 +188,7 @@ def build_task_request(
             "harness": args.harness,
             "model_name": args.model_name,
             "settings": agent_settings_for_harness(args.harness),
-            "env": agent_env_for_harness(args.harness),
+            "env": {}
         },
         "builder": builder_spec_for_harness(args.harness),
         "evaluator": {
@@ -305,7 +308,7 @@ def main() -> int:
         "batch_id": batch_id,
         "harness": args.harness,
         "model_name": args.model_name,
-        "num_rollouts": args.num_rollouts,
+        "num_samples": args.num_samples,
         "tasks": [
             {
                 "instance_id": instance["instance_id"],
@@ -318,7 +321,7 @@ def main() -> int:
     }
     write_json(output_dir / "manifest.json", manifest)
 
-    summaries: list[dict[str, Any]] = []
+    prepared: list[tuple[str, dict[str, Any], Path, Path]] = []
     for instance in instances:
         instance_id = str(instance["instance_id"])
         task_dir = output_dir / sanitize_instance_id(instance_id)
@@ -327,35 +330,43 @@ def main() -> int:
         payload = build_task_request(args, instance=instance, batch_id=batch_id)
         write_json(request_path, payload)
         print(f"[{instance_id}] wrote request to {request_path}")
+        prepared.append((instance_id, payload, request_path, response_path))
 
-        if args.dry_run:
-            summaries.append(
-                {
-                    "instance_id": instance_id,
-                    "task_id": payload["task_id"],
-                    "dry_run": True,
-                }
-            )
-            continue
+    if args.dry_run:
+        summaries = [
+            {"instance_id": iid, "task_id": p["task_id"], "dry_run": True}
+            for iid, p, _, _ in prepared
+        ]
+        write_json(output_dir / "summary.json", summaries)
+        print(f"Wrote batch summary to {output_dir / 'summary.json'}")
+        return 0
 
+    def _submit_one(item: tuple[str, dict[str, Any], Path, Path]) -> dict[str, Any]:
+        instance_id, payload, request_path, response_path = item
         result = submit_task_file(
             request_path,
             topology_path=args.topology,
             rollout_server_url=args.rollout_server_url,
         )
         write_json(response_path, result)
-
         summary = {
             "instance_id": instance_id,
             "task_id": payload["task_id"],
             "response_path": str(response_path),
             **summarize_result(result),
         }
-        summaries.append(summary)
         print(
             f"[{instance_id}] completed: reward_1="
             f"{summary['reward_one_sessions']}/{summary['total_sessions']}"
         )
+        return summary
+
+    print(f"Submitting {len(prepared)} tasks concurrently ...")
+    summaries: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=len(prepared)) as pool:
+        futures = {pool.submit(_submit_one, item): item for item in prepared}
+        for future in as_completed(futures):
+            summaries.append(future.result())
 
     write_json(output_dir / "summary.json", summaries)
     print(f"Wrote batch summary to {output_dir / 'summary.json'}")

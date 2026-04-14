@@ -20,8 +20,8 @@ class GatewayNodeConfig:
     port: int
     public_url: str
     model_served: str
-    vllm_base_url: str
-    vllm_timeout: float
+    sglang_base_url: str
+    sglang_timeout: float
     max_init_workers: int
     max_run_workers: int
     max_postrun_workers: int
@@ -161,7 +161,7 @@ class TopologyConfig:
                 if public_url_raw is not None
                 else _default_public_url(host, port)
             )
-            vllm = _require_mapping(node.get("vllm"), f"gateway.nodes[{index}].vllm")
+            sglang = _require_mapping(node.get("sglang"), f"gateway.nodes[{index}].sglang")
             default_runtime_raw = node.get("default_runtime")
             default_runtime = None
             if default_runtime_raw is not None:
@@ -182,13 +182,13 @@ class TopologyConfig:
                     port=port,
                     public_url=public_url,
                     model_served=str(node.get("model_served", "")),
-                    vllm_base_url=_coerce_http_url(
-                        vllm.get("base_url", "http://127.0.0.1:8000"),
-                        f"gateway.nodes[{index}].vllm.base_url",
+                    sglang_base_url=_coerce_http_url(
+                        sglang.get("base_url", "http://127.0.0.1:8000"),
+                        f"gateway.nodes[{index}].sglang.base_url",
                     ),
-                    vllm_timeout=_coerce_positive_float(
-                        vllm.get("timeout", 300.0),
-                        f"gateway.nodes[{index}].vllm.timeout",
+                    sglang_timeout=_coerce_positive_float(
+                        sglang.get("timeout", 300.0),
+                        f"gateway.nodes[{index}].sglang.timeout",
                     ),
                     max_init_workers=_coerce_positive_int(
                         node.get("max_init_workers", 4),

@@ -98,6 +98,7 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         patch = await self._extract_patch(
             source_runtime,
             patch_path,
+            session_dir=session_dir,
             env=eval_env,
             timeout_cap=timeout_cap,
         )
@@ -188,6 +189,7 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         runtime: BaseRuntime,
         patch_path: Path,
         *,
+        session_dir: Path,
         env: dict[str, str],
         timeout_cap: float | None,
     ) -> str:
@@ -206,7 +208,50 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
             raise RuntimeError(
                 f"git diff command failed with exit code {result.return_code}: {result.stderr}"
             )
-        return result.stdout or ""
+        patch = result.stdout or ""
+        if patch.strip():
+            return patch
+
+        fallback_patch = self._read_fallback_patch(runtime, session_dir)
+        if fallback_patch.strip():
+            patch_path.parent.mkdir(parents=True, exist_ok=True)
+            patch_path.with_suffix(".fallback.log").write_text(
+                "git diff was empty; using saved agent patch artifact\n"
+            )
+            return fallback_patch
+        return patch
+
+    def _read_fallback_patch(self, runtime: BaseRuntime, session_dir: Path) -> str:
+        for candidate in self._fallback_patch_candidates(runtime, session_dir):
+            if not candidate.is_file():
+                continue
+            try:
+                text = candidate.read_text()
+            except OSError:
+                continue
+            if text.strip():
+                return text
+        return ""
+
+    def _fallback_patch_candidates(
+        self,
+        runtime: BaseRuntime,
+        session_dir: Path,
+    ) -> list[Path]:
+        candidates: list[Path] = [session_dir / "logs" / "agent" / "swe-agent.patch"]
+
+        repo_host_dir = runtime.resolve_host_path(self.repo_dir)
+        if repo_host_dir is not None:
+            trajectories_dir = repo_host_dir / "trajectories"
+            if trajectories_dir.exists():
+                candidates.extend(
+                    sorted(
+                        trajectories_dir.rglob("*.patch"),
+                        key=lambda path: path.stat().st_mtime,
+                        reverse=True,
+                    )
+                )
+        return candidates
 
     async def _apply_patch(
         self,
@@ -302,7 +347,11 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         eval_script_host = host_session_dir / "eval.sh"
         eval_script_host.write_text(test_spec.eval_script)
 
-        combined_path = log_dir / "swegym.test_output.log"
+        # Place the log inside an instance_id-named directory so that
+        # swegym/swebench get_logs_eval can parse the repo from the path.
+        instance_log_dir = log_dir / instance_id
+        instance_log_dir.mkdir(parents=True, exist_ok=True)
+        combined_path = instance_log_dir / "test_output.txt"
         result = await runtime.exec(
             f"/bin/bash {self._shell_quote(f'{runtime.runtime_session_dir}/eval.sh')}",
             env=env,

@@ -1,0 +1,65 @@
+# Polar bridge configuration for Slime's --custom-config-path.
+# These become attributes on the `args` namespace passed to the rollout function.
+
+polar_rollout_url: "http://127.0.0.1:8080"
+polar_reward_key: "score"
+polar_max_concurrency: 16
+polar_request_timeout: 3600
+polar_eval_dataset_name: "swegym_eval"
+
+# Task template rendered per sample group.  Placeholders are filled
+# from the context: {instruction}, {num_samples}, {sample.*}, {args.*}.
+polar_task_template:
+  timeout_seconds: 2400
+  runtime:
+    backend: "apptainer"
+    image: "{sample.metadata.polar_image}"
+    network: "host"
+    workdir: "/polar/session/workspace"
+    prepare:
+      - type: exec
+        command: >-
+          rm -rf /polar/session/workspace &&
+          mkdir -p /polar/session/logs/agent /polar/session/workspace /root/.venv/bin &&
+          cp -a /testbed/. /polar/session/workspace/ &&
+          ln -sf /opt/miniconda3/envs/testbed/bin/python /root/.venv/bin/python &&
+          ln -sf /opt/miniconda3/envs/testbed/bin/python /root/.venv/bin/python3 &&
+          git config --global core.pager '' &&
+          cd /polar/session/workspace && git reset --hard &&
+          source /opt/miniconda3/etc/profile.d/conda.sh &&
+          conda activate polar-sweagent &&
+          pip install --upgrade pydantic pydantic-core -q 2>/dev/null;
+          sed -i 's/raise RuntimeError(msg)/pass/' /opt/miniconda3/envs/polar-sweagent/lib/python3.11/site-packages/sweagent/environment/repo.py;
+          true
+  agent:
+    harness: "swe_agent"
+    model_name: "openai/gpt-5"
+    settings:
+      repo_path: "/polar/session/workspace"
+      shell_preamble: >-
+        source /opt/miniconda3/etc/profile.d/conda.sh &&
+        conda activate polar-sweagent &&
+        export PATH=/opt/miniconda3/envs/testbed/bin:$PATH
+  builder:
+    strategy: "prefix_merging"
+  evaluator:
+    strategy: "swegym_git_diff"
+    refresh_runtime: true
+    config:
+      repo_dir: "/testbed"
+      patch_command: "cd /testbed && git diff --binary --submodule=diff"
+      instance: "{sample.metadata.instance}"
+      exclude_patterns:
+        - "trajectories/**"
+        - "**/trajectories/**"
+
+# Advantage estimator — computes per-trace advantages on the Polar side
+# before passing to Slime.  Requires --advantage-estimator external in Slime.
+# Set to null (or remove) to let Slime compute advantages internally.
+polar_adv_estimator:
+  strategy: "hierarchical_group"
+  config:
+    beta: 0.5          # within-trajectory credit weight (0 = pure GRPO)
+    aggregate: "mean"  # trajectory-level reward aggregation: "mean" or "max"
+
+polar_task_id_template: "polar-swegym-grpo-{rollout_id}-{sample.group_index}"

@@ -1,23 +1,37 @@
 # Calculator Example
 
-This is the fastest way to prove that the packaged `polar` workflow works on one machine.
+Simple "create a python calculator" rollout example using `polar`. 
 
-The example uses:
+The example recommends 2 x H100 or comparable GPUs on a local machine:
 
 - one rollout service on `:8080`
 - two gateway nodes on `:8100` and `:8101`
-- two local vLLM backends on `:8000` and `:8001`
+- two local SGLang backends on `:8000` and `:8001`,
 - one topology file at [topology.yaml](topology.yaml)
+
+## Installation
+
+```bash
+uv pip install -e .
+uv pip install --upgrade sglang
+source .venv/bin/activate && bash scripts/patch/patch_sglang.sh
+```
+
+The patch supports TITO in sglang for OAI Chat Completion.
 
 ## Quick Start
 
-1. Install the package:
+1. Start two SGLang servers (one per GPU) in separate terminals:
 
    ```bash
-   uv sync
+   CUDA_VISIBLE_DEVICES=0 uv run python -m sglang.launch_server --model-path Qwen/Qwen3.5-4B --port 8000 --tp-size 1 --mem-fraction-static 0.7 --context-length 131072 --max-running-requests 2 --reasoning-parser qwen3 --tool-call-parser qwen3_coder
+
+   CUDA_VISIBLE_DEVICES=1 uv run python -m sglang.launch_server --model-path Qwen/Qwen3.5-4B --port 8001 --tp-size 1 --mem-fraction-static 0.7 --context-length 131072 --max-running-requests 2 --reasoning-parser qwen3 --tool-call-parser qwen3_coder
    ```
 
-2. Start the services in three terminals:
+   These conservative settings keep the calculator example stable on a single 4B model while preserving tool calling and training traces.
+
+2. Start the services in three more terminals:
 
    ```bash
    uv run polar serve_rollout -c examples/calculator/topology.yaml
@@ -32,16 +46,16 @@ The example uses:
    ```
 
 
-3. Build one harness image:
+3. Build the harness image you want to test. For `claude_code`:
 
    ```bash
-   bash examples/calculator/codex/setup.sh
+   bash examples/calculator/claude_code/setup.sh
    ```
 
 4. Submit rollout:
 
    ```bash
-   uv run python examples/calculator/codex/submit_tasks.py --num-rollouts 32
+   uv run python examples/calculator/claude_code/submit_tasks.py --num-samples 16
    ```
 
 The helper writes `request.json`, submits it through `polar submit`, and stores `response.json` next to it.

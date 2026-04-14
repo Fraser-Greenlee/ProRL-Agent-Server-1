@@ -19,20 +19,37 @@ from typing import Any
 EXAMPLE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = EXAMPLE_DIR / "assets"
 TEST_FILE = ASSETS_DIR / "test_calculator.py"
+STARTER_FILE = ASSETS_DIR / "calculator.py"
 DEFAULT_TOPOLOGY = EXAMPLE_DIR / "topology.yaml"
 
-INSTRUCTION = """\
-Write a Python calculator with no extra imports. Support arithmetic expressions over integers and
-parentheses. Save it as `calculator.py`.
+BASE_INSTRUCTION = """\
+`calculator.py` has a `Calculator` class with a tokenizer and three stub methods.
+Each stub is marked with a `# TODO` comment and returns `0`.
 
-Expose a `Calculator` class that can be called with a string expression.
+Implement the three methods to build a recursive-descent expression parser:
 
-Example:
+1. `_parse_expr`  — handle `+` and `-` by calling `_parse_term`
+2. `_parse_term`  — handle `*` and `/` (integer division) by calling `_parse_factor`
+3. `_parse_factor` — handle integer literals and parenthesized sub-expressions
 
-from calculator import Calculator
-cal = Calculator()
-print(cal("4*3-3"))  # should print 9"""
+Also fix `__call__` to return the parsed value instead of `0`.
 
+Requirements:
+- Work only in `/polar/session/workspace/calculator.py`.
+- Keep the existing file structure, `_tokenize`, `_peek`, and `_consume` as-is.
+- Do not add imports.
+- Use `//` for division (integer division).
+- You must make actual edits. An empty git diff fails the task.
+
+After editing, run `python3 test_calculator.py` and stop.
+
+These checks must pass exactly:
+- `cal("4*3-3") == 9`
+- `cal("(2+3)*4") == 20`
+- `cal("10/2+7") == 12`
+- `cal("18-(3*4)") == 6`
+- `cal(" 8 + 2 * 5 ") == 18`
+"""
 
 def builder_spec_for_harness(harness: str) -> dict[str, Any]:
     config: dict[str, Any] = {}
@@ -65,14 +82,47 @@ def evaluator_exclude_patterns_for_harness(harness: str) -> list[str]:
     return patterns
 
 
+def model_name_for_harness(harness: str, override: str | None) -> str | None:
+    if override:
+        return override
+    defaults = {
+        "codex": "openai/gpt-5.4",
+        "claude_code": "anthropic/claude-opus-4-5",
+        "gemini_cli": "gcp/google/gemini-2.5-flash-lite",
+        "openhands_sdk": "openai/gpt-5.4",
+        "qwen_code": "Qwen/Qwen3.5-4B",
+        "swe_agent": "openai/gpt-5.4",
+    }
+    return defaults.get(harness)
+
+
+def agent_settings_for_harness(harness: str) -> dict[str, Any]:
+    if harness == "claude_code":
+        return {
+            "max_turns": 8,
+            "max_thinking_tokens": 2048,
+            "append_system_prompt": (
+                "For short single-file tasks, prefer one Read, one Edit covering all required "
+                "changes, then run `python3 test_calculator.py`. Do not stop after describing "
+                "a tool call in text; emit the actual tool call. For this task, `_parse_expr` "
+                "must handle both `+` and `-`, `_parse_term` must handle `*` and `/` with "
+                "integer division, `_parse_factor` must handle integers and parenthesized "
+                "expressions, and `__call__` must return `value`. Include the `return value` "
+                "change in the same first Edit as the parser-method changes. Use one loop over "
+                "`('+', '-')` in `_parse_expr` and one loop over `('*', '/')` in `_parse_term`."
+            ),
+        }
+    return {}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--harness", required=True, help="Harness name (e.g., opencode)")
     parser.add_argument("--image", required=True, help="Docker image for the runtime")
     parser.add_argument(
         "--model-name",
-        default=os.environ.get("MODEL_NAME", "openai/MiniMaxAI/MiniMax-M2.5"),
-        help="Model name for the agent harness",
+        default=os.environ.get("MODEL_NAME"),
+        help="Optional model name override for the agent harness",
     )
     parser.add_argument(
         "--rollout-server-url",
@@ -84,8 +134,8 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("POLAR_TOPOLOGY", str(DEFAULT_TOPOLOGY)),
         help="Path to topology.yaml",
     )
-    parser.add_argument("--num-rollouts", type=int, default=int(os.environ.get("NUM_ROLLOUTS", "16")))
-    parser.add_argument("--timeout-seconds", type=float, default=900.0)
+    parser.add_argument("--num-samples", type=int, default=int(os.environ.get("NUM_SAMPLES", "16")))
+    parser.add_argument("--timeout-seconds", type=float, default=300.0)
     parser.add_argument(
         "--runtime-backend",
         choices=["docker", "apptainer"],
@@ -105,12 +155,14 @@ def parse_args() -> argparse.Namespace:
 
 def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
     test_file_abs = str(TEST_FILE.resolve())
+    starter_file_abs = str(STARTER_FILE.resolve())
     batch_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     runtime_image = runtime_image_for_backend(args.image, args.runtime_backend)
+    model_name = model_name_for_harness(args.harness, args.model_name)
     return {
         "task_id": f"calculator-{args.harness}-{batch_id}",
-        "instruction": INSTRUCTION,
-        "num_rollouts": args.num_rollouts,
+        "instruction": BASE_INSTRUCTION,
+        "num_samples": args.num_samples,
         "timeout_seconds": args.timeout_seconds,
         "runtime": {
             "backend": args.runtime_backend,
@@ -131,6 +183,11 @@ def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
                     "target": "/polar/session/workspace/test_calculator.py",
                 },
                 {
+                    "type": "upload_file",
+                    "source": starter_file_abs,
+                    "target": "/polar/session/workspace/calculator.py",
+                },
+                {
                     "type": "exec",
                     "command": "cd /polar/session/workspace && git add -A && git commit -m 'initial'",
                 },
@@ -142,8 +199,8 @@ def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
         },
         "agent": {
             "harness": args.harness,
-            "model_name": args.model_name,
-            "settings": {},
+            "model_name": model_name,
+            "settings": agent_settings_for_harness(args.harness),
             "env": {},
         },
         "builder": builder_spec_for_harness(args.harness),

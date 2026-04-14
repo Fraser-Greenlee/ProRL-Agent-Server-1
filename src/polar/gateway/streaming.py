@@ -11,16 +11,17 @@ class StreamAccumulator:
     """Accumulates streaming chunks for later storage as a complete response."""
 
     content: str = ""
+    reasoning_content: str = ""
     chunks: list[dict[str, Any]] = field(default_factory=list)
     token_ids: list[int] = field(default_factory=list)
     response_logprobs: list[dict[str, Any]] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: Optional[str] = None
     stop_reason: Optional[str] = None
-    usage: Optional[dict[str, Any]] = None
     response_id: str = ""
     model: Optional[str] = None
     created: Optional[int] = None
+    input_token_ids: Optional[list[int]] = None
     prompt_logprobs: Optional[list[Any]] = None
     prompt_token_ids: Optional[list[int]] = None
     service_tier: Any = None
@@ -34,23 +35,27 @@ class StreamAccumulator:
 
         choices = chunk.get("choices", [])
         if not choices:
-            # Usage-only chunk (vLLM sends usage on last chunk)
-            if "usage" in chunk and chunk["usage"]:
-                self.usage = chunk["usage"]
             return
 
         choice = choices[0]
         delta = choice.get("delta", {}) or {}
 
+        if self.input_token_ids is None:
+            input_token_ids = choice.get("input_token_ids")
+            if isinstance(input_token_ids, list):
+                self.input_token_ids = input_token_ids
+
         # Content text
         if delta.get("content"):
             self.content += delta["content"]
+        if delta.get("reasoning_content"):
+            self.reasoning_content += delta["reasoning_content"]
 
         # Tool calls
         if delta.get("tool_calls"):
             self._merge_tool_calls(delta["tool_calls"])
 
-        # Token IDs (vLLM puts them at choice level)
+        # Token IDs when the upstream returns them at the choice level
         chunk_token_ids = choice.get("token_ids")
         if isinstance(chunk_token_ids, list):
             self.token_ids.extend(chunk_token_ids)
@@ -69,10 +74,6 @@ class StreamAccumulator:
             self.finish_reason = choice["finish_reason"]
         if choice.get("stop_reason") is not None:
             self.stop_reason = choice["stop_reason"]
-
-        # Usage (usually on last chunk)
-        if "usage" in chunk and chunk["usage"]:
-            self.usage = chunk["usage"]
 
     def _capture_metadata(self, chunk: dict[str, Any]) -> None:
         """Keep the upstream response metadata alongside aggregated content."""
@@ -113,6 +114,8 @@ class StreamAccumulator:
     def to_response(self) -> dict[str, Any]:
         """Reconstruct a complete response dict from accumulated chunks."""
         message: dict[str, Any] = {"role": "assistant", "content": self.content}
+        if self.reasoning_content:
+            message["reasoning_content"] = self.reasoning_content
         if self.tool_calls:
             message["tool_calls"] = self.tool_calls
         choice: dict[str, Any] = {
@@ -126,12 +129,13 @@ class StreamAccumulator:
             choice["logprobs"] = {"content": self.response_logprobs}
         if self.token_ids:
             choice["token_ids"] = self.token_ids
+        if self.input_token_ids is not None:
+            choice["input_token_ids"] = self.input_token_ids
 
         response: dict[str, Any] = {
             "id": self.response_id or (self.chunks[0].get("id", "") if self.chunks else ""),
             "object": "chat.completion",
             "choices": [choice],
-            "usage": self.usage or {},
         }
         if self.created is not None:
             response["created"] = self.created

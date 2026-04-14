@@ -1,4 +1,4 @@
-"""HTTP client for forwarding requests to vLLM with SSE streaming support."""
+"""HTTP client for forwarding requests to SGLang with SSE streaming support."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ class UpstreamTransportError(UpstreamError):
     """Raised for connection and transport failures."""
 
 
-class OpenedVLLMStream:
+class OpenedStream:
     """An already-opened upstream stream with a primed first chunk."""
 
     def __init__(self, response: httpx.Response):
@@ -111,8 +111,8 @@ class OpenedVLLMStream:
         await self._response.aclose()
 
 
-class VLLMClient:
-    """Direct httpx client to vLLM's OpenAI-compatible API."""
+class SGLangClient:
+    """Direct httpx client to SGLang's OpenAI-compatible API."""
 
     def __init__(self, base_url: str, timeout: float = 300):
         self.base_url = base_url.rstrip("/")
@@ -174,7 +174,7 @@ class VLLMClient:
         await self._raise_for_status(resp)
         return resp.json()
 
-    async def open_completion_stream(self, request: dict[str, Any]) -> OpenedVLLMStream:
+    async def open_completion_stream(self, request: dict[str, Any]) -> OpenedStream:
         """Open, validate, and prime a streaming response before returning it."""
         client = await self._get_client()
         request_copy = request.copy()
@@ -191,7 +191,7 @@ class VLLMClient:
             response = await client.send(upstream_request, stream=True)
             await self._raise_for_status(response)
 
-            stream = OpenedVLLMStream(response)
+            stream = OpenedStream(response)
             try:
                 await stream.prime()
             except Exception:
@@ -225,6 +225,27 @@ class VLLMClient:
             raise self._translate_transport_error(exc) from exc
         await self._raise_for_status(resp)
         return resp.json()
+
+    async def health(self) -> dict[str, Any]:
+        """Passthrough GET /health."""
+        client = await self._get_client()
+        try:
+            resp = await client.get("/health")
+        except httpx.RequestError as exc:
+            raise self._translate_transport_error(exc) from exc
+        await self._raise_for_status(resp)
+        content = await resp.aread()
+        if not content:
+            return {"status": "ok"}
+
+        text = content.decode("utf-8", errors="replace").strip()
+        if not text:
+            return {"status": "ok"}
+
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return {"status": "ok", "body": text}
 
     async def close(self):
         if self._client and not self._client.is_closed:
