@@ -60,11 +60,14 @@ class DockerRuntime(BaseRuntime):
         for vol in self.spec.kwargs.get("volumes", []):
             create_args.extend(["-v", vol])
         create_args.extend([self.spec.image, "sleep", "infinity"])
-        rc, _, stderr = await self._run_local_command(*create_args, capture=True)
+        rc, _, stderr = await self._run_local_command(
+            *create_args, capture=True, timeout=self._START_TIMEOUT,
+        )
         if rc != 0:
             raise RuntimeError(f"docker create failed with exit code {rc}: {stderr}")
         rc, _, stderr = await self._run_local_command(
-            "docker", "start", self._container_name, capture=True
+            "docker", "start", self._container_name,
+            capture=True, timeout=self._START_TIMEOUT,
         )
         if rc != 0:
             await self.stop()
@@ -73,24 +76,40 @@ class DockerRuntime(BaseRuntime):
         await self._run_local_command(
             "docker", "exec", "--user", "root",
             self._container_name, "chmod", "-R", "a+rwX", self.runtime_session_dir,
+            timeout=self._STOP_TIMEOUT,
         )
+
+    _START_TIMEOUT = 60.0  # seconds for docker create / start
+    _STOP_TIMEOUT = 30.0  # seconds per cleanup command
 
     async def stop(self) -> None:
         if self._destroyed:
             return
         self._destroyed = True
+        # chmod is best-effort so the host can reclaim bind-mounted files.
+        try:
+            await self._run_local_command(
+                "docker", "exec", "--user", "root",
+                self._container_name, "chmod", "-R", "a+rwX",
+                self.runtime_session_dir,
+                timeout=self._STOP_TIMEOUT,
+            )
+        except Exception:
+            logger.warning("chmod cleanup failed for %s", self._container_name)
+        # kill first (instant SIGKILL), then rm to remove metadata.
         await self._run_local_command(
-            "docker",
-            "exec",
-            "--user",
-            "root",
-            self._container_name,
-            "chmod",
-            "-R",
-            "a+rwX",
-            self.runtime_session_dir,
+            "docker", "kill", self._container_name,
+            timeout=self._STOP_TIMEOUT,
         )
-        await self._run_local_command("docker", "rm", "-f", self._container_name)
+        rc, _, stderr = await self._run_local_command(
+            "docker", "rm", "-f", self._container_name,
+            timeout=self._STOP_TIMEOUT, capture=True,
+        )
+        if rc != 0:
+            logger.warning(
+                "docker rm -f failed for %s (rc=%s): %s",
+                self._container_name, rc, stderr,
+            )
 
     async def exec(
         self,

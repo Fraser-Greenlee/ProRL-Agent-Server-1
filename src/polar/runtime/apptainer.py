@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import shlex
 import shutil
@@ -10,6 +11,8 @@ from pathlib import Path
 
 from polar.runtime.base import BaseRuntime
 from polar.runtime.models import ExecResult, RuntimeSpec
+
+logger = logging.getLogger(__name__)
 
 
 class ApptainerRuntime(BaseRuntime):
@@ -62,13 +65,21 @@ class ApptainerRuntime(BaseRuntime):
                 f"{self._binary} instance start failed with exit code {rc}"
             )
 
+    _STOP_TIMEOUT = 30.0
+
     async def stop(self) -> None:
         if self._destroyed:
             return
         self._destroyed = True
-        await self._run_local_command(
-            self._binary, "instance", "stop", self._instance_name
+        rc, _, stderr = await self._run_local_command(
+            self._binary, "instance", "stop", self._instance_name,
+            timeout=self._STOP_TIMEOUT, capture=True,
         )
+        if rc != 0:
+            logger.warning(
+                "%s instance stop failed for %s (rc=%s): %s",
+                self._binary, self._instance_name, rc, stderr,
+            )
 
     async def exec(
         self,
