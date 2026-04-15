@@ -12,9 +12,10 @@ The example recommends 2 x H100 or comparable GPUs on a local machine:
 ## Installation
 
 ```bash
+uv venv
 uv pip install -e .
-uv pip install --upgrade sglang
-source .venv/bin/activate && bash scripts/patch/patch_sglang.sh
+uv pip install --prerelease=allow sglang==0.5.10
+bash scripts/patch/patch_sglang.sh
 ```
 
 The patch supports TITO in sglang for OAI Chat Completion.
@@ -24,12 +25,28 @@ The patch supports TITO in sglang for OAI Chat Completion.
 1. Start two SGLang servers (one per GPU) in separate terminals:
 
    ```bash
-   CUDA_VISIBLE_DEVICES=0 uv run python -m sglang.launch_server --model-path Qwen/Qwen3.5-4B --port 8000 --tp-size 1 --mem-fraction-static 0.7 --context-length 131072 --max-running-requests 2 --reasoning-parser qwen3 --tool-call-parser qwen3_coder
+   CUDA_VISIBLE_DEVICES=0,1 uv run python -m sglang.launch_server \
+      --model-path Qwen/Qwen3.5-4B \
+      --host 0.0.0.0 \
+      --port 8000 \
+      --tp-size 2 \
+      --tool-call-parser qwen3_coder \
+      --reasoning-parser qwen3 \
+      --mem-fraction-static 0.7 \
+      --context-length 262144 \
+      --trust-remote-code
 
-   CUDA_VISIBLE_DEVICES=1 uv run python -m sglang.launch_server --model-path Qwen/Qwen3.5-4B --port 8001 --tp-size 1 --mem-fraction-static 0.7 --context-length 131072 --max-running-requests 2 --reasoning-parser qwen3 --tool-call-parser qwen3_coder
+   CUDA_VISIBLE_DEVICES=2,3 uv run python -m sglang.launch_server \
+      --model-path Qwen/Qwen3.5-4B \
+      --host 0.0.0.0 \
+      --port 8001 \
+      --tp-size 2 \
+      --tool-call-parser qwen3_coder \
+      --reasoning-parser qwen3 \
+      --mem-fraction-static 0.7 \
+      --context-length 262144 \
+      --trust-remote-code
    ```
-
-   These conservative settings keep the calculator example stable on a single 4B model while preserving tool calling and training traces.
 
 2. Start the services in three more terminals:
 

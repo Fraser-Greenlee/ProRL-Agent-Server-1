@@ -6,7 +6,12 @@ __pycache__/
 dist/
 build/
 rollouts/
-rollout_results/
+completions/
+tmp.txt
 .pytest_cache/
 batches/
+wandb/
+checkpoints/
+rollout_results/
+reference_projects/
 docs/

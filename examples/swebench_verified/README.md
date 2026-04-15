@@ -8,8 +8,9 @@ Each task runs an agent inside a per-instance container with the repo at `base_c
 ## Installation
 
 ```bash
+uv venv
 uv pip install -e .
-uv pip install --upgrade sglang
+uv pip install --prerelease=allow sglang==0.5.10
 bash scripts/patch/patch_sglang.sh
 ```
 
@@ -32,7 +33,7 @@ CUDA_VISIBLE_DEVICES=0,1 uv run python -m sglang.launch_server \
     --tool-call-parser qwen3_coder \
     --reasoning-parser qwen3 \
     --mem-fraction-static 0.7 \
-    --context-length 81920 \
+    --context-length 262144 \
     --trust-remote-code
 
 CUDA_VISIBLE_DEVICES=2,3 uv run python -m sglang.launch_server \
@@ -43,7 +44,7 @@ CUDA_VISIBLE_DEVICES=2,3 uv run python -m sglang.launch_server \
     --tool-call-parser qwen3_coder \
     --reasoning-parser qwen3 \
     --mem-fraction-static 0.7 \
-    --context-length 81920 \
+    --context-length 262144 \
     --trust-remote-code
 ```
 
@@ -74,7 +75,8 @@ uv run python examples/swebench_verified/submit_swebench_tasks.py \
   --topology examples/swebench_verified/topology.yaml \
   --runtime-backend docker \
   --num-samples 1 \
-  --max-concurrent 4
+  --max-concurrent 4 \
+  --max-tasks 10
 
 # pass@8 for first 10 tasks
 uv run python examples/swebench_verified/submit_swebench_tasks.py \
