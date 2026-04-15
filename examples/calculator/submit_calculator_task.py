@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""Submit the calculator task for a specific harness through the rollout server.
-
-Usage:
-    python submit_calculator_task.py --harness opencode --image polar-localhost-opencode:latest
-"""
+"""Submit the calculator task for a specific harness through the rollout server."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -21,6 +16,16 @@ ASSETS_DIR = EXAMPLE_DIR / "assets"
 TEST_FILE = ASSETS_DIR / "test_calculator.py"
 STARTER_FILE = ASSETS_DIR / "calculator.py"
 DEFAULT_TOPOLOGY = EXAMPLE_DIR / "topology.yaml"
+DEFAULT_IMAGE = "polar-localhost-calculator:latest"
+SUPPORTED_HARNESSES = (
+    "claude_code",
+    "codex",
+    "gemini_cli",
+    "opencode",
+    "openhands_sdk",
+    "qwen_code",
+    "swe_agent",
+)
 
 BASE_INSTRUCTION = """\
 `calculator.py` has a `Calculator` class with a tokenizer and three stub methods.
@@ -50,6 +55,53 @@ These checks must pass exactly:
 - `cal("18-(3*4)") == 6`
 - `cal(" 8 + 2 * 5 ") == 18`
 """
+
+NODE_HARNESS_PACKAGES: dict[str, str] = {
+    "claude_code": "@anthropic-ai/claude-code@latest",
+    "codex": "@openai/codex@latest",
+    "gemini_cli": "@google/gemini-cli@latest",
+    "opencode": "opencode-ai@latest",
+    "qwen_code": "@qwen-code/qwen-code@latest",
+}
+
+PYTHON_PREPARE = (
+    'python3 -m venv "$HOME/.venv" && '
+    '. "$HOME/.venv/bin/activate" && '
+    'python -m pip install --quiet --upgrade pip'
+)
+
+WORKSPACE_PREPARE = (
+    "rm -rf /polar/session/workspace && "
+    "mkdir -p /polar/session/workspace /polar/session/logs/agent && "
+    "cd /polar/session/workspace && "
+    "git init -q && "
+    "git config user.email 'polar@test' && "
+    "git config user.name 'Polar'"
+)
+
+
+def prepare_command_for_harness(harness: str) -> str:
+    install_command = ""
+    if harness in NODE_HARNESS_PACKAGES:
+        install_command = f'npm install -g {NODE_HARNESS_PACKAGES[harness]} && '
+    elif harness == "openhands_sdk":
+        install_command = (
+            f"{PYTHON_PREPARE} && "
+            "python -m pip install --quiet --no-cache-dir openhands-sdk openhands-tools fastapi && "
+        )
+    elif harness == "swe_agent":
+        install_command = (
+            f"{PYTHON_PREPARE} && "
+            'python -m pip install --quiet --no-cache-dir "git+https://github.com/SWE-agent/SWE-agent.git" && '
+            'SITE="$(python -c "import site; print(site.getsitepackages()[0])")" && '
+            "git clone --depth 1 https://github.com/SWE-agent/SWE-agent.git /tmp/swe-agent-src && "
+            'cp -r /tmp/swe-agent-src/config "$SITE/config" && '
+            'cp -r /tmp/swe-agent-src/tools "$SITE/tools" && '
+            'mkdir -p "$SITE/trajectories" && '
+            "rm -rf /tmp/swe-agent-src && "
+        )
+    return install_command + WORKSPACE_PREPARE
+
 
 def builder_spec_for_harness(harness: str) -> dict[str, Any]:
     config: dict[str, Any] = {}
@@ -115,41 +167,39 @@ def agent_settings_for_harness(harness: str) -> dict[str, Any]:
     return {}
 
 
+def agent_spec_for_harness(harness: str, override_model: str | None) -> dict[str, Any]:
+    spec: dict[str, Any] = {"harness": harness}
+    model_name = model_name_for_harness(harness, override_model)
+    if model_name is not None:
+        spec["model_name"] = model_name
+    settings = agent_settings_for_harness(harness)
+    if settings:
+        spec["settings"] = settings
+    return spec
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--harness", required=True, help="Harness name (e.g., opencode)")
-    parser.add_argument("--image", required=True, help="Docker image for the runtime")
+    parser.add_argument("--harness", required=True, choices=SUPPORTED_HARNESSES)
+    parser.add_argument("--image", default=DEFAULT_IMAGE, help="Shared calculator runtime image")
     parser.add_argument(
         "--model-name",
-        default=os.environ.get("MODEL_NAME"),
         help="Optional model name override for the agent harness",
     )
     parser.add_argument(
-        "--rollout-server-url",
-        default=os.environ.get("POLAR_ROLLOUT_URL"),
-        help="Optional rollout server URL override. Defaults to the topology file.",
-    )
-    parser.add_argument(
         "--topology",
-        default=os.environ.get("POLAR_TOPOLOGY", str(DEFAULT_TOPOLOGY)),
+        default=str(DEFAULT_TOPOLOGY),
         help="Path to topology.yaml",
     )
-    parser.add_argument("--num-samples", type=int, default=int(os.environ.get("NUM_SAMPLES", "16")))
+    parser.add_argument("--num-samples", type=int, default=1)
     parser.add_argument("--timeout-seconds", type=float, default=300.0)
     parser.add_argument(
         "--runtime-backend",
         choices=["docker", "apptainer"],
-        default=os.environ.get("RUNTIME_BACKEND", "docker"),
+        default="docker",
         help="Container runtime backend for the session",
     )
-    parser.add_argument(
-        "--output-dir",
-        default=None,
-        help="Directory for request/response files",
-    )
-    parser.add_argument("--docker-socket", action="store_true",
-                        help="Mount Docker socket for agents that need DinD")
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--output-dir")
     return parser.parse_args()
 
 
@@ -158,7 +208,6 @@ def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
     starter_file_abs = str(STARTER_FILE.resolve())
     batch_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     runtime_image = runtime_image_for_backend(args.image, args.runtime_backend)
-    model_name = model_name_for_harness(args.harness, args.model_name)
     return {
         "task_id": f"calculator-{args.harness}-{batch_id}",
         "instruction": BASE_INSTRUCTION,
@@ -170,12 +219,7 @@ def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
             "prepare": [
                 {
                     "type": "exec",
-                    "command": (
-                        "mkdir -p /polar/session/workspace /polar/session/logs/agent && "
-                        "cd /polar/session/workspace && git init && "
-                        "git config user.email 'polar@test' && "
-                        "git config user.name 'Polar'"
-                    ),
+                    "command": prepare_command_for_harness(args.harness),
                 },
                 {
                     "type": "upload_file",
@@ -189,20 +233,13 @@ def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
                 },
                 {
                     "type": "exec",
-                    "command": "cd /polar/session/workspace && git add -A && git commit -m 'initial'",
+                    "command": "cd /polar/session/workspace && git add -A && git commit -qm 'initial'",
                 },
             ],
-            "env": {},
             "network": "host",
             "workdir": "/polar/session/workspace",
-            **({"kwargs": {"volumes": ["/var/run/docker.sock:/var/run/docker.sock"]}} if args.docker_socket else {}),
         },
-        "agent": {
-            "harness": args.harness,
-            "model_name": model_name,
-            "settings": agent_settings_for_harness(args.harness),
-            "env": {},
-        },
+        "agent": agent_spec_for_harness(args.harness, args.model_name),
         "builder": builder_spec_for_harness(args.harness),
         "evaluator": {
             "strategy": "swegym_git_diff",
@@ -232,6 +269,48 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True))
 
 
+def summarize_result(response: dict[str, Any]) -> dict[str, Any]:
+    sessions = response.get("results") or []
+    rewards: list[float | None] = []
+    completed = 0
+    errors = 0
+    for session in sessions:
+        if session.get("status") == "COMPLETED":
+            completed += 1
+        if session.get("error"):
+            errors += 1
+        trajectory = session.get("trajectory") or {}
+        if trajectory.get("status") == "ERROR" or trajectory.get("error"):
+            errors += 1
+        traces = trajectory.get("traces") or []
+        reward = traces[-1].get("reward") if traces else None
+        rewards.append(float(reward) if isinstance(reward, (int, float)) else None)
+    return {
+        "completed_sessions": completed,
+        "errors": errors,
+        "rewards": rewards,
+        "reward_mean": (
+            sum(reward for reward in rewards if reward is not None)
+            / max(1, sum(1 for reward in rewards if reward is not None))
+        ),
+        "total_sessions": len(sessions),
+    }
+
+
+def print_reward_summary(harness: str, summary: dict[str, Any]) -> None:
+    reward_text = ", ".join(
+        "n/a" if reward is None else f"{reward:.1f}"
+        for reward in summary["rewards"]
+    )
+    print("\nReward summary")
+    print(f"Harness:    {harness}")
+    print(f"Rewards:    [{reward_text}]")
+    print(f"Mean:       {summary['reward_mean']:.3f}")
+    print(f"Completed:  {summary['completed_sessions']}/{summary['total_sessions']}")
+    if summary["errors"]:
+        print(f"Errors:     {summary['errors']}")
+
+
 def main() -> int:
     args = parse_args()
     payload = build_task_request(args)
@@ -245,10 +324,6 @@ def main() -> int:
     write_json(request_path, payload)
     print(f"Wrote request to {request_path}")
 
-    if args.dry_run:
-        print("Dry run — not submitting to rollout server.")
-        return 0
-
     command = [
         sys.executable,
         "-m",
@@ -259,8 +334,6 @@ def main() -> int:
     ]
     if args.topology:
         command.extend(["-c", args.topology])
-    if args.rollout_server_url:
-        command.extend(["--rollout-url", args.rollout_server_url])
 
     completed = subprocess.run(
         command,
@@ -271,6 +344,9 @@ def main() -> int:
     result = json.loads(completed.stdout)
     write_json(response_path, result)
     print(f"Task completed. Wrote response to {response_path}")
+    summary = summarize_result(result)
+    write_json(output_dir / "summary.json", summary)
+    print_reward_summary(args.harness, summary)
 
     return 0
 

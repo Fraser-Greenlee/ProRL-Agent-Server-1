@@ -79,7 +79,8 @@ class OpenHandsSdkHarness(BaseHarness):
             ExecInput(
                 command=(
                     'export LLM_API_KEY="$OPENAI_API_KEY" LLM_BASE_URL="$OPENAI_BASE_URL" && '
-                    'PYTHON_BIN="/opt/openhands-sdk-venv/bin/python"; '
+                    'PYTHON_BIN="$HOME/.venv/bin/python"; '
+                    '[ -x "$PYTHON_BIN" ] || PYTHON_BIN="/opt/openhands-sdk-venv/bin/python"; '
                     '[ -x "$PYTHON_BIN" ] || PYTHON_BIN="$(command -v python3 || command -v python)"; '
                     '"$PYTHON_BIN" '
                     f"{self._runner_script} "

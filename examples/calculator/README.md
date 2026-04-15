@@ -1,12 +1,12 @@
 # Calculator Example
 
-Simple "create a python calculator" rollout example using `polar`. 
+Simple "create a python calculator" rollout example using `polar`.
 
 The example recommends 2 x H100 or comparable GPUs on a local machine:
 
 - one rollout service on `:8080`
 - two gateway nodes on `:8100` and `:8101`
-- two local SGLang backends on `:8000` and `:8001`,
+- two local SGLang backends on `:8000` and `:8001`
 - one topology file at [topology.yaml](topology.yaml)
 
 ## Installation
@@ -22,90 +22,83 @@ The patch supports TITO in sglang for OAI Chat Completion.
 
 ## Quick Start
 
-1. Start two SGLang servers (one per GPU) in separate terminals:
+### 1. Start SGLang backends
 
-   ```bash
-   CUDA_VISIBLE_DEVICES=0,1 uv run python -m sglang.launch_server \
-      --model-path Qwen/Qwen3.5-4B \
-      --host 0.0.0.0 \
-      --port 8000 \
-      --tp-size 2 \
-      --tool-call-parser qwen3_coder \
-      --reasoning-parser qwen3 \
-      --mem-fraction-static 0.7 \
-      --context-length 262144 \
-      --trust-remote-code
+Start two SGLang servers, one per GPU group:
 
-   CUDA_VISIBLE_DEVICES=2,3 uv run python -m sglang.launch_server \
-      --model-path Qwen/Qwen3.5-4B \
-      --host 0.0.0.0 \
-      --port 8001 \
-      --tp-size 2 \
-      --tool-call-parser qwen3_coder \
-      --reasoning-parser qwen3 \
-      --mem-fraction-static 0.7 \
-      --context-length 262144 \
-      --trust-remote-code
-   ```
+```bash
+CUDA_VISIBLE_DEVICES=0,1 uv run python -m sglang.launch_server \
+   --model-path Qwen/Qwen3.5-4B \
+   --host 0.0.0.0 \
+   --port 8000 \
+   --tp-size 2 \
+   --tool-call-parser qwen3_coder \
+   --reasoning-parser qwen3 \
+   --mem-fraction-static 0.7 \
+   --context-length 262144 \
+   --trust-remote-code
 
-2. Start the services in three more terminals:
-
-   ```bash
-   uv run polar serve_rollout -c examples/calculator/topology.yaml
-   uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-01
-   uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-02
-   ```
-   
-   Monitor with:
-
-   ```bash
-   watch -n 1 uv run polar status -c examples/calculator/topology.yaml
-   ```
-
-
-3. Build the harness image you want to test. For `claude_code`:
-
-   ```bash
-   bash examples/calculator/claude_code/setup.sh
-   ```
-
-4. Submit rollout:
-
-   ```bash
-   uv run python examples/calculator/claude_code/submit_tasks.py --num-samples 16
-   ```
-
-The helper writes `request.json`, submits it through `polar submit`, and stores `response.json` next to it.
-
-## What The Task Does
-
-Each session gets the same instruction: write `calculator.py`, expose a `Calculator` class, and pass the canonical test file in `assets/test_calculator.py`.
-
-The runtime is prepared by:
-
-- creating `/polar/session/workspace`
-- initializing a fresh git repo
-- uploading the test file
-- grading the resulting patch with `swegym_git_diff`
-
-## Harness Matrix
-
-| Harness | CLI | API | Docker image |
-|---------|-----|-----|-------------|
-| `codex` | `codex` | OpenAI Responses | `polar-localhost-codex:latest` |
-| `opencode` | `opencode` | OpenAI Chat | `polar-localhost-opencode:latest` |
-| `claude_code` | `claude` | Anthropic Messages | `polar-localhost-claude_code:latest` |
-| `gemini_cli` | `gemini` | Google Generative AI | `polar-localhost-gemini_cli:latest` |
-| `qwen_code` | `qwen` | OpenAI Chat | `polar-localhost-qwen_code:latest` |
-| `openhands_sdk` | OpenHands SDK | OpenAI Chat | `polar-localhost-openhands_sdk:latest` |
-| `swe_agent` | `sweagent` | OpenAI Chat | `polar-localhost-swe_agent:latest` |
-
-## Outputs
-
-Each run lands in:
-
-```text
-examples/calculator/<harness>/batches/<timestamp>/
-  request.json
-  response.json
+CUDA_VISIBLE_DEVICES=2,3 uv run python -m sglang.launch_server \
+   --model-path Qwen/Qwen3.5-4B \
+   --host 0.0.0.0 \
+   --port 8001 \
+   --tp-size 2 \
+   --tool-call-parser qwen3_coder \
+   --reasoning-parser qwen3 \
+   --mem-fraction-static 0.7 \
+   --context-length 262144 \
+   --trust-remote-code
 ```
+
+### 2. Start Polar services
+
+```bash
+uv run polar serve_rollout -c examples/calculator/topology.yaml
+uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-01
+uv run polar serve_gateway -c examples/calculator/topology.yaml --node-id localhost-node-02
+```
+
+### 3. Build the shared runtime image
+
+Build once for all harnesses:
+
+```bash
+uv run python examples/calculator/build_image.py
+```
+
+### 4. Submit tasks
+
+
+```bash
+uv run python examples/calculator/submit_calculator_task.py \
+  --harness claude_code \
+  --topology examples/calculator/topology.yaml \
+  --runtime-backend docker \
+  --num-samples 8
+```
+
+Supported harness names:
+
+- `claude_code`
+- `codex`
+- `gemini_cli`
+- `opencode`
+- `openhands_sdk`
+- `qwen_code`
+- `swe_agent`
+
+## Runtime Layout
+
+The shared runtime image includes:
+
+- Node.js
+- Python 3
+- git
+- a non-root `polar` user
+
+Each rollout then prepares a fresh workspace by:
+
+- installing the harness CLI or SDK for that run
+- creating `/polar/session/workspace`
+- uploading `calculator.py` and `test_calculator.py`
+- initializing a git repo used by the evaluator

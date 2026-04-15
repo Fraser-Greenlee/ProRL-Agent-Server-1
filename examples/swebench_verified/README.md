@@ -71,7 +71,7 @@ uv run python examples/swebench_verified/build_images.py --max-tasks 10
 ```bash
 # Run all 500 tasks for pass@1
 uv run python examples/swebench_verified/submit_swebench_tasks.py \
-  --harness opencode \
+  --harness claude_code \
   --topology examples/swebench_verified/topology.yaml \
   --runtime-backend docker \
   --num-samples 1 \

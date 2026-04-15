@@ -16,7 +16,7 @@ class QwenCodeHarness(BaseHarness):
 
     def __init__(self, agent_spec: AgentSpec) -> None:
         super().__init__(agent_spec)
-        self._qwen_dir = "/root/.qwen"
+        self._qwen_dir = "$HOME/.qwen"
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._qwen_dir}")

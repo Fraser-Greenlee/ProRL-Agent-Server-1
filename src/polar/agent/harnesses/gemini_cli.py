@@ -16,7 +16,7 @@ class GeminiCliHarness(BaseHarness):
 
     def __init__(self, agent_spec: AgentSpec) -> None:
         super().__init__(agent_spec)
-        self._gemini_dir = "/root/.gemini"
+        self._gemini_dir = "$HOME/.gemini"
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._gemini_dir}")
