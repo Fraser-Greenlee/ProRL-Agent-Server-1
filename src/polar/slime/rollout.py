@@ -18,6 +18,8 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
+import uvicorn
+from fastapi import FastAPI, Request
 
 from polar.rollout.models import TaskResult, TaskStatus
 from polar.slime.adapter import session_result_to_samples
@@ -30,7 +32,8 @@ from polar.slime.config import (
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 2.0  # seconds between task-status polls
+_POLL_INTERVAL = 2.0  # seconds between task-status polls (eval / no-callback path)
+_CALLBACK_FALLBACK_POLL_SECONDS = 60.0  # defensive backstop for dropped callbacks
 
 # ---------------------------------------------------------------------------
 # Global worker singleton
@@ -166,6 +169,11 @@ class AsyncPolarRolloutWorker:
         self._running = True
         self._thread: threading.Thread | None = None
         self._group_counter = 0
+        # Per-task callback plumbing: event fires when the rollout server POSTs
+        # the terminal TaskResult to our local listener.
+        self._task_events: dict[str, asyncio.Event] = {}
+        self._task_results: dict[str, TaskResult] = {}
+        self._callback_url: str | None = None
 
     # -- lifecycle -------------------------------------------------------------
 
@@ -205,35 +213,77 @@ class AsyncPolarRolloutWorker:
         max_concurrent = self.config.max_concurrency
         active: set[asyncio.Task[None]] = set()
 
+        callback_server, callback_task = await self._start_callback_listener()
         timeout = None if self.config.request_timeout is None else httpx.Timeout(self.config.request_timeout)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            while self._running:
-                done = {t for t in active if t.done()}
-                for t in done:
-                    try:
-                        t.result()
-                    except Exception:
-                        logger.exception("Polar async task failed")
-                active -= done
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                while self._running:
+                    done = {t for t in active if t.done()}
+                    for t in done:
+                        try:
+                            t.result()
+                        except Exception:
+                            logger.exception("Polar async task failed")
+                    active -= done
 
-                while len(active) < max_concurrent and self._running:
-                    groups = self.data_source.get_samples(1)
-                    if not groups:
-                        break
-                    for group in groups:
-                        gid = self._group_counter
-                        self._group_counter += 1
-                        task = asyncio.create_task(
-                            self._submit_and_collect(client, gid, group)
-                        )
-                        active.add(task)
+                    while len(active) < max_concurrent and self._running:
+                        groups = self.data_source.get_samples(1)
+                        if not groups:
+                            break
+                        for group in groups:
+                            gid = self._group_counter
+                            self._group_counter += 1
+                            task = asyncio.create_task(
+                                self._submit_and_collect(client, gid, group)
+                            )
+                            active.add(task)
 
-                await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.5)
 
-        if active:
-            logger.info("Waiting for %d in-flight Polar tasks", len(active))
-            await asyncio.gather(*active, return_exceptions=True)
+            if active:
+                logger.info("Waiting for %d in-flight Polar tasks", len(active))
+                await asyncio.gather(*active, return_exceptions=True)
+        finally:
+            callback_server.should_exit = True
+            try:
+                await asyncio.wait_for(callback_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Callback listener did not shut down within 5s")
         logger.info("Async Polar rollout worker stopped")
+
+    async def _start_callback_listener(self) -> tuple[uvicorn.Server, asyncio.Task[None]]:
+        """Bind a FastAPI listener on 127.0.0.1:<free_port> for TaskResult callbacks."""
+        app = FastAPI()
+
+        @app.post("/callback/task_result")
+        async def on_task_result(request: Request) -> dict[str, Any]:
+            payload = await request.json()
+            task_id = payload.get("task_id") if isinstance(payload, dict) else None
+            if not task_id:
+                return {"ok": False, "reason": "missing task_id"}
+            try:
+                result = TaskResult.model_validate(payload)
+            except Exception:
+                logger.exception("Invalid callback payload for task %s", task_id)
+                return {"ok": False, "reason": "invalid payload"}
+            self._task_results[task_id] = result
+            event = self._task_events.get(task_id)
+            if event is not None:
+                event.set()
+            return {"ok": True}
+
+        config = uvicorn.Config(
+            app=app, host="127.0.0.1", port=0,
+            log_level="warning", lifespan="on",
+        )
+        server = uvicorn.Server(config)
+        task = asyncio.create_task(server.serve(), name="polar-callback-listener")
+        while not server.started:
+            await asyncio.sleep(0.01)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        self._callback_url = f"http://127.0.0.1:{port}/callback/task_result"
+        logger.info("Polar trainer callback listener bound to %s", self._callback_url)
+        return server, task
 
     async def _submit_and_collect(
         self, client: httpx.AsyncClient, group_id: int, group: list[Any]
@@ -242,7 +292,7 @@ class AsyncPolarRolloutWorker:
             args=self.args, config=self.config, group=group,
             rollout_id=group_id, task_position=0,
         )
-        task_result = await _submit_and_wait_for_task(client, self.config.rollout_server_url, payload)
+        task_result = await self._submit_with_callback(client, payload)
 
         if task_result.status == "failed" or not task_result.results:
             logger.warning("Task %s ended with status=%s, skipping", task_result.task_id, task_result.status)
@@ -251,6 +301,61 @@ class AsyncPolarRolloutWorker:
         _apply_advantage_estimation(self.config, task_result)
         group_samples = _convert_task_result_to_samples(self.config, task_result, group)
         self.output_queue.put((group_id, group_samples))
+
+    async def _submit_with_callback(
+        self, client: httpx.AsyncClient, payload: dict[str, Any]
+    ) -> TaskResult:
+        """Submit a task, wait on its completion event, and fall back to polling."""
+        task_id = payload["task_id"]
+        # Register event BEFORE submit so a fast callback cannot arrive first.
+        event = asyncio.Event()
+        self._task_events[task_id] = event
+        payload["callback_url"] = self._callback_url
+        base_url = self.config.rollout_server_url
+        try:
+            resp = await client.post(
+                f"{base_url}/rollout/task/submit",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            return await self._await_task_result(client, task_id, event)
+        finally:
+            self._task_events.pop(task_id, None)
+            self._task_results.pop(task_id, None)
+
+    async def _await_task_result(
+        self,
+        client: httpx.AsyncClient,
+        task_id: str,
+        event: asyncio.Event,
+    ) -> TaskResult:
+        """Wait on the completion event with a defensive 60s fallback poll."""
+        base_url = self.config.rollout_server_url
+        while True:
+            try:
+                await asyncio.wait_for(event.wait(), timeout=_CALLBACK_FALLBACK_POLL_SECONDS)
+            except asyncio.TimeoutError:
+                status_resp = await client.get(f"{base_url}/rollout/task/{task_id}")
+                status_resp.raise_for_status()
+                status = TaskStatus.model_validate(status_resp.json())
+                if status.status in ("completed", "failed"):
+                    return TaskResult(
+                        task_id=task_id, status=status.status,
+                        results=status.results, result_paths=status.result_paths,
+                    )
+                continue
+            result = self._task_results.get(task_id)
+            if result is not None:
+                return result
+            # Race: event set but result missing — re-poll once.
+            status_resp = await client.get(f"{base_url}/rollout/task/{task_id}")
+            status_resp.raise_for_status()
+            status = TaskStatus.model_validate(status_resp.json())
+            return TaskResult(
+                task_id=task_id, status=status.status,
+                results=status.results, result_paths=status.result_paths,
+            )
 
 
 # ---------------------------------------------------------------------------

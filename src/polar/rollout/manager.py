@@ -9,6 +9,8 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+import httpx
+
 from polar.rollout.balancer import NodeScheduler
 from polar.rollout.models import (
     SessionContext,
@@ -20,6 +22,8 @@ from polar.rollout.models import (
 from polar.rollout.pipeline import Pipeline
 
 logger = logging.getLogger(__name__)
+
+_CALLBACK_TIMEOUT_SECONDS = 10.0
 
 
 @dataclass(slots=True)
@@ -67,6 +71,26 @@ class RolloutManager:
             logger.info("Task %s completed with %d results", request.task_id, len(result.results))
         except Exception:
             logger.exception("Background task %s failed", request.task_id)
+            return
+        if request.callback_url:
+            await self._post_callback(request.callback_url, result)
+
+    async def _post_callback(self, callback_url: str, result: TaskResult) -> None:
+        """Best-effort POST the terminal TaskResult to the trainer's callback URL."""
+        try:
+            async with httpx.AsyncClient(timeout=_CALLBACK_TIMEOUT_SECONDS) as client:
+                response = await client.post(
+                    callback_url,
+                    json=result.model_dump(mode="json"),
+                )
+                response.raise_for_status()
+        except Exception:
+            logger.warning(
+                "Callback POST to %s failed for task %s; trainer must fall back to polling",
+                callback_url,
+                result.task_id,
+                exc_info=True,
+            )
 
     async def _execute_task(self, request: TaskRequest) -> TaskResult:
         sessions = [

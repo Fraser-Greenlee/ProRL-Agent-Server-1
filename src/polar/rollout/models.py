@@ -39,6 +39,7 @@ class TaskRequest(BaseModel):
     agent: AgentSpec
     builder: StrategySpec = Field(default_factory=_default_builder_spec)
     evaluator: EvaluatorSpec | None = None
+    callback_url: str | None = None
 
 
 class SessionDispatchRequest(BaseModel):
