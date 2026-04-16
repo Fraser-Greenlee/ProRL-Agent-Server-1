@@ -25,6 +25,7 @@ class GatewayNodeConfig:
     max_init_workers: int
     max_run_workers: int
     max_postrun_workers: int
+    max_eval_prewarm_workers: int
     ready_buffer_target: int
     default_runtime: RuntimeSpec | None = None
 
@@ -198,6 +199,10 @@ class TopologyConfig:
                     max_postrun_workers=_coerce_positive_int(
                         node.get("max_postrun_workers", 4),
                         f"gateway.nodes[{index}].max_postrun_workers",
+                    ),
+                    max_eval_prewarm_workers=_coerce_positive_int(
+                        node.get("max_eval_prewarm_workers", max_run_workers),
+                        f"gateway.nodes[{index}].max_eval_prewarm_workers",
                     ),
                     ready_buffer_target=_coerce_positive_int(
                         node.get("ready_buffer_target", max_run_workers),

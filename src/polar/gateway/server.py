@@ -94,6 +94,7 @@ def _build_state(topology: TopologyConfig, node_id: str | None) -> GatewayState:
         max_init_workers=node.max_init_workers,
         max_run_workers=node.max_run_workers,
         max_postrun_workers=node.max_postrun_workers,
+        max_eval_prewarm_workers=node.max_eval_prewarm_workers,
         ready_buffer_target=node.ready_buffer_target,
         storage=storage,
         session_registry=session_registry,

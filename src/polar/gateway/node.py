@@ -49,6 +49,7 @@ class GatewayNodeManager:
         max_init_workers: int,
         max_run_workers: int,
         max_postrun_workers: int,
+        max_eval_prewarm_workers: int,
         ready_buffer_target: int,
         storage: SessionStore,
         session_registry: SessionRegistry,
@@ -71,6 +72,7 @@ class GatewayNodeManager:
             max_init_workers=max_init_workers,
             max_run_workers=max_run_workers,
             max_postrun_workers=max_postrun_workers,
+            max_eval_prewarm_workers=max_eval_prewarm_workers,
             ready_buffer_target=ready_buffer_target,
         )
         self._dispatcher.on_init = self._handle_init
@@ -213,10 +215,14 @@ class GatewayNodeManager:
         spec: RuntimeSpec,
         request: SessionDispatchRequest,
         managed: ManagedSession,
+        *,
+        actions: list | None = None,
+        log_prefix: str = "prepare",
     ) -> None:
-        """Execute the ordered prepare action list."""
+        """Execute an ordered prepare action list (``spec.prepare`` by default)."""
+        steps = actions if actions is not None else spec.prepare
         base_env = self._runtime_env(request, managed, runtime_override=runtime)
-        for i, action in enumerate(spec.prepare):
+        for i, action in enumerate(steps):
             if managed.cancel_requested:
                 return
             if action.type == "upload_file":
@@ -225,8 +231,6 @@ class GatewayNodeManager:
                 await runtime.upload_dir(action.source, action.target)
             elif action.type == "exec":
                 merged_env = {**base_env, **(action.env or {})}
-                # Use action.cwd, falling back to runtime session dir
-                # (not spec.workdir which may not exist during prepare)
                 effective_cwd = action.cwd or runtime.runtime_session_dir
                 result = await runtime.exec(
                     action.command,
@@ -237,13 +241,13 @@ class GatewayNodeManager:
                 log_dir = managed.session_dir / "logs"
                 log_dir.mkdir(parents=True, exist_ok=True)
                 self._write_exec_log(
-                    log_dir, f"prepare.{i:02d}", result.stdout, result.stderr
+                    log_dir, f"{log_prefix}.{i:02d}", result.stdout, result.stderr
                 )
                 if result.return_code == -1:
-                    raise RuntimeError(f"prepare action {i} timed out")
+                    raise RuntimeError(f"{log_prefix} action {i} timed out")
                 if result.return_code != 0:
                     raise RuntimeError(
-                        f"prepare action {i} failed with exit code {result.return_code}"
+                        f"{log_prefix} action {i} failed with exit code {result.return_code}"
                     )
 
     # ------------------------------------------------------------------
@@ -392,8 +396,18 @@ class GatewayNodeManager:
                 runtime_spec, f"{request.session_id}-eval", eval_session_dir
             )
             await self._await_with_budget(eval_runtime.start(), managed)
+            eval_actions = (
+                runtime_spec.eval_prepare
+                if runtime_spec.eval_prepare is not None
+                else runtime_spec.prepare
+            )
             await self._run_runtime_prepare(
-                eval_runtime, runtime_spec, request, managed
+                eval_runtime,
+                runtime_spec,
+                request,
+                managed,
+                actions=eval_actions,
+                log_prefix="eval_prepare",
             )
 
             lease.runtime = eval_runtime

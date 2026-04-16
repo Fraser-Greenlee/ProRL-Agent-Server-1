@@ -101,15 +101,22 @@ class SessionDispatcher:
         max_init_workers: int,
         max_run_workers: int,
         max_postrun_workers: int,
+        max_eval_prewarm_workers: int,
         ready_buffer_target: int,
     ) -> None:
-        if max_init_workers < 1 or max_run_workers < 1 or max_postrun_workers < 1:
+        if (
+            max_init_workers < 1
+            or max_run_workers < 1
+            or max_postrun_workers < 1
+            or max_eval_prewarm_workers < 1
+        ):
             raise ValueError("all stage worker counts must be at least 1")
         if ready_buffer_target < 1:
             raise ValueError("ready_buffer_target must be at least 1")
         self.max_init_workers = max_init_workers
         self.max_run_workers = max_run_workers
         self.max_postrun_workers = max_postrun_workers
+        self.max_eval_prewarm_workers = max_eval_prewarm_workers
         self.ready_buffer_target = ready_buffer_target
         self.on_init: StageCallback | None = None
         self.on_eval_prewarm: StageCallback | None = None
@@ -121,7 +128,7 @@ class SessionDispatcher:
         self._ready_queue: asyncio.Queue[str | object] = asyncio.Queue()
         self._postrun_queue: asyncio.Queue[str | object] = asyncio.Queue()
         self._ready_slots = asyncio.Semaphore(ready_buffer_target)
-        self._eval_prewarm_slots = asyncio.Semaphore(max_run_workers)
+        self._eval_prewarm_slots = asyncio.Semaphore(max_eval_prewarm_workers)
         self._sessions: dict[str, ManagedSession] = {}
         self._lock = asyncio.Lock()
         self._workers: list[asyncio.Task[None]] = []
@@ -132,7 +139,7 @@ class SessionDispatcher:
             return
         self._workers = [
             *(asyncio.create_task(self._init_worker(i)) for i in range(self.max_init_workers)),
-            *(asyncio.create_task(self._eval_prewarm_worker(i)) for i in range(self.max_run_workers)),
+            *(asyncio.create_task(self._eval_prewarm_worker(i)) for i in range(self.max_eval_prewarm_workers)),
             *(asyncio.create_task(self._run_worker(i)) for i in range(self.max_run_workers)),
             *(asyncio.create_task(self._postrun_worker(i)) for i in range(self.max_postrun_workers)),
         ]

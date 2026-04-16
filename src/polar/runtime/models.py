@@ -59,6 +59,7 @@ class RuntimeSpec(BaseModel):
     backend: Literal["docker", "apptainer"] = "docker"
     image: str
     prepare: list[PrepareAction] = Field(default_factory=list)
+    eval_prepare: list[PrepareAction] | None = None
     env: dict[str, str] = Field(default_factory=dict)
     network: str | None = "host"
     workdir: str | None = None
