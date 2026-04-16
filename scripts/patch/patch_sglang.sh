@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+#
+# Patch SGLang to expose the token IDs Polar needs for training:
+#   - token_id on each response-token logprob entry (ChatCompletionTokenLogprob
+#     and LogProbs) for response-side token extraction.
+#   - input_token_ids on each choice (streaming and non-streaming) for
+#     prompt-side token extraction, sourced from the already-tokenized
+#     request.input_ids so no per-prompt-token logprob is computed.
+#
+# Supported SGLang version: 0.5.10.  Upstream refactors any of the targeted
+# snippets often; an explicit version pin makes mismatch failures actionable.
 
 set -euo pipefail
 
@@ -19,7 +29,9 @@ from __future__ import annotations
 
 from pathlib import Path
 import importlib.util
-import sys
+
+
+SUPPORTED_SGLANG_VERSION = "0.5.10"
 
 
 def fail(message: str) -> None:
@@ -34,6 +46,23 @@ def replace_once(text: str, old: str, new: str, *, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def revert_once(text: str, old: str, new: str) -> str:
+    """Idempotent reverse replace — a no-op when *new* is already in place."""
+    if new in text:
+        return text
+    if old not in text:
+        return text
+    return text.replace(old, new, 1)
+
+
+import sglang  # noqa: E402
+
+if sglang.__version__ != SUPPORTED_SGLANG_VERSION:
+    fail(
+        f"patch_sglang.sh is pinned to sglang=={SUPPORTED_SGLANG_VERSION} "
+        f"but found {sglang.__version__}. Install the pinned version before patching."
+    )
+
 spec = importlib.util.find_spec("sglang")
 if spec is None or spec.origin is None:
     fail("sglang is not installed in the active Python environment")
@@ -42,11 +71,15 @@ root = Path(spec.origin).resolve().parent
 protocol_path = root / "srt/entrypoints/openai/protocol.py"
 utils_path = root / "srt/entrypoints/openai/utils.py"
 serving_chat_path = root / "srt/entrypoints/openai/serving_chat.py"
+tokenizer_manager_path = root / "srt/managers/tokenizer_manager.py"
 
-for path in (protocol_path, utils_path, serving_chat_path):
+for path in (protocol_path, utils_path, serving_chat_path, tokenizer_manager_path):
     if not path.exists():
         fail(f"Expected SGLang file is missing: {path}")
 
+# ---------------------------------------------------------------------------
+# protocol.py — extend response schemas with token_id / token_ids / input_token_ids.
+# ---------------------------------------------------------------------------
 protocol_text = protocol_path.read_text()
 protocol_text = replace_once(
     protocol_text,
@@ -110,6 +143,9 @@ protocol_text = replace_once(
 )
 protocol_path.write_text(protocol_text)
 
+# ---------------------------------------------------------------------------
+# utils.py — append token_id alongside the existing (logprob, text) emissions.
+# ---------------------------------------------------------------------------
 utils_text = utils_path.read_text()
 utils_text = replace_once(
     utils_text,
@@ -132,17 +168,130 @@ utils_text = replace_once(
 )
 utils_path.write_text(utils_text)
 
+# ---------------------------------------------------------------------------
+# tokenizer_manager.py — expose the already-tokenized prompt via meta_info so
+# serving_chat can emit input_token_ids without paying per-prompt-token
+# logprob compute.
+# ---------------------------------------------------------------------------
+tokenizer_manager_text = tokenizer_manager_path.read_text()
+tokenizer_manager_text = replace_once(
+    tokenizer_manager_text,
+    "            # Build meta_info and return value\n"
+    "            meta_info = {\n"
+    "                \"id\": rid,\n"
+    "                \"finish_reason\": recv_obj.finished_reasons[i],\n"
+    "                \"prompt_tokens\": recv_obj.prompt_tokens[i],\n"
+    "                \"weight_version\": self.server_args.weight_version,\n"
+    "                \"total_retractions\": recv_obj.retraction_counts[i],\n"
+    "            }\n",
+    "            # Build meta_info and return value\n"
+    "            meta_info = {\n"
+    "                \"id\": rid,\n"
+    "                \"finish_reason\": recv_obj.finished_reasons[i],\n"
+    "                \"prompt_tokens\": recv_obj.prompt_tokens[i],\n"
+    "                \"weight_version\": self.server_args.weight_version,\n"
+    "                \"total_retractions\": recv_obj.retraction_counts[i],\n"
+    "            }\n"
+    "            _obj_input_ids = getattr(state.obj, \"input_ids\", None)\n"
+    "            if isinstance(_obj_input_ids, list) and _obj_input_ids:\n"
+    "                if isinstance(_obj_input_ids[0], int):\n"
+    "                    meta_info[\"input_token_ids\"] = list(_obj_input_ids)\n"
+    "                elif isinstance(_obj_input_ids[0], list) and _obj_input_ids[0]:\n"
+    "                    meta_info[\"input_token_ids\"] = list(_obj_input_ids[0])\n",
+    label=str(tokenizer_manager_path),
+)
+tokenizer_manager_path.write_text(tokenizer_manager_text)
+
+# ---------------------------------------------------------------------------
+# serving_chat.py — read input_token_ids from meta_info, plumb through to the
+# choice payloads, leave logprob_start_len at SGLang's default (-1).
+# ---------------------------------------------------------------------------
 serving_chat_text = serving_chat_path.read_text()
-serving_chat_text = replace_once(
+
+# Revert the historical logprob_start_len=0 override if a prior patch applied it.
+serving_chat_text = revert_once(
     serving_chat_text,
-    "            return_logprob=request.logprobs,\n"
-    "            logprob_start_len=-1,\n"
-    "            top_logprobs_num=request.top_logprobs or 0,\n",
     "            return_logprob=request.logprobs,\n"
     "            logprob_start_len=0,\n"
     "            top_logprobs_num=request.top_logprobs or 0,\n",
+    "            return_logprob=request.logprobs,\n"
+    "            logprob_start_len=-1,\n"
+    "            top_logprobs_num=request.top_logprobs or 0,\n",
+)
+# Drop the historical input_token_logprobs-based derivation if present —
+# meta_info["input_token_ids"] is now the source of truth.
+serving_chat_text = revert_once(
+    serving_chat_text,
+    "                input_token_logprobs = content[\"meta_info\"].get(\"input_token_logprobs\")\n"
+    "                input_token_ids = None\n"
+    "                if isinstance(input_token_logprobs, list):\n"
+    "                    input_token_ids = [\n"
+    "                        int(token_id)\n"
+    "                        for _, token_id, _ in input_token_logprobs\n"
+    "                    ]\n"
+    "\n"
+    "                finish_reason = content[\"meta_info\"].get(\"finish_reason\", None)\n",
+    "                finish_reason = content[\"meta_info\"].get(\"finish_reason\", None)\n",
+)
+serving_chat_text = revert_once(
+    serving_chat_text,
+    "            input_token_logprobs = ret_item[\"meta_info\"].get(\"input_token_logprobs\")\n"
+    "            input_token_ids = None\n"
+    "            if isinstance(input_token_logprobs, list):\n"
+    "                input_token_ids = [\n"
+    "                    int(token_id)\n"
+    "                    for _, token_id, _ in input_token_logprobs\n"
+    "                ]\n"
+    "\n"
+    "            choice_data = ChatCompletionResponseChoice(\n",
+    "            choice_data = ChatCompletionResponseChoice(\n",
+)
+
+# Non-streaming: capture input_token_ids from meta_info, emit on the choice.
+serving_chat_text = replace_once(
+    serving_chat_text,
+    "            choice_data = ChatCompletionResponseChoice(\n"
+    "                index=idx,\n"
+    "                message=ChatMessage(\n"
+    "                    role=\"assistant\",\n"
+    "                    content=text if text else None,\n"
+    "                    tool_calls=tool_calls,\n"
+    "                    reasoning_content=reasoning_text if reasoning_text else None,\n"
+    "                ),\n"
+    "                logprobs=choice_logprobs,\n"
+    "                finish_reason=finish_reason[\"type\"] if finish_reason else None,\n"
+    "                matched_stop=(\n"
+    "                    finish_reason[\"matched\"]\n"
+    "                    if finish_reason and \"matched\" in finish_reason\n"
+    "                    else None\n"
+    "                ),\n"
+    "                hidden_states=hidden_states,\n"
+    "            )\n",
+    "            input_token_ids = ret_item[\"meta_info\"].get(\"input_token_ids\")\n"
+    "\n"
+    "            choice_data = ChatCompletionResponseChoice(\n"
+    "                index=idx,\n"
+    "                message=ChatMessage(\n"
+    "                    role=\"assistant\",\n"
+    "                    content=text if text else None,\n"
+    "                    tool_calls=tool_calls,\n"
+    "                    reasoning_content=reasoning_text if reasoning_text else None,\n"
+    "                ),\n"
+    "                logprobs=choice_logprobs,\n"
+    "                input_token_ids=input_token_ids,\n"
+    "                finish_reason=finish_reason[\"type\"] if finish_reason else None,\n"
+    "                matched_stop=(\n"
+    "                    finish_reason[\"matched\"]\n"
+    "                    if finish_reason and \"matched\" in finish_reason\n"
+    "                    else None\n"
+    "                ),\n"
+    "                hidden_states=hidden_states,\n"
+    "            )\n",
     label=str(serving_chat_path),
 )
+
+# Streaming: capture input_token_ids from meta_info, pass through the tool-call
+# helper, and emit on every StreamChoice that currently carries logprobs.
 serving_chat_text = replace_once(
     serving_chat_text,
     "                # Handle logprobs\n"
@@ -172,13 +321,7 @@ serving_chat_text = replace_once(
     "                        )\n"
     "                    n_prev_tokens[index] = total_output_logprobs\n"
     "\n"
-    "                input_token_logprobs = content[\"meta_info\"].get(\"input_token_logprobs\")\n"
-    "                input_token_ids = None\n"
-    "                if isinstance(input_token_logprobs, list):\n"
-    "                    input_token_ids = [\n"
-    "                        int(token_id)\n"
-    "                        for _, token_id, _ in input_token_logprobs\n"
-    "                    ]\n"
+    "                input_token_ids = content[\"meta_info\"].get(\"input_token_ids\")\n"
     "\n"
     "                finish_reason = content[\"meta_info\"].get(\"finish_reason\", None)\n",
     label=str(serving_chat_path),
@@ -224,53 +367,6 @@ serving_chat_text = replace_once(
     "                            logprobs=choice_logprobs,\n"
     "                            input_token_ids=input_token_ids,\n"
     "                        )\n",
-    label=str(serving_chat_path),
-)
-serving_chat_text = replace_once(
-    serving_chat_text,
-    "            choice_data = ChatCompletionResponseChoice(\n"
-    "                index=idx,\n"
-    "                message=ChatMessage(\n"
-    "                    role=\"assistant\",\n"
-    "                    content=text if text else None,\n"
-    "                    tool_calls=tool_calls,\n"
-    "                    reasoning_content=reasoning_text if reasoning_text else None,\n"
-    "                ),\n"
-    "                logprobs=choice_logprobs,\n"
-    "                finish_reason=finish_reason[\"type\"] if finish_reason else None,\n"
-    "                matched_stop=(\n"
-    "                    finish_reason[\"matched\"]\n"
-    "                    if finish_reason and \"matched\" in finish_reason\n"
-    "                    else None\n"
-    "                ),\n"
-    "                hidden_states=hidden_states,\n"
-    "            )\n",
-    "            input_token_logprobs = ret_item[\"meta_info\"].get(\"input_token_logprobs\")\n"
-    "            input_token_ids = None\n"
-    "            if isinstance(input_token_logprobs, list):\n"
-    "                input_token_ids = [\n"
-    "                    int(token_id)\n"
-    "                    for _, token_id, _ in input_token_logprobs\n"
-    "                ]\n"
-    "\n"
-    "            choice_data = ChatCompletionResponseChoice(\n"
-    "                index=idx,\n"
-    "                message=ChatMessage(\n"
-    "                    role=\"assistant\",\n"
-    "                    content=text if text else None,\n"
-    "                    tool_calls=tool_calls,\n"
-    "                    reasoning_content=reasoning_text if reasoning_text else None,\n"
-    "                ),\n"
-    "                logprobs=choice_logprobs,\n"
-    "                input_token_ids=input_token_ids,\n"
-    "                finish_reason=finish_reason[\"type\"] if finish_reason else None,\n"
-    "                matched_stop=(\n"
-    "                    finish_reason[\"matched\"]\n"
-    "                    if finish_reason and \"matched\" in finish_reason\n"
-    "                    else None\n"
-    "                ),\n"
-    "                hidden_states=hidden_states,\n"
-    "            )\n",
     label=str(serving_chat_path),
 )
 serving_chat_text = replace_once(
