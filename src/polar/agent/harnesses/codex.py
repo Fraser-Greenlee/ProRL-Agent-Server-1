@@ -53,6 +53,12 @@ class CodexHarness(BaseHarness):
             "CODEX_HOME": self._codex_home,
         }
 
+        # Canonical pattern for pointing codex at an OpenAI-compatible proxy:
+        # define a custom model_provider with wire_api="responses" (see
+        # codex-rs/responses-api-proxy/README.md). Dropped the three
+        # features.* toggles — they don't appear in the current config schema
+        # and codex silently parses them as unknown keys, which can produce
+        # warnings or, in strict versions, early exits.
         flags: list[str] = [
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
@@ -63,9 +69,6 @@ class CodexHarness(BaseHarness):
             '-c "model_providers.harness_proxy.base_url=\\"$OPENAI_BASE_URL\\""',
             "-c 'model_providers.harness_proxy.env_key=\"OPENAI_API_KEY\"'",
             "-c 'model_providers.harness_proxy.wire_api=\"responses\"'",
-            "-c 'features.responses_websockets=false'",
-            "-c 'features.responses_websockets_v2=false'",
-            "-c 'features.enable_request_compression=false'",
         ]
         model = _cli_model_name(self.model_name)
         flags.append(f"--model {shlex.quote(model)}")

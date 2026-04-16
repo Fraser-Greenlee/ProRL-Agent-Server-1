@@ -33,23 +33,26 @@ Fully async RL training on the curated 10-task SWE-Gym sample using **Polar** fo
 # 1. Install Polar
 pip install -e .
 
-# 2. Clone and install Slime (training framework)
-git clone git@github.com:THUDM/slime.git slime
+# 2. Clone and install Slime (training framework) — pinned to v0.2.4
+git clone --branch v0.2.4 --depth 1 git@github.com:THUDM/slime.git slime
 pip install -e slime
 # See slime/build_conda.sh for full dependency list
-# (megatron-core, transformer_engine, flash_attn, apex, ray, sglang, etc.)
+# (megatron-core, transformer_engine, flash_attn, apex, ray, etc.)
 
-# 3. Clone Megatron-LM (needed for training internals)
+# 3. Pin SGLang to the patched version
+pip install --prerelease=allow sglang==0.5.10
+
+# 4. Clone Megatron-LM (needed for training internals)
 git clone https://github.com/NVIDIA/Megatron-LM.git Megatron-LM
 pip install -e Megatron-LM
 
-# 4. Build SWE-Agent container images
+# 5. Build SWE-Agent container images
 bash examples/swegym/swe_agent/setup.sh
 
-# 5. Apply SGLang patch (adds token IDs to logprobs)
+# 6. Apply SGLang patch (adds token IDs to logprobs) — expects sglang==0.5.10
 bash scripts/patch/patch_sglang.sh
 
-# 6. Apply Slime patch (adds external advantage estimator support)
+# 7. Apply Slime patch (adds external advantage estimator support) — expects slime==0.2.4
 bash scripts/patch/patch_slime.sh
 ```
 

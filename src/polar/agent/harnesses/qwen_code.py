@@ -49,15 +49,16 @@ class QwenCodeHarness(BaseHarness):
     def run_steps(self, instruction: str) -> list[ExecInput]:
         escaped = shlex.quote(instruction)
         env: dict[str, str] = {**self.env}
+        # qwen-code reads the model from OPENAI_MODEL; passing both an env var
+        # and a --model CLI flag created conflicts on proxied backends, so only
+        # the env var form is used (mirrors terminal-bench / Harbor).
         if self.model_name:
             env["OPENAI_MODEL"] = self.model_name
 
         return [
             ExecInput(
                 command=(
-                    f"qwen --yolo"
-                    f"{f' --model={shlex.quote(self.model_name)}' if self.model_name else ''} "
-                    f"--prompt={escaped} "
+                    f"qwen --yolo --prompt={escaped} "
                     f"2>&1 | tee {RUNTIME_AGENT_LOG_DIR}/qwen-code.txt"
                 ),
                 env=env,

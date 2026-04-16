@@ -50,14 +50,15 @@ class GeminiCliHarness(BaseHarness):
         escaped = shlex.quote(instruction)
         env: dict[str, str] = {**self.env}
 
-        flags: list[str] = ["--yolo"]
+        # --approval-mode=yolo is the documented replacement for the legacy
+        # --yolo flag (both currently work but --yolo is listed as deprecated
+        # in the latest CLI reference). Sandbox is off by default; we only
+        # pass --sandbox when the caller explicitly opts in.
+        flags: list[str] = ["--approval-mode=yolo"]
         if self.model_name:
             flags.append(f"--model={shlex.quote(self.model_name)}")
-
-        sandbox = self.settings.get("sandbox")
-        # Default to --no-sandbox inside containers (avoids hanging on sandbox start)
-        if sandbox is not True:
-            flags.append("--no-sandbox")
+        if self.settings.get("sandbox") is True:
+            flags.append("--sandbox")
 
         flags_str = " ".join(flags)
         return [

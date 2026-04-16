@@ -73,14 +73,30 @@ class ClaudeCodeHarness(BaseHarness):
         env: dict[str, str] = {
             **self.env,
             "CLAUDE_CONFIG_DIR": self._config_dir,
+            # Allow --dangerously-skip-permissions / bypassPermissions inside
+            # the container (root-or-not); matches Harbor's pattern.
+            "IS_SANDBOX": "1",
+            # Suppress Statsig / telemetry calls that the CLI otherwise makes
+            # to api.anthropic.com even when ANTHROPIC_BASE_URL points elsewhere.
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         }
         if self.settings.get("max_thinking_tokens"):
             env["MAX_THINKING_TOKENS"] = str(self.settings["max_thinking_tokens"])
 
-        # Model config: if model_name is set, use --model flag
+        # Model config: if model_name is set, use --model flag and pin all tier
+        # aliases to the same model so claude-code doesn't try to route a
+        # sub-agent / fallback request back to api.anthropic.com.
         model_flag = ""
         if self.model_name:
             model_flag = f" --model {shlex.quote(self.model_name)}"
+            for alias in (
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "CLAUDE_CODE_SUBAGENT_MODEL",
+            ):
+                env[alias] = self.model_name
 
         return [
             ExecInput(

@@ -56,18 +56,23 @@ These checks must pass exactly:
 - `cal(" 8 + 2 * 5 ") == 18`
 """
 
+# Pinned versions — bump intentionally. `@latest` is avoided so upstream
+# regressions don't silently break a calculator run. Overridable via env.
 NODE_HARNESS_PACKAGES: dict[str, str] = {
-    "claude_code": "@anthropic-ai/claude-code@latest",
-    "codex": "@openai/codex@latest",
-    "gemini_cli": "@google/gemini-cli@latest",
-    "opencode": "opencode-ai@latest",
-    "qwen_code": "@qwen-code/qwen-code@latest",
+    "claude_code": "@anthropic-ai/claude-code@2.1.111",
+    "codex": "@openai/codex@0.121.0",
+    "gemini_cli": "@google/gemini-cli@0.38.1",
+    "opencode": "opencode-ai@1.4.6",
+    "qwen_code": "@qwen-code/qwen-code@0.14.5",
 }
+
+OPENHANDS_SDK_PINS = "openhands-sdk==1.17.0 openhands-tools==1.17.0 fastapi==0.136.0"
+SWE_AGENT_GIT_REF = "v1.1.0"
 
 PYTHON_PREPARE = (
     'python3 -m venv "$HOME/.venv" && '
     '. "$HOME/.venv/bin/activate" && '
-    'python -m pip install --quiet --upgrade pip'
+    'python -m pip install --upgrade pip'
 )
 
 WORKSPACE_PREPARE = (
@@ -87,14 +92,17 @@ def prepare_command_for_harness(harness: str) -> str:
     elif harness == "openhands_sdk":
         install_command = (
             f"{PYTHON_PREPARE} && "
-            "python -m pip install --quiet --no-cache-dir openhands-sdk openhands-tools fastapi && "
+            # No --quiet: surface resolver / network errors in the prepare log.
+            f"python -m pip install --no-cache-dir {OPENHANDS_SDK_PINS} && "
         )
     elif harness == "swe_agent":
         install_command = (
             f"{PYTHON_PREPARE} && "
-            'python -m pip install --quiet --no-cache-dir "git+https://github.com/SWE-agent/SWE-agent.git" && '
+            # Pin both the pip install and the source clone to the same SWE-Agent tag
+            # so `config/default.yaml` layout stays consistent.
+            f'python -m pip install --no-cache-dir "git+https://github.com/SWE-agent/SWE-agent.git@{SWE_AGENT_GIT_REF}" && '
             'SITE="$(python -c "import site; print(site.getsitepackages()[0])")" && '
-            "git clone --depth 1 https://github.com/SWE-agent/SWE-agent.git /tmp/swe-agent-src && "
+            f"git clone --depth 1 --branch {SWE_AGENT_GIT_REF} https://github.com/SWE-agent/SWE-agent.git /tmp/swe-agent-src && "
             'cp -r /tmp/swe-agent-src/config "$SITE/config" && '
             'cp -r /tmp/swe-agent-src/tools "$SITE/tools" && '
             'mkdir -p /polar/session/tools/swe-agent && '
@@ -122,25 +130,36 @@ def builder_spec_for_harness(harness: str) -> dict[str, Any]:
     return {"strategy": "prefix_merging", **({"config": config} if config else {})}
 
 
+# Common stray artifacts that can end up in cwd regardless of harness.
+# The evaluator already skips __pycache__, *.pyc, *.pyo, .pytest_cache.
+_COMMON_EVAL_EXCLUDES: list[str] = [
+    "node_modules/**",
+    "**/node_modules/**",
+    ".cache/**",
+    "**/.cache/**",
+    ".venv/**",
+    "**/.venv/**",
+]
+
+# Per-harness config / session dirs that can leak into the workspace git diff.
+_HARNESS_EVAL_EXCLUDES: dict[str, list[str]] = {
+    "claude_code": [".claude/**", "**/.claude/**"],
+    "codex": [".codex/**", "**/.codex/**"],
+    "gemini_cli": [".gemini/**", "**/.gemini/**"],
+    "opencode": [".opencode/**", "**/.opencode/**", ".config/opencode/**"],
+    "openhands_sdk": [".openhands/**", "**/.openhands/**"],
+    "qwen_code": [".qwen/**", "**/.qwen/**"],
+    "swe_agent": [
+        "trajectories/**",
+        "**/trajectories/**",
+        ".swe-agent/**",
+        "**/.swe-agent/**",
+    ],
+}
+
+
 def evaluator_exclude_patterns_for_harness(harness: str) -> list[str]:
-    patterns: list[str] = []
-    if harness == "claude_code":
-        patterns.extend(
-            [
-                "$HOME/.claude/**",
-                "**/$HOME/.claude/**",
-                ".claude/**",
-                "**/.claude/**",
-            ]
-        )
-    if harness == "swe_agent":
-        patterns.extend(
-            [
-                "trajectories/**",
-                "**/trajectories/**",
-            ]
-        )
-    return patterns
+    return [*_COMMON_EVAL_EXCLUDES, *_HARNESS_EVAL_EXCLUDES.get(harness, [])]
 
 
 def model_name_for_harness(harness: str, override: str | None) -> str | None:

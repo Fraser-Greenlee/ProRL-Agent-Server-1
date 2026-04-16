@@ -19,7 +19,7 @@ Install Polar and SGLang:
 
 ```bash
 uv pip install -e .
-uv pip install --upgrade sglang
+uv pip install --prerelease=allow sglang==0.5.10
 bash scripts/patch/patch_sglang.sh
 ```
 
