@@ -7,6 +7,7 @@ Aligned with agent-harness-proxy/src/harness_proxy/transform/openai_responses.py
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -237,6 +238,7 @@ class ResponsesStreamState:
             "response": {
                 "id": self.response_id,
                 "object": "response",
+                "created_at": int(time.time()),
                 "status": "completed",
                 "model": self.model,
                 "output": output,
@@ -306,6 +308,7 @@ class OpenAIResponsesTransformer(BaseTransformer):
             output_items.append({
                 "type": "message",
                 "role": "assistant",
+                "status": "completed",
                 "content": [{"type": "output_text", "text": content}],
             })
 
@@ -322,15 +325,18 @@ class OpenAIResponsesTransformer(BaseTransformer):
             else:
                 output_items.append({
                     "type": "function_call",
+                    "id": f"fc_{uuid.uuid4().hex[:24]}",
                     "call_id": tc.get("id", ""),
                     "name": name,
                     "arguments": func.get("arguments", "{}"),
+                    "status": "completed",
                 })
 
         usage = response.get("usage", {})
         return {
             "id": response.get("id", f"resp_{uuid.uuid4().hex}"),
             "object": "response",
+            "created_at": response.get("created", int(time.time())),
             "status": "completed",
             "model": original_request.get("model", response.get("model", "unknown")),
             "output": output_items,

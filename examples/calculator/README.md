@@ -74,7 +74,7 @@ uv run python examples/calculator/submit_calculator_task.py \
   --harness claude_code \
   --topology examples/calculator/topology.yaml \
   --runtime-backend docker \
-  --num-samples 8
+  --num-samples 4
 ```
 
 Supported harness names:

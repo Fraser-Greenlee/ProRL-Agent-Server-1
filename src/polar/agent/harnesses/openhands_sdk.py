@@ -56,24 +56,13 @@ class OpenHandsSdkHarness(BaseHarness):
         for key, env_key in [
             ("max_iterations", "MAX_ITERATIONS"),
             ("temperature", "LLM_TEMPERATURE"),
-            ("reasoning_effort", "REASONING_EFFORT"),
-            ("max_input_tokens", "LLM_MAX_INPUT_TOKENS"),
             ("max_output_tokens", "LLM_MAX_OUTPUT_TOKENS"),
-            ("max_message_chars", "LLM_MAX_MESSAGE_CHARS"),
-            ("extended_thinking_budget", "LLM_EXTENDED_THINKING_BUDGET"),
-            ("enable_encrypted_reasoning", "LLM_ENABLE_ENCRYPTED_REASONING"),
         ]:
             value = self.settings.get(key)
             if value is not None:
                 env[env_key] = str(value)
 
         env.setdefault("MAX_ITERATIONS", "8")
-        env.setdefault("LLM_TEMPERATURE", "0")
-        env.setdefault("REASONING_EFFORT", "none")
-        env.setdefault("LLM_MAX_OUTPUT_TOKENS", "1024")
-        env.setdefault("LLM_MAX_MESSAGE_CHARS", "12000")
-        env.setdefault("LLM_EXTENDED_THINKING_BUDGET", "0")
-        env.setdefault("LLM_ENABLE_ENCRYPTED_REASONING", "false")
 
         return [
             ExecInput(
@@ -167,9 +156,7 @@ def _load_mcp_config() -> dict[str, object] | None:
 def main():
     os.environ["OPENHANDS_SUPPRESS_BANNER"] = "1"
     try:
-        from pydantic import SecretStr
         from openhands.sdk import Agent, AgentContext, Conversation, Tool
-        from openhands.sdk.llm import LLM
         from openhands.tools.file_editor import FileEditorTool
         from openhands.tools.task_tracker import TaskTrackerTool
         from openhands.tools.terminal import TerminalTool
@@ -177,44 +164,30 @@ def main():
         print(f"openhands-sdk not installed: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Import LLM — try top-level first (newer SDK), then submodule
+    try:
+        from openhands.sdk import LLM
+    except ImportError:
+        from openhands.sdk.llm import LLM
+
     instruction = os.environ.get("AGENT_INSTRUCTION", "")
     model = os.environ.get("LLM_MODEL", "openai/gpt-5.4")
     api_key = os.environ.get("LLM_API_KEY", "")
     base_url = os.environ.get("LLM_BASE_URL", "")
     max_iterations = int(os.environ.get("MAX_ITERATIONS", "30"))
     temperature = os.environ.get("LLM_TEMPERATURE")
-    reasoning_effort = os.environ.get("REASONING_EFFORT")
-    max_input_tokens = os.environ.get("LLM_MAX_INPUT_TOKENS")
     max_output_tokens = os.environ.get("LLM_MAX_OUTPUT_TOKENS")
-    max_message_chars = os.environ.get("LLM_MAX_MESSAGE_CHARS")
-    extended_thinking_budget = os.environ.get("LLM_EXTENDED_THINKING_BUDGET")
-    enable_encrypted_reasoning = os.environ.get("LLM_ENABLE_ENCRYPTED_REASONING")
 
+    # Match Harbor's simple LLM kwargs — no SecretStr, no reasoning params
     llm_kwargs = dict(
         model=model,
-        api_key=SecretStr(api_key),
+        api_key=api_key,
         base_url=base_url,
-        drop_params=True,
     )
     if temperature:
         llm_kwargs["temperature"] = float(temperature)
-    if reasoning_effort:
-        llm_kwargs["reasoning_effort"] = reasoning_effort
-    if max_input_tokens:
-        llm_kwargs["max_input_tokens"] = int(max_input_tokens)
     if max_output_tokens:
         llm_kwargs["max_output_tokens"] = int(max_output_tokens)
-    if max_message_chars:
-        llm_kwargs["max_message_chars"] = int(max_message_chars)
-    if extended_thinking_budget is not None:
-        llm_kwargs["extended_thinking_budget"] = int(extended_thinking_budget)
-    if enable_encrypted_reasoning is not None:
-        llm_kwargs["enable_encrypted_reasoning"] = enable_encrypted_reasoning.lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
     llm = LLM(**llm_kwargs)
 
     tools = [

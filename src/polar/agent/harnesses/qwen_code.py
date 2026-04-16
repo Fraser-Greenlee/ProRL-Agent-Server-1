@@ -49,13 +49,15 @@ class QwenCodeHarness(BaseHarness):
     def run_steps(self, instruction: str) -> list[ExecInput]:
         escaped = shlex.quote(instruction)
         env: dict[str, str] = {**self.env}
+        if self.model_name:
+            env["OPENAI_MODEL"] = self.model_name
 
         return [
             ExecInput(
                 command=(
-                    'export OPENAI_API_KEY="$OPENAI_API_KEY" '
-                    'OPENAI_BASE_URL="$OPENAI_BASE_URL" && '
-                    f"qwen --yolo --auth-type openai --prompt={escaped} "
+                    f"qwen --yolo"
+                    f"{f' --model={shlex.quote(self.model_name)}' if self.model_name else ''} "
+                    f"--prompt={escaped} "
                     f"2>&1 | tee {RUNTIME_AGENT_LOG_DIR}/qwen-code.txt"
                 ),
                 env=env,

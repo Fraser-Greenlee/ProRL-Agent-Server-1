@@ -11,7 +11,7 @@ from pathlib import Path
 EXAMPLE_DIR = Path(__file__).resolve().parent
 DOCKERFILE_DIR = EXAMPLE_DIR / "runtime"
 DEFAULT_IMAGE = "polar-localhost-calculator:latest"
-IMAGE_LAYOUT_VERSION = "2"
+IMAGE_LAYOUT_VERSION = "3"
 IMAGE_VERSION_LABEL = "io.polar.calculator-image-version"
 
 

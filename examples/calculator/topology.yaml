@@ -12,9 +12,9 @@ gateway:
       port: 8100
       public_url: http://127.0.0.1:8100
       max_init_workers: 4
-      max_run_workers: 2
-      max_postrun_workers: 2
-      ready_buffer_target: 2
+      max_run_workers: 4
+      max_postrun_workers: 4
+      ready_buffer_target: 4
       model_served: Qwen/Qwen3.5-4B
       sglang:
         base_url: http://127.0.0.1:8000
@@ -23,9 +23,9 @@ gateway:
       port: 8101
       public_url: http://127.0.0.1:8101
       max_init_workers: 4
-      max_run_workers: 2
-      max_postrun_workers: 2
-      ready_buffer_target: 2
+      max_run_workers: 4
+      max_postrun_workers: 4
+      ready_buffer_target: 4
       model_served: Qwen/Qwen3.5-4B
       sglang:
         base_url: http://127.0.0.1:8001

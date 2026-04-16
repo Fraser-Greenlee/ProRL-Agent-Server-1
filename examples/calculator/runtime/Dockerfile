@@ -1,6 +1,10 @@
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim AS node
 
-ARG POLAR_CALCULATOR_IMAGE_VERSION=2
+FROM python:3.12-slim-bookworm
+
+ARG POLAR_CALCULATOR_IMAGE_VERSION=3
+
+COPY --from=node /usr/local/ /usr/local/
 
 ENV DEBIAN_FRONTEND=noninteractive \
     HOME=/home/polar \
@@ -18,13 +22,19 @@ RUN apt-get update \
         curl \
         git \
         python-is-python3 \
-        python3 \
-        python3-venv \
+        sudo \
+        tmux \
     && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -s /bin/bash polar \
+    && echo 'polar ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers \
     && mkdir -p /polar/session /home/polar/.local /home/polar/.venv \
     && chown -R polar:polar /polar/session /home/polar
 
+# Persist PATH for login shells (docker exec bash -lc) via /etc/profile.d/
+RUN echo 'export PATH=/home/polar/.local/bin:/home/polar/.venv/bin:$PATH' \
+    > /etc/profile.d/polar-path.sh
+
 USER polar
+
 WORKDIR /polar/session

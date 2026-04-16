@@ -55,7 +55,8 @@ class GeminiCliHarness(BaseHarness):
             flags.append(f"--model={shlex.quote(self.model_name)}")
 
         sandbox = self.settings.get("sandbox")
-        if sandbox is False:
+        # Default to --no-sandbox inside containers (avoids hanging on sandbox start)
+        if sandbox is not True:
             flags.append("--no-sandbox")
 
         flags_str = " ".join(flags)
@@ -65,7 +66,7 @@ class GeminiCliHarness(BaseHarness):
                     'export GEMINI_API_KEY="$GOOGLE_API_KEY" '
                     'GOOGLE_GEMINI_BASE_URL="$GOOGLE_API_URL" && '
                     f"gemini {flags_str} --prompt={escaped} "
-                    f"2>&1 | tee {RUNTIME_AGENT_LOG_DIR}/gemini-cli.txt"
+                    f"2>&1 </dev/null | tee {RUNTIME_AGENT_LOG_DIR}/gemini-cli.txt"
                 ),
                 env=env,
             )

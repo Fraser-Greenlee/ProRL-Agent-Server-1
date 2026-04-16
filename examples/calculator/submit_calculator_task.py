@@ -97,8 +97,17 @@ def prepare_command_for_harness(harness: str) -> str:
             "git clone --depth 1 https://github.com/SWE-agent/SWE-agent.git /tmp/swe-agent-src && "
             'cp -r /tmp/swe-agent-src/config "$SITE/config" && '
             'cp -r /tmp/swe-agent-src/tools "$SITE/tools" && '
+            'mkdir -p /polar/session/tools/swe-agent && '
+            'cp /tmp/swe-agent-src/config/default.yaml /polar/session/tools/swe-agent/default.yaml && '
             'mkdir -p "$SITE/trajectories" && '
             "rm -rf /tmp/swe-agent-src && "
+            # Create wrapper script that activates venv (bypasses missing entry point)
+            "mkdir -p \"$HOME/.local/bin\" && "
+            "printf '#!/bin/bash\\nsource \"$HOME/.venv/bin/activate\"\\nexec python -m sweagent.run.run \"$@\"\\n' "
+            "> \"$HOME/.local/bin/sweagent\" && "
+            "chmod +x \"$HOME/.local/bin/sweagent\" && "
+            # SWE-Agent runs as root (via sudo -E in the harness)
+
         )
     return install_command + WORKSPACE_PREPARE
 
@@ -138,11 +147,12 @@ def model_name_for_harness(harness: str, override: str | None) -> str | None:
     if override:
         return override
     defaults = {
-        "codex": "openai/gpt-5.4",
-        "claude_code": "anthropic/claude-opus-4-5",
-        "gemini_cli": "gcp/google/gemini-2.5-flash-lite",
+        "codex": "gpt-5.4",
+        "claude_code": "claude-opus-4-5",
+        "gemini_cli": "gemini-2.5-flash-lite",
+        "opencode": "openai/gpt-5.4",
         "openhands_sdk": "openai/gpt-5.4",
-        "qwen_code": "Qwen/Qwen3.5-4B",
+        "qwen_code": "qwen3-coder-plus",
         "swe_agent": "openai/gpt-5.4",
     }
     return defaults.get(harness)

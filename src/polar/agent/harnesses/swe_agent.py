@@ -17,6 +17,9 @@ class SweAgentHarness(BaseHarness):
         super().__init__(agent_spec)
         self._problem_statement_path = f"{RUNTIME_AGENT_LOG_DIR}/problem_statement.md"
         self._repo_path = str(self.settings.get("repo_path") or "/polar/session/workspace")
+        self._config_path = str(
+            self.settings.get("config_path") or "/polar/session/tools/swe-agent/default.yaml"
+        )
         self._shell_preamble = str(self.settings.get("shell_preamble") or "").strip()
 
     async def setup(self, runtime: BaseRuntime) -> None:
@@ -80,6 +83,7 @@ class SweAgentHarness(BaseHarness):
         preamble = f"{self._shell_preamble} && " if self._shell_preamble else ""
 
         safe_instruction = instruction.replace("'", "'\"'\"'")
+        api_base_flag = ' --agent.model.api_base="$OPENAI_BASE_URL"'
 
         return [
             ExecInput(
@@ -87,11 +91,17 @@ class SweAgentHarness(BaseHarness):
                     f"cat > {self._problem_statement_path} << 'POLARINST'\n{safe_instruction}\nPOLARINST\n"
                     f"{preamble}"
                     'export OPENAI_API_KEY="$OPENAI_API_KEY" OPENAI_BASE_URL="$OPENAI_BASE_URL" && '
-                    f"sweagent run "
+                    # SWE-Agent requires root; use sudo with the venv python path
+                    'VENV_PY="$HOME/.venv/bin/python" && '
+                    '[ -x "$VENV_PY" ] || VENV_PY=python3 && '
+                    f'sudo -E "$VENV_PY" -m sweagent.run.run run '
                     f"--agent.model.name={shlex.quote(model)} "
+                    f"{api_base_flag} "
+                    f"--config={shlex.quote(self._config_path)} "
                     f"--problem_statement.path={shlex.quote(self._problem_statement_path)} "
                     f"--env.deployment.type=local "
-                    f"--env.repo.path={shlex.quote(self._repo_path)}"
+                    f"--env.repo.type=preexisting "
+                    f"--env.repo.repo_name={shlex.quote(self._repo_path)}"
                     f"{flags_str} "
                     f"2>&1 | tee {RUNTIME_AGENT_LOG_DIR}/swe-agent.txt"
                 ),

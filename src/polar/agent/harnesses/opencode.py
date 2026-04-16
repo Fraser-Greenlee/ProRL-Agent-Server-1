@@ -70,8 +70,8 @@ class OpenCodeHarness(BaseHarness):
         return [
             ExecInput(
                 command=(
-                    f"opencode -m {shlex.quote(model)} run "
-                    f"--format=json -- {escaped} "
+                    f"opencode run --model={shlex.quote(model)} "
+                    f"--format=json --thinking --dangerously-skip-permissions -- {escaped} "
                     f"2>&1 | tee {RUNTIME_AGENT_LOG_DIR}/opencode.txt"
                 ),
                 env=env,

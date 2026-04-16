@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import shlex
 
 from polar.agent.base import BaseHarness
@@ -16,7 +15,8 @@ class CodexHarness(BaseHarness):
 
     def __init__(self, agent_spec: AgentSpec) -> None:
         super().__init__(agent_spec)
-        self._codex_home = "$HOME/.codex"
+        # Use an absolute path — $HOME won't expand in docker exec -e
+        self._codex_home = f"{RUNTIME_AGENT_LOG_DIR}/.codex"
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._codex_home}")
@@ -57,17 +57,17 @@ class CodexHarness(BaseHarness):
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
             "--json",
+            "--enable unified_exec",
             "-c 'model_provider=\"harness_proxy\"'",
             "-c 'model_providers.harness_proxy.name=\"Harness Proxy\"'",
             '-c "model_providers.harness_proxy.base_url=\\"$OPENAI_BASE_URL\\""',
             "-c 'model_providers.harness_proxy.env_key=\"OPENAI_API_KEY\"'",
             "-c 'model_providers.harness_proxy.wire_api=\"responses\"'",
-            '-c "model_providers.harness_proxy.http_headers={\\"X-Session-Id\\"=\\"$SESSION_ID\\"}"',
-            "--disable responses_websockets",
-            "--disable responses_websockets_v2",
-            "--disable enable_request_compression",
+            "-c 'features.responses_websockets=false'",
+            "-c 'features.responses_websockets_v2=false'",
+            "-c 'features.enable_request_compression=false'",
         ]
-        model = self.model_name or "o4-mini"
+        model = _cli_model_name(self.model_name)
         flags.append(f"--model {shlex.quote(model)}")
 
         for key, cli in [
@@ -80,11 +80,28 @@ class CodexHarness(BaseHarness):
 
         flags_str = " ".join(flags)
         return [
+            # Write synthetic auth.json so codex picks up OPENAI_API_KEY
+            ExecInput(
+                command=(
+                    f"mkdir -p {self._codex_home} && "
+                    f'printf \'{{"OPENAI_API_KEY": "%s"}}\' "$OPENAI_API_KEY" '
+                    f"> {self._codex_home}/auth.json"
+                ),
+                env=env,
+            ),
             ExecInput(
                 command=(
                     f"codex exec {flags_str} -- {escaped} "
-                    f"2>&1 | tee {RUNTIME_AGENT_LOG_DIR}/codex.txt"
+                    f"2>&1 </dev/null | tee {RUNTIME_AGENT_LOG_DIR}/codex.txt"
                 ),
                 env=env,
-            )
+            ),
         ]
+
+
+def _cli_model_name(model_name: str | None) -> str:
+    model = model_name or "gpt-5.4"
+    for prefix in ("openai/", "anthropic/", "google/", "gcp/google/"):
+        if model.startswith(prefix):
+            return model[len(prefix):]
+    return model
