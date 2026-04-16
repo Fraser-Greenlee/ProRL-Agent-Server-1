@@ -18,7 +18,6 @@ from polar.rollout.models import (
     NodeRegistrationRequest,
     SessionResult,
     TaskRequest,
-    TaskResult,
     TaskStatus,
 )
 from polar.rollout.pipeline import Pipeline
@@ -99,15 +98,6 @@ app = FastAPI(title="Polar Rollout", version="0.1.0", lifespan=_lifespan)
 async def health():
     state = get_state()
     return {"status": "ok", "nodes": len(state.scheduler.list_nodes())}
-
-
-@app.post("/rollout/task", response_model=TaskResult)
-async def submit_task(request: TaskRequest):
-    state = get_state()
-    try:
-        return await state.manager.execute_task(request)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/rollout/task/submit")

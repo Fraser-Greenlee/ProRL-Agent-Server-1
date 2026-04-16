@@ -63,23 +63,12 @@ class RolloutManager:
     async def _run_task_background(self, request: TaskRequest) -> None:
         """Execute a task in the background, updating the record on completion."""
         try:
-            result = await self.execute_task(request, _already_registered=True)
+            result = await self._execute_task(request)
             logger.info("Task %s completed with %d results", request.task_id, len(result.results))
         except Exception:
             logger.exception("Background task %s failed", request.task_id)
 
-    async def execute_task(self, request: TaskRequest, *, _already_registered: bool = False) -> TaskResult:
-        if not _already_registered:
-            with self._lock:
-                existing = self._tasks.get(request.task_id)
-                if existing is not None and existing.status == "running":
-                    raise ValueError(f"task {request.task_id} is already running")
-                self._tasks[request.task_id] = _TaskRecord(
-                    task_id=request.task_id,
-                    status="running",
-                    total_sessions=request.num_samples,
-                )
-
+    async def _execute_task(self, request: TaskRequest) -> TaskResult:
         sessions = [
             SessionContext(
                 session_id=f"sk-polar-{uuid.uuid4()}",

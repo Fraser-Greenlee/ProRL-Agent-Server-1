@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 import sys
 from typing import Any
@@ -70,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Print the raw response JSON.",
+    )
+    submit_parser.add_argument(
+        "--poll-interval",
+        type=float,
+        default=2.0,
+        help="Seconds between task-status polls (default: 2.0).",
     )
 
     status_parser = subparsers.add_parser(
@@ -140,9 +147,18 @@ def _handle_submit(args: argparse.Namespace) -> int:
     payload = _load_structured_file(args.task_file)
     timeout = httpx.Timeout(None, connect=30.0)
     with httpx.Client(base_url=rollout_url, timeout=timeout) as client:
-        response = client.post("/rollout/task", json=payload)
-        response.raise_for_status()
-        result = response.json()
+        submit_resp = client.post("/rollout/task/submit", json=payload)
+        submit_resp.raise_for_status()
+        task_id = submit_resp.json()["task_id"]
+
+        poll_interval = max(0.1, float(args.poll_interval))
+        while True:
+            time.sleep(poll_interval)
+            status_resp = client.get(f"/rollout/task/{task_id}")
+            status_resp.raise_for_status()
+            result = status_resp.json()
+            if str(result.get("status")) in ("completed", "failed"):
+                break
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
