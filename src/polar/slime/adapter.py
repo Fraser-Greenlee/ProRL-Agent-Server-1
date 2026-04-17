@@ -1,7 +1,9 @@
 """Convert Polar rollout results into Slime samples.
 
 Every trace in ``Trajectory.traces`` becomes one Slime ``Sample``.
-Builders own trace curation — the adapter does not filter.
+Builders own trace curation — the adapter does not filter. Traces that
+lack training tokens (empty prompt_ids or response_ids) are dropped so
+callers never smuggle placeholder tokens into the training batch.
 """
 
 from __future__ import annotations
@@ -9,11 +11,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from copy import deepcopy
 import itertools
+import logging
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from polar.rollout.models import SessionResult
     from polar.trajectory.models import Trace
+
+logger = logging.getLogger(__name__)
 
 
 def session_result_to_samples(
@@ -26,7 +31,7 @@ def session_result_to_samples(
 ) -> list[Any]:
     """Convert one Polar session result into Slime samples (one per trace)."""
     Sample = _load_sample_type()
-    traces = list(result.trajectory.traces) or [None]
+    traces = list(result.trajectory.traces)
 
     if next_index is None:
         counter = itertools.count(0 if index is None else index)
@@ -35,17 +40,17 @@ def session_result_to_samples(
     samples: list[Any] = []
     for trace_index, trace in enumerate(traces):
         sample_index = index if (index is not None and trace_index == 0) else next_index()
-        samples.append(
-            _build_sample(
-                Sample=Sample,
-                result=result,
-                trace=trace,
-                trace_index=trace_index,
-                group_index=group_index,
-                index=sample_index,
-                reward_key=reward_key,
-            )
+        sample = _build_sample(
+            Sample=Sample,
+            result=result,
+            trace=trace,
+            trace_index=trace_index,
+            group_index=group_index,
+            index=sample_index,
+            reward_key=reward_key,
         )
+        if sample is not None:
+            samples.append(sample)
     return samples
 
 
@@ -53,46 +58,38 @@ def _build_sample(
     *,
     Sample: Any,
     result: "SessionResult",
-    trace: "Trace | None",
+    trace: "Trace",
     trace_index: int,
     group_index: int,
     index: int | None,
     reward_key: str,
-) -> Any:
-    prompt_messages = deepcopy(trace.prompt_messages) if trace is not None else []
-    response_messages = deepcopy(trace.response_messages) if trace is not None else []
+) -> Any | None:
+    prompt_ids = list(trace.prompt_ids)
+    response_ids = list(trace.response_ids) or _response_ids_from_logprobs(trace)
+
+    if not prompt_ids or not response_ids:
+        logger.warning(
+            "Dropping trace %d from session %s: missing tokens (prompt=%d, response=%d)",
+            trace_index, result.session_id, len(prompt_ids), len(response_ids),
+        )
+        return None
+
+    prompt_messages = deepcopy(trace.prompt_messages)
+    response_messages = deepcopy(trace.response_messages)
     response_text = _messages_to_text(response_messages)
 
-    prompt_ids = list(trace.prompt_ids) if trace is not None else []
-    response_ids = list(trace.response_ids) if trace is not None else []
     response_log_probs = _extract_rollout_log_probs(trace)
-
-    if not response_ids:
-        response_ids = _response_ids_from_logprobs(trace)
+    if not response_log_probs:
+        response_log_probs = [0.0] * len(response_ids)
 
     status = _sample_status(Sample, result, trace)
     reward_value = _reward_value(result, trace)
-
-    # Ensure failed samples have at least one dummy token so training
-    # data shapes remain valid (prompt_length >= 1 for loss_mask padding).
-    if not prompt_ids:
-        prompt_ids = [0]
-    if not response_ids:
-        response_ids = [0]
-        response_log_probs = [0.0]
-
-    if not response_log_probs:
-        response_log_probs = [0.0] * len(response_ids)
 
     loss_mask = [1] * len(response_ids)
     if status in (Sample.Status.ABORTED, Sample.Status.FAILED):
         loss_mask = [0] * len(response_ids)
 
-    prompt_value: str | list[dict[str, Any]]
-    if prompt_messages:
-        prompt_value = prompt_messages
-    else:
-        prompt_value = ""
+    prompt_value = prompt_messages if prompt_messages else ""
 
     polar_metadata: dict[str, Any] = {
         "node_id": result.node_id,
@@ -105,10 +102,10 @@ def _build_sample(
         "trajectory_metadata": deepcopy(result.trajectory.metadata),
         "trajectory_status": result.trajectory.status,
     }
-    if trace is not None and trace.advantage is not None:
+    if trace.advantage is not None:
         polar_metadata["advantage"] = float(trace.advantage)
 
-    sample = Sample(
+    return Sample(
         group_index=group_index,
         index=index,
         prompt=prompt_value,
@@ -122,11 +119,10 @@ def _build_sample(
         session_id=result.session_id,
         metadata={"polar": polar_metadata},
     )
-    return sample
 
 
-def _reward_value(result: "SessionResult", trace: "Trace | None") -> float:
-    if trace is not None and trace.reward is not None:
+def _reward_value(result: "SessionResult", trace: "Trace") -> float:
+    if trace.reward is not None:
         return float(trace.reward)
 
     evaluation = result.trajectory.metadata.get("evaluation", {})
@@ -135,20 +131,19 @@ def _reward_value(result: "SessionResult", trace: "Trace | None") -> float:
     return 0.0
 
 
-def _sample_status(Sample: Any, result: "SessionResult", trace: "Trace | None") -> Any:
+def _sample_status(Sample: Any, result: "SessionResult", trace: "Trace") -> Any:
     trajectory_status = result.trajectory.status
     if trajectory_status == "TIMEOUT" or result.status == "TIMEOUT":
         return Sample.Status.ABORTED
     if trajectory_status == "ERROR" or result.status == "ERROR" or result.error or result.trajectory.error:
         return Sample.Status.FAILED
-    finish_reason = getattr(trace, "finish_reason", None)
-    if finish_reason == "length":
+    if trace.finish_reason == "length":
         return Sample.Status.TRUNCATED
     return Sample.Status.COMPLETED
 
 
-def _extract_rollout_log_probs(trace: "Trace | None") -> list[float]:
-    if trace is None or not trace.response_logprobs:
+def _extract_rollout_log_probs(trace: "Trace") -> list[float]:
+    if not trace.response_logprobs:
         return []
     return [
         float(item.get("logprob", 0.0))
@@ -157,8 +152,8 @@ def _extract_rollout_log_probs(trace: "Trace | None") -> list[float]:
     ]
 
 
-def _response_ids_from_logprobs(trace: "Trace | None") -> list[int]:
-    if trace is None or not trace.response_logprobs:
+def _response_ids_from_logprobs(trace: "Trace") -> list[int]:
+    if not trace.response_logprobs:
         return []
     return [
         int(item["token_id"])

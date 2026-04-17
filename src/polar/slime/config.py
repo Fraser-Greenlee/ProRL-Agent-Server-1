@@ -70,7 +70,11 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
             getattr(args, "polar_task_id_template", "polar-slime-{rollout_id}-{sample.group_index}")
         ),
         instruction_template=getattr(args, "polar_instruction_template", None),
-        reward_key=str(getattr(args, "polar_reward_key", "score")),
+        reward_key=str(
+            getattr(args, "polar_reward_key", None)
+            or getattr(args, "reward_key", None)
+            or "score"
+        ),
         max_concurrency=max_concurrency,
         request_timeout=request_timeout,
         tokenizer_name_or_path=getattr(args, "hf_checkpoint", None),
