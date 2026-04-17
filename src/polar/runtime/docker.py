@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 from polar.runtime.base import BaseRuntime
@@ -20,6 +21,7 @@ class DockerRuntime(BaseRuntime):
         # fresh evaluator runtimes, avoiding collisions with the agent runtime.
         safe_name = session_id.replace("/", "-")[:55]
         self._container_name = f"polar-{safe_name}"
+        self._chmod_needed: bool | None = None
 
     @property
     def runtime_id(self) -> str:
@@ -72,12 +74,16 @@ class DockerRuntime(BaseRuntime):
         if rc != 0:
             await self.stop()
             raise RuntimeError(f"docker start failed with exit code {rc}: {stderr}")
-        # Ensure the bind-mounted session dir is writable by the container user
-        await self._run_local_command(
-            "docker", "exec", "--user", "root",
-            self._container_name, "chmod", "-R", "a+rwX", self.runtime_session_dir,
-            timeout=self._STOP_TIMEOUT,
-        )
+        # Skip the chmod when container and host UIDs match — recursive chmod
+        # over a large session dir can be expensive and is only needed when the
+        # container user can't write to host-owned bind-mounted files.
+        self._chmod_needed = await self._detect_chmod_needed()
+        if self._chmod_needed:
+            await self._run_local_command(
+                "docker", "exec", "--user", "root",
+                self._container_name, "chmod", "-R", "a+rwX", self.runtime_session_dir,
+                timeout=self._STOP_TIMEOUT,
+            )
 
     _START_TIMEOUT = 60.0  # seconds for docker create / start
     _STOP_TIMEOUT = 30.0  # seconds per cleanup command
@@ -87,15 +93,17 @@ class DockerRuntime(BaseRuntime):
             return
         self._destroyed = True
         # chmod is best-effort so the host can reclaim bind-mounted files.
-        try:
-            await self._run_local_command(
-                "docker", "exec", "--user", "root",
-                self._container_name, "chmod", "-R", "a+rwX",
-                self.runtime_session_dir,
-                timeout=self._STOP_TIMEOUT,
-            )
-        except Exception:
-            logger.warning("chmod cleanup failed for %s", self._container_name)
+        # Skip when UIDs match (no permission mismatch to resolve).
+        if self._chmod_needed is not False:
+            try:
+                await self._run_local_command(
+                    "docker", "exec", "--user", "root",
+                    self._container_name, "chmod", "-R", "a+rwX",
+                    self.runtime_session_dir,
+                    timeout=self._STOP_TIMEOUT,
+                )
+            except Exception:
+                logger.warning("chmod cleanup failed for %s", self._container_name)
         # kill first (instant SIGKILL), then rm to remove metadata.
         await self._run_local_command(
             "docker", "kill", self._container_name,
@@ -110,6 +118,19 @@ class DockerRuntime(BaseRuntime):
                 "docker rm -f failed for %s (rc=%s): %s",
                 self._container_name, rc, stderr,
             )
+
+    async def _detect_chmod_needed(self) -> bool:
+        """True unless the container's effective UID matches the host's."""
+        rc, stdout, _ = await self._run_local_command(
+            "docker", "exec", self._container_name, "id", "-u",
+            capture=True, timeout=self._STOP_TIMEOUT,
+        )
+        if rc != 0:
+            return True
+        try:
+            return int(stdout.strip()) != os.getuid()
+        except ValueError:
+            return True
 
     async def exec(
         self,

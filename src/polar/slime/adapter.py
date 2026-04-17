@@ -168,6 +168,9 @@ def _response_ids_from_logprobs(trace: "Trace | None") -> list[int]:
 
 
 def _messages_to_text(messages: list[dict[str, Any]]) -> str:
+    # Known limitation: drops assistant tool_calls structure into a plain
+    # "[role] content" string. Downstream training consumes tokens and logprobs,
+    # so Sample.response is only a degraded human-readable view.
     parts: list[str] = []
     for message in messages:
         if not isinstance(message, dict):

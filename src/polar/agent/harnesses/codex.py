@@ -6,7 +6,7 @@ import shlex
 
 from polar.agent.base import BaseHarness
 from polar.agent.models import AgentSpec
-from polar.runtime.base import BaseRuntime, RUNTIME_AGENT_LOG_DIR
+from polar.runtime.base import BaseRuntime, RUNTIME_AGENT_LOG_DIR, RUNTIME_SESSION_DIR
 from polar.runtime.models import ExecInput
 
 
@@ -15,8 +15,10 @@ class CodexHarness(BaseHarness):
 
     def __init__(self, agent_spec: AgentSpec) -> None:
         super().__init__(agent_spec)
-        # Use an absolute path — $HOME won't expand in docker exec -e
-        self._codex_home = f"{RUNTIME_AGENT_LOG_DIR}/.codex"
+        # Keep credentials (auth.json, config.toml) outside the log dir so log
+        # rotation or archival can't clobber them. Absolute path — $HOME won't
+        # expand in docker exec -e.
+        self._codex_home = f"{RUNTIME_SESSION_DIR}/.codex"
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._codex_home}")

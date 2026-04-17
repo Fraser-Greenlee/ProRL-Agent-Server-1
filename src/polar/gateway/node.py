@@ -67,7 +67,6 @@ class GatewayNodeManager:
         self.default_runtime = default_runtime
         self._session_base_dir = session_base_dir
         self._client = httpx.AsyncClient(timeout=30.0)
-        self._dispatched_session_ids: set[str] = set()
         self._dispatcher = SessionDispatcher(
             max_init_workers=max_init_workers,
             max_run_workers=max_run_workers,
@@ -90,18 +89,12 @@ class GatewayNodeManager:
 
     async def dispatch(self, request: SessionDispatchRequest) -> None:
         session_id = request.session_id
-        if session_id in self._dispatched_session_ids:
-            raise ValueError(
-                f"session {session_id} has already been used; rollout session IDs are single-use"
-            )
-        existing = self.session_registry.get(session_id)
-        if existing is not None:
+        if self.session_registry.get(session_id) is not None:
             raise ValueError(
                 f"session {session_id} already exists; rollout session IDs are single-use"
             )
 
         session_dir: Path | None = None
-        self._dispatched_session_ids.add(session_id)
         try:
             info = self.session_registry.register(
                 session_id,
@@ -141,7 +134,6 @@ class GatewayNodeManager:
         except Exception:
             self.storage.delete_session(session_id)
             self.session_registry.remove(session_id)
-            self._dispatched_session_ids.discard(session_id)
             if session_dir is not None:
                 await self._remove_session_dir_best_effort(session_dir, session_id)
             raise

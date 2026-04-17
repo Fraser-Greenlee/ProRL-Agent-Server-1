@@ -165,7 +165,11 @@ class AsyncPolarRolloutWorker:
         self.args = args
         self.data_source = data_source
         self.config = resolve_polar_slime_config(args)
-        self.output_queue: queue.Queue[tuple[int, list[Any]]] = queue.Queue(maxsize=2000)
+        # Queue depth is the effective staleness knob — cap at a few batches.
+        queue_maxsize = max(32, self.config.max_concurrency * 4)
+        self.output_queue: queue.Queue[tuple[int, list[Any]]] = queue.Queue(
+            maxsize=queue_maxsize
+        )
         self._running = True
         self._thread: threading.Thread | None = None
         self._group_counter = 0
@@ -520,8 +524,7 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
 
     RolloutFnTrainOutput = _load_rollout_train_output_type()
     flat = [s for g in data for s in g]
-    config = resolve_polar_slime_config(args)
-    rewards = [_extract_sample_reward(s, config.reward_key) for s in flat]
+    rewards = [_extract_sample_reward(s, async_worker.config.reward_key) for s in flat]
     metrics: dict[str, Any] = {
         "polar/sample_count": len(flat),
         "polar/group_count": len(data),

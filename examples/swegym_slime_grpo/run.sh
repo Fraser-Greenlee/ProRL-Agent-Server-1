@@ -158,6 +158,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --max-tokens-per-gpu 8192 \
     --advantage-estimator external \
     --use-rollout-logprobs \
+    --use-tis \
     --use-kl-loss \
     --kl-loss-coef 0.001 \
     --kl-loss-type low_var_kl \

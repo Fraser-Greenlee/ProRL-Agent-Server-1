@@ -88,6 +88,10 @@ A(trace j in traj i) = (1/K_i) * [A_between(i) + β · A_within(i,j)]
 
 All traces in a trajectory go to training — builders own trace curation (e.g. `all_records` for turn-by-turn, `prefix_merging` for aggregated chains). Configure in `polar_config.yaml` under `polar_adv_estimator`. Set `beta: 0` for pure GRPO behavior. Remove the block entirely to fall back to Slime's built-in estimators.
 
+### Off-policy correction (`--use-tis`)
+
+When `--advantage-estimator external` is combined with `--use-rollout-logprobs`, the trainer must also set `--use-tis` so samples that straddle a weight update receive truncated importance sampling correction. Without `--use-tis`, those samples train uncorrected — silently degrading signal. `run.sh` sets this flag; keep it when deriving new configs.
+
 ## Files
 
 | File | Purpose |

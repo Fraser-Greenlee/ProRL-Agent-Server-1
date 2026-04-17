@@ -125,6 +125,11 @@ class NodeScheduler:
             selected.dispatch_reservations += 1
             return selected.to_model()
 
+    def refresh_health(self) -> None:
+        """Recompute stored health from heartbeat timestamps (call from a tick task)."""
+        with self._lock:
+            self._refresh_health_locked()
+
     def release_reservation(self, node_id: str) -> GatewayNodeInfo | None:
         with self._lock:
             node = self._nodes.get(node_id)
@@ -153,33 +158,41 @@ class NodeScheduler:
 
     def get_node(self, node_id: str) -> GatewayNodeInfo | None:
         with self._lock:
-            self._refresh_health_locked()
             node = self._nodes.get(node_id)
-            return None if node is None else node.to_model()
+            if node is None:
+                return None
+            return self._fresh_model_locked(node, _utcnow())
 
     def list_nodes(self) -> list[GatewayNodeInfo]:
         with self._lock:
-            self._refresh_health_locked()
+            now = _utcnow()
             return [
-                self._copy_node(node).to_model()
+                self._fresh_model_locked(node, now)
                 for node in sorted(self._nodes.values(), key=lambda item: item.node_id)
             ]
 
     def stats(self) -> dict[str, object]:
         with self._lock:
-            self._refresh_health_locked()
+            now = _utcnow()
             return {
                 "nodes": [
-                    self._copy_node(node).to_model().model_dump(mode="json")
+                    self._fresh_model_locked(node, now).model_dump(mode="json")
                     for node in sorted(self._nodes.values(), key=lambda item: item.node_id)
                 ],
             }
 
+    def _fresh_model_locked(self, node: GatewayNode, now: datetime) -> GatewayNodeInfo:
+        """Return a snapshot with heartbeat-derived health but no mutation."""
+        return replace(node, healthy=self._is_node_healthy(node, now)).to_model()
+
+    def _is_node_healthy(self, node: GatewayNode, now: datetime) -> bool:
+        timeout_seconds = max(1.0, node.heartbeat_interval_seconds * self._stale_factor)
+        return (now - node.last_heartbeat).total_seconds() <= timeout_seconds
+
     def _refresh_health_locked(self) -> None:
         now = _utcnow()
         for node in self._nodes.values():
-            timeout_seconds = max(1.0, node.heartbeat_interval_seconds * self._stale_factor)
-            node.healthy = (now - node.last_heartbeat).total_seconds() <= timeout_seconds
+            node.healthy = self._is_node_healthy(node, now)
 
     @staticmethod
     def _node_score(node: GatewayNode) -> tuple[float, float, float, float, float, str]:
@@ -231,7 +244,3 @@ class NodeScheduler:
     def _maybe_remove_drained_locked(self, node_id: str, node: GatewayNode) -> None:
         if node.draining and node.total_sessions == 0:
             self._nodes.pop(node_id, None)
-
-    @staticmethod
-    def _copy_node(node: GatewayNode) -> GatewayNode:
-        return replace(node)
