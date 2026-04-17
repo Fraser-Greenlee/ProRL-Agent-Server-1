@@ -1,7 +1,7 @@
 """Shared skeleton for git-diff patch evaluators.
 
-Both :mod:`polar.trajectory.evaluator.swegym_harness` and
-:mod:`polar.trajectory.evaluator.output_unit_tests` grade a trajectory by:
+Both :mod:`polar.trajectory.evaluator.swebench_harness` and
+:mod:`polar.trajectory.evaluator.test_on_output` grade a trajectory by:
 
 1. Pulling a git-diff patch out of the source runtime.
 2. Filtering out noise (``__pycache__`` etc.).

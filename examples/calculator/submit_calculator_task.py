@@ -271,7 +271,7 @@ def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
         "agent": agent_spec_for_harness(args.harness, args.model_name),
         "builder": builder_spec_for_harness(args.harness),
         "evaluator": {
-            "strategy": "output_unit_tests",
+            "strategy": "test_on_output",
             "config": {
                 "repo_dir": "/polar/session/workspace",
                 "patch_command": "cd /polar/session/workspace && git add -A && git diff --cached --binary",

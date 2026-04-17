@@ -1,4 +1,4 @@
-"""Built-in trajectory builder that preserves every completion record."""
+"""Built-in trajectory builder that emits one trace per request/completion."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from polar.trajectory.builder.record_utils import build_trace_from_completion
 from polar.trajectory.models import CompletionSession, Trajectory
 
 
-class AllRecordsBuilder(BaseTrajectoryBuilder):
+class PerRequestBuilder(BaseTrajectoryBuilder):
     """Convert every stored completion record into one trajectory trace."""
 
     async def build(self, session: CompletionSession) -> Trajectory:
@@ -15,7 +15,7 @@ class AllRecordsBuilder(BaseTrajectoryBuilder):
             return Trajectory(
                 status="ERROR",
                 metadata={
-                    "builder": "all_records",
+                    "builder": "per_request",
                     "session_id": session.session_id,
                     "record_count": 0,
                 },
@@ -26,7 +26,7 @@ class AllRecordsBuilder(BaseTrajectoryBuilder):
         return Trajectory(
             status="COMPLETED",
             metadata={
-                "builder": "all_records",
+                "builder": "per_request",
                 "session_id": session.session_id,
                 "task_id": session.task_id,
                 "api_type": session.api_type,

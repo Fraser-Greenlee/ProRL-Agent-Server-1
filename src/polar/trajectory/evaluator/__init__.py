@@ -1,13 +1,13 @@
 """Built-in trajectory evaluators."""
 
 from polar.trajectory.evaluator.base import BaseTrajectoryEvaluator
-from polar.trajectory.evaluator.output_unit_tests import OutputUnitTestsEvaluator
-from polar.trajectory.evaluator.status_outcome import StatusOutcomeEvaluator
-from polar.trajectory.evaluator.swegym_harness import SweGymHarnessEvaluator
+from polar.trajectory.evaluator.session_completed import SessionCompletedEvaluator
+from polar.trajectory.evaluator.swebench_harness import SwebenchHarnessEvaluator
+from polar.trajectory.evaluator.test_on_output import TestOnOutputEvaluator
 
 __all__ = [
     "BaseTrajectoryEvaluator",
-    "OutputUnitTestsEvaluator",
-    "StatusOutcomeEvaluator",
-    "SweGymHarnessEvaluator",
+    "SessionCompletedEvaluator",
+    "SwebenchHarnessEvaluator",
+    "TestOnOutputEvaluator",
 ]

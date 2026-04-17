@@ -1,6 +1,6 @@
-# SWE-Gym Slime GRPO (Hierarchical Advantage)
+# SWE-Gym Slime GRPO (Shared-Advantage)
 
-Fully async RL training on the curated 10-task SWE-Gym sample using **Polar** for agent rollout and **Slime** for distributed training with native GPU-to-GPU weight sync. Polar owns advantage estimation via its `HierarchicalGroupAdvantageEstimator`, which decomposes credit into between-trajectory (GRPO-style) and within-trajectory (per-trace) components.
+Fully async RL training on the curated 10-task SWE-Gym sample using **Polar** for agent rollout and **Slime** for distributed training with native GPU-to-GPU weight sync. Polar owns advantage estimation via its `ShareAdvInGroupAdvantageEstimator` — every trace inside one trajectory shares the same GRPO-standardized advantage, derived from the single `swebench_harness` outcome reward.
 
 ## Architecture
 
@@ -74,19 +74,25 @@ Override paths if cloned elsewhere:
 SLIME_DIR=/path/to/slime MEGATRON_DIR=/path/to/Megatron-LM bash run.sh
 ```
 
-## Advantage Estimation
+## Trajectory construction (`per_request`)
 
-Polar computes per-trace advantages before handing samples to Slime (`--advantage-estimator external`). The `HierarchicalGroupAdvantageEstimator` decomposes the advantage for each trace into two levels:
+Polar's `per_request` builder emits **one trace per upstream completion**: every LLM call made during the session (main agent turns, subagent calls, parallel agent branches) becomes an independently-trainable trace. Nothing is merged or truncated — the builder is lossless, and the list of traces inside a trajectory mirrors the full call graph of the agent session.
+
+This pairs naturally with the shared-advantage estimator below: the trajectory's single `swebench_harness` outcome (resolved / unresolved) is the common ground truth for every call the agent made toward that outcome.
+
+## Advantage estimation (`share_adv_in_group`)
+
+Polar computes per-trace advantages before handing samples to Slime (`--advantage-estimator external`). `ShareAdvInGroupAdvantageEstimator` does standard GRPO at the trajectory level — one outcome per trajectory, standardize across the group, broadcast the resulting advantage to every trace in that trajectory:
 
 ```
-A(trace j in traj i) = (1/K_i) * [A_between(i) + β · A_within(i,j)]
+A(trace j in traj i) = (R_i - mean_group) / std_group
 ```
 
-- **A_between** — GRPO-style: how good is this trajectory vs others in the group
-- **A_within** — credit assignment: how good is this trace vs siblings in the same trajectory
-- **1/K_i** — normalizes so each trajectory contributes equally regardless of trace count
+- **One reward per trajectory.** The `swebench_harness` evaluator returns one `outcome_reward` for the whole session; the estimator treats that as the shared reward. Per-trace reward variance is rejected as a config error — if you actually want per-trace credit assignment, use `hierarchical_group` instead.
+- **Shared advantage.** Every trace in the trajectory (main agent turns, subagent calls, parallel branches — whatever the builder emitted) receives the exact same advantage. "一个 OpenCode 里所有 agent traces 吃大锅饭" — they rise and fall together on the shared outcome.
+- **Pure GRPO between trajectories.** Advantages are `(R - mean) / std` across the group, so when every trajectory has exactly one trace this reduces to standard GRPO.
 
-All traces in a trajectory go to training — builders own trace curation (e.g. `all_records` for turn-by-turn, `prefix_merging` for aggregated chains). Configure in `polar_config.yaml` under `polar_adv_estimator`. Set `beta: 0` for pure GRPO behavior. Remove the block entirely to fall back to Slime's built-in estimators.
+Configure in `polar_config.yaml` under `polar_adv_estimator`. Remove the block entirely to fall back to Slime's built-in estimators.
 
 ### Off-policy correction (`--use-tis`)
 

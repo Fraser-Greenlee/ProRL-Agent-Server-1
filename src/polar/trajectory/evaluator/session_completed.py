@@ -1,4 +1,4 @@
-"""Built-in evaluator that scores based on trajectory completion status."""
+"""Built-in evaluator that scores based on whether the session completed."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from polar.trajectory.evaluator.base import BaseTrajectoryEvaluator
 from polar.trajectory.models import EvalResult, Trajectory
 
 
-class StatusOutcomeEvaluator(BaseTrajectoryEvaluator):
+class SessionCompletedEvaluator(BaseTrajectoryEvaluator):
     """Return reward 1.0 for COMPLETED trajectories, 0.0 otherwise."""
 
     async def evaluate(self, trajectory: Trajectory, **runtime: Any) -> EvalResult:

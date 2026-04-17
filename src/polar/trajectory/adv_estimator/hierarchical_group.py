@@ -22,10 +22,9 @@ from __future__ import annotations
 import statistics
 from typing import Any
 
+from polar.trajectory.adv_estimator._stats import standardize
 from polar.trajectory.adv_estimator.base import BaseAdvantageEstimator
 from polar.trajectory.models import Trajectory
-
-_EPS = 1e-8
 
 
 class HierarchicalGroupAdvantageEstimator(BaseAdvantageEstimator):
@@ -50,7 +49,7 @@ class HierarchicalGroupAdvantageEstimator(BaseAdvantageEstimator):
             return trajectories
 
         outcomes = [self._trajectory_outcome(traj) for traj in trajectories]
-        between_advs = _standardize(outcomes)
+        between_advs = standardize(outcomes)
 
         updated: list[Trajectory] = []
         for traj, between_adv in zip(trajectories, between_advs):
@@ -58,7 +57,7 @@ class HierarchicalGroupAdvantageEstimator(BaseAdvantageEstimator):
                 t.reward if t.reward is not None else 0.0
                 for t in traj.traces
             ]
-            within_advs = _standardize(trace_rewards)
+            within_advs = standardize(trace_rewards)
             k = len(traj.traces) or 1
             new_traces = []
             for trace, within_adv in zip(traj.traces, within_advs):
@@ -75,15 +74,3 @@ class HierarchicalGroupAdvantageEstimator(BaseAdvantageEstimator):
         if self.aggregate == "max":
             return max(rewards)
         return statistics.mean(rewards)
-
-
-def _standardize(values: list[float]) -> list[float]:
-    """(x - mean) / std, returns zeros when std ~ 0 or len <= 1."""
-    n = len(values)
-    if n <= 1:
-        return [0.0] * n
-    mu = statistics.mean(values)
-    sigma = statistics.pstdev(values)
-    if sigma < _EPS:
-        return [0.0] * n
-    return [(v - mu) / sigma for v in values]

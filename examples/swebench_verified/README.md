@@ -9,15 +9,9 @@ Each task runs an agent inside a per-instance container with the repo at `base_c
 
 ```bash
 uv venv
-uv pip install -e .
+uv pip install -e ".[swebench]"
 uv pip install --prerelease=allow sglang==0.5.10
 bash scripts/patch/patch_sglang.sh
-```
-
-Install host-side evaluator dependencies (swebench grading + HuggingFace datasets):
-
-```bash
-bash examples/swebench_verified/setup_host.sh
 ```
 
 ## Quick Start
@@ -73,7 +67,6 @@ uv run python examples/swebench_verified/submit_swebench_tasks.py \
   --topology examples/swebench_verified/topology.yaml \
   --runtime-backend docker \
   --num-samples 1 \
-  --max-concurrent 4 \
   --max-tasks 10
 
 # pass@8 for first 10 tasks
@@ -82,6 +75,5 @@ uv run python examples/swebench_verified/submit_swebench_tasks.py \
   --topology examples/swebench_verified/topology.yaml \
   --runtime-backend docker \
   --num-samples 8 \
-  --max-concurrent 4 \
   --max-tasks 10
 ```

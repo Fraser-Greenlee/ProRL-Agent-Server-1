@@ -57,10 +57,14 @@ class StrategyRegistry(Generic[T]):
 
 def default_builder_registry() -> StrategyRegistry:
     """Pre-populated registry with built-in trajectory builders."""
-    from polar.trajectory.builder import AllRecordsBuilder, BaseTrajectoryBuilder, PrefixMergingBuilder
+    from polar.trajectory.builder import (
+        BaseTrajectoryBuilder,
+        PerRequestBuilder,
+        PrefixMergingBuilder,
+    )
 
     registry: StrategyRegistry[BaseTrajectoryBuilder] = StrategyRegistry(BaseTrajectoryBuilder)
-    registry.register("all_records", AllRecordsBuilder)
+    registry.register("per_request", PerRequestBuilder)
     registry.register("prefix_merging", PrefixMergingBuilder)
     return registry
 
@@ -69,15 +73,15 @@ def default_evaluator_registry() -> StrategyRegistry:
     """Pre-populated registry with built-in trajectory evaluators."""
     from polar.trajectory.evaluator import (
         BaseTrajectoryEvaluator,
-        OutputUnitTestsEvaluator,
-        StatusOutcomeEvaluator,
-        SweGymHarnessEvaluator,
+        SessionCompletedEvaluator,
+        SwebenchHarnessEvaluator,
+        TestOnOutputEvaluator,
     )
 
     registry: StrategyRegistry[BaseTrajectoryEvaluator] = StrategyRegistry(BaseTrajectoryEvaluator)
-    registry.register("swegym_harness", SweGymHarnessEvaluator)
-    registry.register("output_unit_tests", OutputUnitTestsEvaluator)
-    registry.register("status_outcome", StatusOutcomeEvaluator)
+    registry.register("session_completed", SessionCompletedEvaluator)
+    registry.register("swebench_harness", SwebenchHarnessEvaluator)
+    registry.register("test_on_output", TestOnOutputEvaluator)
     return registry
 
 
@@ -86,8 +90,10 @@ def default_adv_estimator_registry() -> StrategyRegistry:
     from polar.trajectory.adv_estimator import (
         BaseAdvantageEstimator,
         HierarchicalGroupAdvantageEstimator,
+        ShareAdvInGroupAdvantageEstimator,
     )
 
     registry: StrategyRegistry[BaseAdvantageEstimator] = StrategyRegistry(BaseAdvantageEstimator)
     registry.register("hierarchical_group", HierarchicalGroupAdvantageEstimator)
+    registry.register("share_adv_in_group", ShareAdvInGroupAdvantageEstimator)
     return registry

@@ -97,7 +97,7 @@ def build_task_payload(
         "agent": agent_spec_for_harness(harness, model_name),
         "builder": builder_spec_for_harness(harness),
         "evaluator": {
-            "strategy": "output_unit_tests",
+            "strategy": "test_on_output",
             "config": {
                 "repo_dir": "/polar/session/workspace",
                 "patch_command": "cd /polar/session/workspace && git add -A && git diff --cached --binary",

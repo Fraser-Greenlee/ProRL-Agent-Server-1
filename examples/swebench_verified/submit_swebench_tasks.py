@@ -172,9 +172,9 @@ def build_task_request(
             "settings": {},
             "env": {},
         },
-        "builder": {"strategy": "all_records"},
+        "builder": {"strategy": "per_request"},
         "evaluator": {
-            "strategy": "swegym_harness",
+            "strategy": "swebench_harness",
             "config": {
                 "repo_dir": "/testbed",
                 "patch_command": (

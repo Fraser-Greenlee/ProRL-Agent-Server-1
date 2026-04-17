@@ -6,12 +6,12 @@ import pytest
 
 from polar.trajectory.builder.record_utils import build_trace_from_completion
 from polar.trajectory.evaluator._patch_utils import BasePatchEvaluator
-from polar.trajectory.evaluator.output_unit_tests import (
-    OutputUnitTestsEvaluator,
+from polar.trajectory.evaluator.swebench_harness import SwebenchHarnessEvaluator
+from polar.trajectory.evaluator.test_on_output import (
+    TestOnOutputEvaluator,
     _normalize_expected_nodeid,
     _parse_expected_output,
 )
-from polar.trajectory.evaluator.swegym_harness import SweGymHarnessEvaluator
 from polar.trajectory.models import CompletionRecord, Trace
 from polar.trajectory.registry import default_evaluator_registry
 
@@ -56,9 +56,9 @@ def test_build_trace_from_completion_ignores_tools_in_request() -> None:
 def test_default_registry_has_new_strategy_names() -> None:
     registry = default_evaluator_registry()
     assert set(registry.list_strategies()) == {
-        "status_outcome",
-        "swegym_harness",
-        "output_unit_tests",
+        "session_completed",
+        "swebench_harness",
+        "test_on_output",
     }
 
 
@@ -72,19 +72,19 @@ def test_default_registry_drops_old_combined_name() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_swegym_harness_requires_instance() -> None:
+def test_swebench_harness_requires_instance() -> None:
     with pytest.raises(ValueError, match="instance"):
-        SweGymHarnessEvaluator(instance={})
+        SwebenchHarnessEvaluator(instance={})
 
 
-def test_output_unit_tests_requires_test_command() -> None:
+def test_test_on_output_requires_test_command() -> None:
     with pytest.raises(ValueError, match="test_command"):
-        OutputUnitTestsEvaluator(test_command=" ", expected_output_json={"x": "PASSED"})
+        TestOnOutputEvaluator(test_command=" ", expected_output_json={"x": "PASSED"})
 
 
-def test_output_unit_tests_requires_expected_output_json() -> None:
+def test_test_on_output_requires_expected_output_json() -> None:
     with pytest.raises(ValueError, match="expected_output_json"):
-        OutputUnitTestsEvaluator(test_command="pytest", expected_output_json=None)
+        TestOnOutputEvaluator(test_command="pytest", expected_output_json=None)
 
 
 # ---------------------------------------------------------------------------
@@ -92,15 +92,15 @@ def test_output_unit_tests_requires_expected_output_json() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_output_unit_tests() -> OutputUnitTestsEvaluator:
-    return OutputUnitTestsEvaluator(
+def _make_test_on_output() -> TestOnOutputEvaluator:
+    return TestOnOutputEvaluator(
         test_command="pytest",
         expected_output_json={"foo.test_a": "PASSED"},
     )
 
 
 def test_base_patch_evaluator_filters_pycache_sections() -> None:
-    evaluator = _make_output_unit_tests()
+    evaluator = _make_test_on_output()
     patch = (
         "diff --git a/src/main.py b/src/main.py\n"
         "--- a/src/main.py\n"
@@ -118,7 +118,7 @@ def test_base_patch_evaluator_filters_pycache_sections() -> None:
 
 def test_base_patch_evaluator_rejects_empty_repo_dir() -> None:
     with pytest.raises(ValueError, match="repo_dir"):
-        OutputUnitTestsEvaluator(
+        TestOnOutputEvaluator(
             repo_dir=" ",
             test_command="pytest",
             expected_output_json={"x": "PASSED"},
@@ -127,7 +127,7 @@ def test_base_patch_evaluator_rejects_empty_repo_dir() -> None:
 
 def test_base_patch_evaluator_rejects_non_positive_timeouts() -> None:
     with pytest.raises(ValueError, match="timeouts"):
-        OutputUnitTestsEvaluator(
+        TestOnOutputEvaluator(
             test_command="pytest",
             expected_output_json={"x": "PASSED"},
             apply_timeout=0.0,
@@ -137,12 +137,12 @@ def test_base_patch_evaluator_rejects_non_positive_timeouts() -> None:
 def test_base_patch_evaluator_subclass_contract() -> None:
     # Both concrete strategies subclass the shared base so the skeleton
     # (extract → filter → apply → grade) is reused.
-    assert issubclass(SweGymHarnessEvaluator, BasePatchEvaluator)
-    assert issubclass(OutputUnitTestsEvaluator, BasePatchEvaluator)
+    assert issubclass(SwebenchHarnessEvaluator, BasePatchEvaluator)
+    assert issubclass(TestOnOutputEvaluator, BasePatchEvaluator)
 
 
 # ---------------------------------------------------------------------------
-# output_unit_tests: node-id normalization + exact-match resolved rule
+# test_on_output: node-id normalization + exact-match resolved rule
 # ---------------------------------------------------------------------------
 
 
@@ -176,8 +176,8 @@ def test_parse_expected_output_strips_ansi_escapes() -> None:
     assert _parse_expected_output(output) == {"test_add": "PASSED"}
 
 
-def test_output_unit_tests_coerces_json_string_to_dict() -> None:
-    evaluator = OutputUnitTestsEvaluator(
+def test_test_on_output_coerces_json_string_to_dict() -> None:
+    evaluator = TestOnOutputEvaluator(
         test_command="pytest",
         expected_output_json='{"tests/test_calc.py::TestCalc::test_add": "PASSED"}',
     )

@@ -41,9 +41,9 @@ polar_task_template:
         conda activate polar-sweagent &&
         export PATH=/opt/miniconda3/envs/testbed/bin:$PATH
   builder:
-    strategy: "prefix_merging"
+    strategy: "per_request"
   evaluator:
-    strategy: "swegym_harness"
+    strategy: "swebench_harness"
     refresh_runtime: true
     config:
       repo_dir: "/testbed"
@@ -56,10 +56,12 @@ polar_task_template:
 # Advantage estimator — computes per-trace advantages on the Polar side
 # before passing to Slime.  Requires --advantage-estimator external in Slime.
 # Set to null (or remove) to let Slime compute advantages internally.
+#
+# share_adv_in_group: all traces in a trajectory share one outcome reward
+# (the swebench_harness resolved/unresolved signal), so they share one
+# GRPO-standardized advantage — subagents, parallel agents etc. "eat from
+# the big pot".
 polar_adv_estimator:
-  strategy: "hierarchical_group"
-  config:
-    beta: 0.5          # within-trajectory credit weight (0 = pure GRPO)
-    aggregate: "mean"  # trajectory-level reward aggregation: "mean" or "max"
+  strategy: "share_adv_in_group"
 
 polar_task_id_template: "polar-swegym-grpo-{rollout_id}-{sample.group_index}"

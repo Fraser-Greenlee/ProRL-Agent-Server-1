@@ -1,4 +1,4 @@
-"""``swegym_harness`` evaluator — grade via the SWE-Gym / SWE-Bench harness.
+"""``swebench_harness`` evaluator — grade via the SWE-Bench / SWE-Gym harness.
 
 Use this strategy when you are reproducing SWE-Bench-style benchmarks and
 want per-instance grading that matches what the harness reports. The harness
@@ -43,10 +43,10 @@ from polar.trajectory.evaluator._patch_utils import (
 )
 
 
-class SweGymHarnessEvaluator(BasePatchEvaluator):
-    """Grades generated patches using the SWE-Gym / SWE-Bench harness."""
+class SwebenchHarnessEvaluator(BasePatchEvaluator):
+    """Grades generated patches using the SWE-Bench / SWE-Gym harness."""
 
-    MODE = "swegym_harness"
+    MODE = "swebench_harness"
 
     def __init__(
         self,
@@ -66,7 +66,7 @@ class SweGymHarnessEvaluator(BasePatchEvaluator):
             exclude_patterns=exclude_patterns,
         )
         if not instance:
-            raise ValueError("swegym_harness requires a non-empty 'instance' config")
+            raise ValueError("swebench_harness requires a non-empty 'instance' config")
         self.instance = instance
 
     async def _grade(
@@ -85,7 +85,7 @@ class SweGymHarnessEvaluator(BasePatchEvaluator):
         if "version" not in instance and "base_commit" in instance:
             instance["version"] = instance["base_commit"]
 
-        test_spec, get_eval_report = _load_swegym_harness(instance)
+        test_spec, get_eval_report = _load_harness(instance)
         eval_script_host = host_session_dir / "eval.sh"
         eval_script_host.write_text(test_spec.eval_script)
 
@@ -100,11 +100,11 @@ class SweGymHarnessEvaluator(BasePatchEvaluator):
             timeout_sec=bounded_timeout(self.test_timeout, timeout_cap),
         )
         if result.return_code == -1:
-            raise TimeoutError("swegym_harness evaluation timed out")
+            raise TimeoutError("swebench_harness evaluation timed out")
 
         combined_path.write_text((result.stdout or "") + (result.stderr or ""))
         prediction = {"model_patch": patch, "instance_id": instance_id}
-        grading_report = _grade_swegym_run(
+        grading_report = _grade_harness_run(
             get_eval_report,
             test_spec=test_spec,
             prediction=prediction,
@@ -125,7 +125,7 @@ class SweGymHarnessEvaluator(BasePatchEvaluator):
         )
 
 
-def _load_swegym_harness(instance: dict[str, Any]) -> tuple[Any, Any]:
+def _load_harness(instance: dict[str, Any]) -> tuple[Any, Any]:
     try:
         from swegym.harness.grading import get_eval_report
         from swegym.harness.test_spec import make_test_spec
@@ -135,7 +135,7 @@ def _load_swegym_harness(instance: dict[str, Any]) -> tuple[Any, Any]:
     return make_test_spec(instance), get_eval_report
 
 
-def _grade_swegym_run(
+def _grade_harness_run(
     get_eval_report: Any,
     *,
     test_spec: Any,

@@ -1,4 +1,4 @@
-"""``output_unit_tests`` evaluator — grade by parsing pytest-style output.
+"""``test_on_output`` evaluator — grade by parsing pytest-style output.
 
 Use this strategy for custom unit-test tasks where you own the test command
 and can express the expected per-test outcomes as a JSON mapping. This is the
@@ -52,10 +52,11 @@ from polar.trajectory.evaluator._patch_utils import (
 )
 
 
-class OutputUnitTestsEvaluator(BasePatchEvaluator):
+class TestOnOutputEvaluator(BasePatchEvaluator):
     """Grades generated patches by diffing pytest output against an expected map."""
 
-    MODE = "output_unit_tests"
+    __test__ = False  # tell pytest this "Test*" class isn't a test class
+    MODE = "test_on_output"
 
     def __init__(
         self,
@@ -77,11 +78,11 @@ class OutputUnitTestsEvaluator(BasePatchEvaluator):
         )
         cleaned = test_command.strip()
         if not cleaned:
-            raise ValueError("output_unit_tests requires a non-empty 'test_command'")
+            raise ValueError("test_on_output requires a non-empty 'test_command'")
         self.test_command = cleaned
         if expected_output_json is None:
             raise ValueError(
-                "output_unit_tests requires 'expected_output_json' in evaluator config"
+                "test_on_output requires 'expected_output_json' in evaluator config"
             )
         self.expected_output_json = expected_output_json
 
@@ -102,7 +103,7 @@ class OutputUnitTestsEvaluator(BasePatchEvaluator):
             timeout_sec=bounded_timeout(self.test_timeout, timeout_cap),
         )
         if result.return_code == -1:
-            raise TimeoutError("output_unit_tests evaluation timed out")
+            raise TimeoutError("test_on_output evaluation timed out")
         output = (result.stdout or "") + (result.stderr or "")
         combined_path.write_text(output)
         expected = self._coerce_expected_output_json()

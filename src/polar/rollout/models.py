@@ -53,7 +53,7 @@ def _new_stage_timer() -> "StageTimer":
 
 
 def _default_builder_spec() -> StrategySpec:
-    return StrategySpec(strategy="all_records")
+    return StrategySpec(strategy="per_request")
 
 
 class TaskRequest(BaseModel):

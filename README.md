@@ -36,7 +36,7 @@ Completion records are assembled into structured traces via extensible builders:
 
 | Builder | Behavior |
 |---------|----------|
-| `all_records` | One trace per completion — simple and lossless |
+| `per_request` | One trace per completion — simple and lossless |
 | `prefix_merging` | Merges consecutive completions into longer multi-turn traces when each prompt is exactly the prior prompt + response; splits on context compaction |
 
 ---

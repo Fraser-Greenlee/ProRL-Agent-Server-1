@@ -21,6 +21,10 @@ slime = [
     "slime",
     "transformers",
 ]
+swebench = [
+    "swebench",
+    "datasets",
+]
 
 [project.scripts]
 polar = "polar.cli:main"
