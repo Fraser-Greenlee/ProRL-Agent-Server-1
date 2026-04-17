@@ -12,8 +12,8 @@ gateway:
       port: 8100
       public_url: http://127.0.0.1:8100
       max_init_workers: 8
-      max_run_workers: 6
-      max_postrun_workers: 6
+      max_run_workers: 8
+      max_postrun_workers: 8
       model_served: Qwen/Qwen3-4B
       sglang:
         # Points at slime's sglang-router (started by Ray inside docker)

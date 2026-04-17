@@ -181,5 +181,5 @@ ray job submit --address="http://127.0.0.1:8265" \
     --wandb-project "${WANDB_PROJECT:-polar-swegym-grpo}" \
     --wandb-exp-name "${WANDB_RUN_NAME:-swegym-async-grpo}" \
     --wandb-group "${WANDB_GROUP:-swegym-async}" \
-    --sglang-router-ip 0.0.0.0 \
-    --sglang-router-port 9000
+    --sglang-router-port 9000 \
+    --sglang-tool-call-parser qwen

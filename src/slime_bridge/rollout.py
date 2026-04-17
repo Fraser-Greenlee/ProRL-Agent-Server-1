@@ -12,6 +12,7 @@ import asyncio
 import atexit
 import logging
 import queue
+import statistics
 import threading
 import time
 from collections.abc import Callable
@@ -470,6 +471,7 @@ def _build_metrics(
     }
     if rewards:
         metrics["polar/reward_mean"] = sum(rewards) / len(rewards)
+    metrics.update(_polar_extra_metrics(flat_samples, rewards))
     return metrics
 
 
@@ -532,6 +534,7 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
     }
     if rewards:
         metrics["polar/reward_mean"] = sum(rewards) / len(rewards)
+    metrics.update(_polar_extra_metrics(flat, rewards))
     return RolloutFnTrainOutput(samples=data, metrics=metrics)
 
 
@@ -551,6 +554,37 @@ def _extract_sample_reward(sample: Any, reward_key: str) -> float:
     if isinstance(reward, (int, float)):
         return float(reward)
     return 0.0
+
+
+def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[str, float]:
+    """Session-timing means (deduped by session_id), reward_std, advantage_std."""
+    out: dict[str, float] = {}
+    seen: set[str] = set()
+    init_ms: list[float] = []
+    run_ms: list[float] = []
+    postrun_ms: list[float] = []
+    advantages: list[float] = []
+    for sample in flat_samples:
+        polar_meta = sample.metadata.get("polar", {})
+        session_id = sample.session_id
+        if session_id and session_id not in seen:
+            seen.add(session_id)
+            timing = polar_meta.get("timing") or {}
+            init_ms.append(float(timing.get("init_ms", 0.0)))
+            run_ms.append(float(timing.get("run_ms", 0.0)))
+            postrun_ms.append(float(timing.get("postrun_ms", 0.0)))
+        if "advantage" in polar_meta:
+            advantages.append(float(polar_meta["advantage"]))
+
+    if init_ms:
+        out["polar/session_ms/init_mean"] = sum(init_ms) / len(init_ms)
+        out["polar/session_ms/run_mean"] = sum(run_ms) / len(run_ms)
+        out["polar/session_ms/postrun_mean"] = sum(postrun_ms) / len(postrun_ms)
+    if len(rewards) > 1:
+        out["polar/reward_std"] = statistics.pstdev(rewards)
+    if len(advantages) > 1:
+        out["polar/advantage_std"] = statistics.pstdev(advantages)
+    return out
 
 
 def _is_truncated(sample: Any) -> bool:

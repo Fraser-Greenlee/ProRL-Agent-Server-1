@@ -33,7 +33,7 @@ def main() -> None:
             "metadata": {
                 "instance_id": instance_id,
                 "instance": instance,
-                "polar_image": f"docker-daemon:{image_tag}",
+                "polar_image": image_tag,
             },
         })
     OUTPUT.write_text("\n".join(json.dumps(r, ensure_ascii=True) for r in rows) + "\n")
