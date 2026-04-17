@@ -22,7 +22,6 @@ SUPPORTED_HARNESSES = (
     "codex",
     "gemini_cli",
     "opencode",
-    "openhands_sdk",
     "qwen_code",
     "swe_agent",
 )
@@ -66,12 +65,15 @@ NODE_HARNESS_PACKAGES: dict[str, str] = {
     "qwen_code": "@qwen-code/qwen-code@0.14.5",
 }
 
-OPENHANDS_SDK_PINS = "openhands-sdk==1.17.0 openhands-tools==1.17.0 fastapi==0.136.0"
 SWE_AGENT_GIT_REF = "v1.1.0"
 
+# Session-local (not $HOME): apptainer binds the host home into the
+# container, which leaks leftovers across runs and breaks venv creation.
+SESSION_VENV = "/polar/session/.venv"
 PYTHON_PREPARE = (
-    'python3 -m venv "$HOME/.venv" && '
-    '. "$HOME/.venv/bin/activate" && '
+    f'rm -rf {SESSION_VENV} && '
+    f'python3 -m venv {SESSION_VENV} && '
+    f'. {SESSION_VENV}/bin/activate && '
     'python -m pip install --upgrade pip'
 )
 
@@ -89,12 +91,6 @@ def prepare_command_for_harness(harness: str) -> str:
     install_command = ""
     if harness in NODE_HARNESS_PACKAGES:
         install_command = f'npm install -g {NODE_HARNESS_PACKAGES[harness]} && '
-    elif harness == "openhands_sdk":
-        install_command = (
-            f"{PYTHON_PREPARE} && "
-            # No --quiet: surface resolver / network errors in the prepare log.
-            f"python -m pip install --no-cache-dir {OPENHANDS_SDK_PINS} && "
-        )
     elif harness == "swe_agent":
         install_command = (
             f"{PYTHON_PREPARE} && "
@@ -109,13 +105,7 @@ def prepare_command_for_harness(harness: str) -> str:
             'cp /tmp/swe-agent-src/config/default.yaml /polar/session/tools/swe-agent/default.yaml && '
             'mkdir -p "$SITE/trajectories" && '
             "rm -rf /tmp/swe-agent-src && "
-            # Create wrapper script that activates venv (bypasses missing entry point)
-            "mkdir -p \"$HOME/.local/bin\" && "
-            "printf '#!/bin/bash\\nsource \"$HOME/.venv/bin/activate\"\\nexec python -m sweagent.run.run \"$@\"\\n' "
-            "> \"$HOME/.local/bin/sweagent\" && "
-            "chmod +x \"$HOME/.local/bin/sweagent\" && "
-            # SWE-Agent runs as root (via sudo -E in the harness)
-
+            # SWE-Agent runs as root (via sudo -E in the harness).
         )
     return install_command + WORKSPACE_PREPARE
 
@@ -147,7 +137,6 @@ _HARNESS_EVAL_EXCLUDES: dict[str, list[str]] = {
     "codex": [".codex/**", "**/.codex/**"],
     "gemini_cli": [".gemini/**", "**/.gemini/**"],
     "opencode": [".opencode/**", "**/.opencode/**", ".config/opencode/**"],
-    "openhands_sdk": [".openhands/**", "**/.openhands/**"],
     "qwen_code": [".qwen/**", "**/.qwen/**"],
     "swe_agent": [
         "trajectories/**",
@@ -170,7 +159,6 @@ def model_name_for_harness(harness: str, override: str | None) -> str | None:
         "claude_code": "claude-opus-4-5",
         "gemini_cli": "gemini-2.5-flash-lite",
         "opencode": "openai/gpt-5.4",
-        "openhands_sdk": "openai/gpt-5.4",
         "qwen_code": "qwen3-coder-plus",
         "swe_agent": "openai/gpt-5.4",
     }

@@ -68,6 +68,7 @@ uv run python examples/calculator/build_image.py
 
 ### 4. Submit tasks
 
+For single harness:
 
 ```bash
 uv run python examples/calculator/submit_calculator_task.py \
@@ -77,28 +78,16 @@ uv run python examples/calculator/submit_calculator_task.py \
   --num-samples 4
 ```
 
-Supported harness names:
+Or to submit on all harnesses:
+
+```bash
+uv run python examples/calculator/submit_all.py --num-samples 4
+```
 
 - `claude_code`
 - `codex`
 - `gemini_cli`
 - `opencode`
-- `openhands_sdk`
 - `qwen_code`
 - `swe_agent`
 
-## Runtime Layout
-
-The shared runtime image includes:
-
-- Node.js
-- Python 3
-- git
-- a non-root `polar` user
-
-Each rollout then prepares a fresh workspace by:
-
-- installing the harness CLI or SDK for that run
-- creating `/polar/session/workspace`
-- uploading `calculator.py` and `test_calculator.py`
-- initializing a git repo used by the evaluator

@@ -92,7 +92,7 @@ class SweAgentHarness(BaseHarness):
                     f"{preamble}"
                     'export OPENAI_API_KEY="$OPENAI_API_KEY" OPENAI_BASE_URL="$OPENAI_BASE_URL" && '
                     # SWE-Agent requires root; use sudo with the venv python path
-                    'VENV_PY="$HOME/.venv/bin/python" && '
+                    'VENV_PY=/polar/session/.venv/bin/python && '
                     '[ -x "$VENV_PY" ] || VENV_PY=python3 && '
                     f'sudo -E "$VENV_PY" -m sweagent.run.run run '
                     f"--agent.model.name={shlex.quote(model)} "

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit all 7 harnesses (4 samples each) in one shot and print a combined summary."""
+"""Submit all 6 harnesses (4 samples each) in one shot and print a combined summary."""
 
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         choices=SUPPORTED_HARNESSES,
         default=list(SUPPORTED_HARNESSES),
-        help="Subset of harnesses to run (default: all 7)",
+        help="Subset of harnesses to run (default: all 6)",
     )
     parser.add_argument("--poll-interval", type=float, default=5.0)
     return parser.parse_args()

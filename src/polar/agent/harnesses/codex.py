@@ -23,6 +23,15 @@ class CodexHarness(BaseHarness):
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._codex_home}")
 
+        # Host-uploaded files keep the host UID, which blocks codex's
+        # exec_command-based edits (cat/tee/open) on a non-root container
+        # user. Other harnesses survive by rm+recreating the file. Best-effort;
+        # a no-op on images without sudo.
+        workdir = runtime.spec.workdir or runtime.runtime_session_dir
+        await runtime.exec(
+            f'sudo chown -R "$(id -u):$(id -g)" {shlex.quote(workdir)} 2>/dev/null || true'
+        )
+
         # Register MCP servers via TOML config
         if self.mcp_servers:
             toml_lines: list[str] = []
