@@ -11,21 +11,21 @@ gateway:
       host: 127.0.0.1
       port: 8100
       public_url: http://127.0.0.1:8100
-      max_init_workers: 4
-      max_run_workers: 2
-      max_postrun_workers: 2
-      ready_buffer_target: 2
-      model_served: Qwen/Qwen3.5-4B
+      max_init_workers: 8
+      max_run_workers: 8
+      max_postrun_workers: 8
+      ready_buffer_target: 8
+      model_served: MiniMaxAI/MiniMax-M2.5
       sglang:
         base_url: http://127.0.0.1:8000
     - id: localhost-node-02
       host: 127.0.0.1
       port: 8101
       public_url: http://127.0.0.1:8101
-      max_init_workers: 4
-      max_run_workers: 2
-      max_postrun_workers: 2
-      ready_buffer_target: 2
-      model_served: Qwen/Qwen3.5-4B
+      max_init_workers: 8
+      max_run_workers: 8
+      max_postrun_workers: 8
+      ready_buffer_target: 8
+      model_served: MiniMaxAI/MiniMax-M2.5
       sglang:
         base_url: http://127.0.0.1:8001

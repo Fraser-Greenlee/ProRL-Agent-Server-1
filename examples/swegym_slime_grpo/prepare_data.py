@@ -12,8 +12,7 @@ import json
 import sys
 from pathlib import Path
 
-# Reuse the curated task list and fetcher from the swegym example.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "swegym"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sample_tasks import (
     derived_image_for_harness,
     fetch_sample_instances,

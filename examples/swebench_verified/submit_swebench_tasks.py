@@ -172,7 +172,7 @@ def build_task_request(
             "settings": {},
             "env": {},
         },
-        "builder": {"strategy": "prefix_merging"},
+        "builder": {"strategy": "all_records"},
         "evaluator": {
             "strategy": "swegym_git_diff",
             "config": {

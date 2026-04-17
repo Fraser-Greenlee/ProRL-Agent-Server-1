@@ -31,6 +31,24 @@ class OpenCodeHarness(BaseHarness):
 
         config: dict = {
             "provider": {provider: {"models": {model_id: {}}}},
+            # Auto-allow every permission — `opencode run` is non-interactive,
+            # so any "ask" prompt would block the session forever.
+            "permission": {
+                "read": "allow",
+                "edit": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "bash": "allow",
+                "task": "allow",
+                "skill": "allow",
+                "lsp": "allow",
+                "question": "allow",
+                "webfetch": "allow",
+                "websearch": "allow",
+                "codesearch": "allow",
+                "external_directory": "allow",
+                "doom_loop": "allow",
+            },
         }
 
         # Register MCP servers

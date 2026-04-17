@@ -25,27 +25,25 @@ bash examples/swebench_verified/setup_host.sh
 ### 1. Start SGLang backends
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 uv run python -m sglang.launch_server \
-    --model-path Qwen/Qwen3.5-4B \
+CUDA_VISIBLE_DEVICES=0,1,2,3 uv run python -m sglang.launch_server \
+    --model-path MiniMaxAI/MiniMax-M2.5 \
+    --tp-size 4 \
+    --tool-call-parser minimax-m2 \
+    --reasoning-parser minimax-append-think \
     --host 0.0.0.0 \
+    --trust-remote-code \
     --port 8000 \
-    --tp-size 2 \
-    --tool-call-parser qwen3_coder \
-    --reasoning-parser qwen3 \
-    --mem-fraction-static 0.7 \
-    --context-length 262144 \
-    --trust-remote-code
+    --mem-fraction-static 0.7
 
-CUDA_VISIBLE_DEVICES=2,3 uv run python -m sglang.launch_server \
-    --model-path Qwen/Qwen3.5-4B \
+CUDA_VISIBLE_DEVICES=4,5,6,7 uv run python -m sglang.launch_server \
+    --model-path MiniMaxAI/MiniMax-M2.5 \
+    --tp-size 4 \
+    --tool-call-parser minimax-m2 \
+    --reasoning-parser minimax-append-think \
     --host 0.0.0.0 \
+    --trust-remote-code \
     --port 8001 \
-    --tp-size 2 \
-    --tool-call-parser qwen3_coder \
-    --reasoning-parser qwen3 \
-    --mem-fraction-static 0.7 \
-    --context-length 262144 \
-    --trust-remote-code
+    --mem-fraction-static 0.7
 ```
 
 ### 2. Start Polar services

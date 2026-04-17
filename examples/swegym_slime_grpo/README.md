@@ -47,7 +47,7 @@ git clone https://github.com/NVIDIA/Megatron-LM.git Megatron-LM
 pip install -e Megatron-LM
 
 # 5. Build SWE-Agent container images
-bash examples/swegym/swe_agent/setup.sh
+python examples/swegym_slime_grpo/build_images.py
 
 # 6. Apply SGLang patch (adds token IDs to logprobs) — expects sglang==0.5.10
 bash scripts/patch/patch_sglang.sh
