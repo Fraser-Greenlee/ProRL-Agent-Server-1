@@ -17,7 +17,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from polar.config import GatewayNodeConfig, TopologyConfig
-from polar.gateway.control import RolloutControlClient
 from polar.gateway.detection import APIType, detect, extract_model
 from polar.gateway.node import GatewayNodeManager
 from polar.gateway.proxy import (
@@ -43,7 +42,7 @@ from polar.gateway.streaming import (
 )
 from polar.gateway.transform import TransformManager
 from polar.gateway.transform.base import BaseTransformer
-from polar.rollout.models import SessionDispatchRequest, SessionDispatchResponse
+from polar.rollout.models import SessionDispatchRequest, SessionDispatchResponse, SessionStatus
 from polar.runtime.models import RuntimeSpec
 from polar.trajectory.registry import default_builder_registry, default_evaluator_registry
 
@@ -65,7 +64,6 @@ class GatewayState:
     transform_manager: TransformManager
     session_registry: SessionRegistry
     node_manager: GatewayNodeManager
-    control_client: RolloutControlClient | None
 
 
 _state: GatewayState | None = None
@@ -82,7 +80,7 @@ def configure_server(topology_path: str = "topology.yaml", *, node_id: str | Non
 
 def _build_state(topology: TopologyConfig, node_id: str | None) -> GatewayState:
     node = topology.select_gateway_node(node_id)
-    sglang = SGLangClient(node.sglang_base_url, timeout=node.sglang_timeout)
+    sglang = SGLangClient(node.sglang_base_url)
     storage = SessionStore()
     transform_manager = TransformManager()
     session_registry = SessionRegistry()
@@ -94,28 +92,13 @@ def _build_state(topology: TopologyConfig, node_id: str | None) -> GatewayState:
         max_init_workers=node.max_init_workers,
         max_run_workers=node.max_run_workers,
         max_postrun_workers=node.max_postrun_workers,
-        max_eval_prewarm_workers=node.max_eval_prewarm_workers,
-        ready_buffer_target=node.ready_buffer_target,
         storage=storage,
         session_registry=session_registry,
         builders=builder_registry,
         evaluators=evaluator_registry,
         default_runtime=node.default_runtime,
-    )
-    control_client = (
-        RolloutControlClient(
-            rollout_server_url=topology.gateway.rollout_server_url,
-            node_id=node.id,
-            gateway_url=node.public_url,
-            max_init_workers=node.max_init_workers,
-            max_run_workers=node.max_run_workers,
-            max_postrun_workers=node.max_postrun_workers,
-            ready_buffer_target=node.ready_buffer_target,
-            heartbeat_interval_seconds=topology.gateway.heartbeat_interval_seconds,
-            node_manager=node_manager,
-        )
-        if topology.gateway.rollout_server_url
-        else None
+        rollout_server_url=topology.gateway.rollout_server_url or None,
+        heartbeat_interval_seconds=topology.gateway.heartbeat_interval_seconds,
     )
     return GatewayState(
         topology=topology,
@@ -125,7 +108,6 @@ def _build_state(topology: TopologyConfig, node_id: str | None) -> GatewayState:
         transform_manager=transform_manager,
         session_registry=session_registry,
         node_manager=node_manager,
-        control_client=control_client,
     )
 
 
@@ -145,13 +127,9 @@ def get_state() -> GatewayState:
 async def _lifespan(_: FastAPI):
     state = get_state()
     await state.node_manager.start()
-    if state.control_client is not None:
-        await state.control_client.start()
     try:
         yield
     finally:
-        if state.control_client is not None:
-            await state.control_client.close()
         await state.node_manager.close()
         await state.sglang.close()
         state.storage.close()
@@ -309,7 +287,7 @@ def _session_response(session_id: str) -> SessionStatusResponse:
     else:
         task_id = (metadata or {}).get("task_id") or (result.task_id if result else None)
         created_at = _coerce_datetime((metadata or {}).get("created_at"))
-        status = result.status if result is not None else "REGISTERED"
+        status = result.status if result is not None else SessionStatus.REGISTERED
 
     completion_count = int((metadata or {}).get("completion_count", 0))
     return SessionStatusResponse(
@@ -401,7 +379,7 @@ async def create_session(request: Request):
         return SessionDispatchResponse(
             session_id=dispatch_request.session_id,
             task_id=dispatch_request.task_id,
-            status="REGISTERED",
+            status=SessionStatus.REGISTERED,
             node_id=state.node.id,
         )
 
@@ -415,7 +393,7 @@ async def create_session(request: Request):
         session_id,
         task_id=create_request.task_id,
         registered=True,
-        status="REGISTERED",
+        status=SessionStatus.REGISTERED,
     )
     metadata = state.storage.ensure_session(
         info.session_id,

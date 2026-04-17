@@ -14,7 +14,6 @@ gateway:
       max_init_workers: 8
       max_run_workers: 8
       max_postrun_workers: 8
-      ready_buffer_target: 8
       model_served: MiniMaxAI/MiniMax-M2.5
       sglang:
         base_url: http://127.0.0.1:8000
@@ -25,7 +24,6 @@ gateway:
       max_init_workers: 8
       max_run_workers: 8
       max_postrun_workers: 8
-      ready_buffer_target: 8
       model_served: MiniMaxAI/MiniMax-M2.5
       sglang:
         base_url: http://127.0.0.1:8001

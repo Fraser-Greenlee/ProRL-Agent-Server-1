@@ -112,18 +112,25 @@ class OpenedStream:
 
 
 class SGLangClient:
-    """Direct httpx client to SGLang's OpenAI-compatible API."""
+    """Direct httpx client to SGLang's OpenAI-compatible API.
 
-    def __init__(self, base_url: str, timeout: float = 300):
+    Per-call bound comes from the session's remaining-timeout budget
+    (`_await_with_budget` at the gateway node). The internal httpx timeout
+    is a high liveness ceiling so that a stuck SGLang can't pin a request
+    past the session deadline.
+    """
+
+    _LIVENESS_TIMEOUT_SECONDS = 900.0
+
+    def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
-                timeout=httpx.Timeout(self.timeout, connect=30),
+                timeout=httpx.Timeout(self._LIVENESS_TIMEOUT_SECONDS, connect=30),
             )
         return self._client
 

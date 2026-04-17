@@ -175,13 +175,10 @@ def render_topology_template(topology_path: str | Path, args: Any) -> dict[str, 
                     "model_served": node.model_served,
                     "sglang": {
                         "base_url": router_url,
-                        "timeout": node.sglang_timeout,
                     },
                     "max_init_workers": node.max_init_workers,
                     "max_run_workers": node.max_run_workers,
                     "max_postrun_workers": node.max_postrun_workers,
-                    "max_eval_prewarm_workers": node.max_eval_prewarm_workers,
-                    "ready_buffer_target": node.ready_buffer_target,
                     **(
                         {"default_runtime": node.default_runtime.model_dump(mode="python")}
                         if node.default_runtime is not None

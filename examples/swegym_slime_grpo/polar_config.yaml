@@ -43,7 +43,7 @@ polar_task_template:
   builder:
     strategy: "prefix_merging"
   evaluator:
-    strategy: "swegym_git_diff"
+    strategy: "swegym_harness"
     refresh_runtime: true
     config:
       repo_dir: "/testbed"

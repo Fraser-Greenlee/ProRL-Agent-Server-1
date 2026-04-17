@@ -43,13 +43,6 @@ def _extract_prompt_messages(request: dict[str, Any]) -> list[dict[str, Any]]:
     return [deepcopy(message) for message in messages if isinstance(message, dict)]
 
 
-def _extract_tools(request: dict[str, Any]) -> list[dict[str, Any]] | None:
-    tools = request.get("tools")
-    if not isinstance(tools, list) or not tools:
-        return None
-    return [deepcopy(tool) for tool in tools if isinstance(tool, dict)]
-
-
 def build_trace_from_completion(completion: CompletionRecord) -> Trace:
     """Normalize one stored completion record into a trajectory trace."""
 
@@ -70,7 +63,6 @@ def build_trace_from_completion(completion: CompletionRecord) -> Trace:
         response_ids=_extract_response_ids(response, first_choice),
         prompt_messages=_extract_prompt_messages(request),
         response_messages=[deepcopy(response_message)] if isinstance(response_message, dict) else [],
-        tools=_extract_tools(request),
         finish_reason=str(finish_reason) if finish_reason is not None else None,
         response_logprobs=_extract_response_logprobs(first_choice),
     )

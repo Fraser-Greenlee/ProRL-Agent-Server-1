@@ -280,7 +280,6 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
             response_ids=response_ids,
             prompt_messages=list(prefix_messages),
             response_messages=response_messages,
-            tools=last_trace.tools,
             finish_reason=last_trace.finish_reason,
             response_logprobs=response_logprobs,
         )

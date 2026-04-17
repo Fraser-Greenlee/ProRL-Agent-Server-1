@@ -14,7 +14,6 @@ import httpx
 from polar.gateway.dispatcher import (
     DispatcherSnapshot,
     ManagedSession,
-    PreparedRuntimeLease,
     SessionDispatcher,
     SessionStage,
 )
@@ -23,12 +22,19 @@ from polar.gateway.storage import SessionStore
 from polar.agent.base import BaseHarness
 from polar.agent.factory import create_harness
 from polar.agent.models import AgentRunResult
-from polar.rollout.models import NodeStageMetrics, SessionDispatchRequest, SessionResult
+from polar.rollout.models import (
+    NodeHeartbeatRequest,
+    NodeRegistrationRequest,
+    NodeStageMetrics,
+    SessionDispatchRequest,
+    SessionResult,
+    SessionStatus,
+)
 from polar.rollout.timer import StageTimer
 from polar.runtime.base import BaseRuntime
 from polar.runtime.factory import create_runtime
 from polar.runtime.models import ExecInput, RuntimeSpec
-from polar.trajectory.models import CompletionSession, EvalResult, EvaluatorSpec, StrategySpec, Trajectory
+from polar.trajectory.models import EvalResult, EvaluatorSpec, StrategySpec, Trajectory
 from polar.trajectory.registry import StrategyRegistry
 
 logger = logging.getLogger(__name__)
@@ -49,17 +55,20 @@ class GatewayNodeManager:
         max_init_workers: int,
         max_run_workers: int,
         max_postrun_workers: int,
-        max_eval_prewarm_workers: int,
-        ready_buffer_target: int,
         storage: SessionStore,
         session_registry: SessionRegistry,
         builders: StrategyRegistry,
         evaluators: StrategyRegistry,
         default_runtime: RuntimeSpec | None = None,
         session_base_dir: str | None = None,
+        rollout_server_url: str | None = None,
+        heartbeat_interval_seconds: int = 30,
     ) -> None:
         self.node_id = node_id
         self.gateway_url = gateway_url.rstrip("/")
+        self.max_init_workers = max_init_workers
+        self.max_run_workers = max_run_workers
+        self.max_postrun_workers = max_postrun_workers
         self.storage = storage
         self.session_registry = session_registry
         self.builders = builders
@@ -71,21 +80,74 @@ class GatewayNodeManager:
             max_init_workers=max_init_workers,
             max_run_workers=max_run_workers,
             max_postrun_workers=max_postrun_workers,
-            max_eval_prewarm_workers=max_eval_prewarm_workers,
-            ready_buffer_target=ready_buffer_target,
         )
         self._dispatcher.on_init = self._handle_init
-        self._dispatcher.on_eval_prewarm = self._handle_eval_prewarm
         self._dispatcher.on_run = self._handle_run
         self._dispatcher.on_postrun = self._handle_postrun
         self._dispatcher.on_stage_change = self._handle_dispatcher_stage_change
 
+        self._rollout_server_url = rollout_server_url.rstrip("/") if rollout_server_url else None
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._control_client: httpx.AsyncClient | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
+
     async def start(self) -> None:
         await self._dispatcher.start()
+        if self._rollout_server_url is not None:
+            self._control_client = httpx.AsyncClient(
+                base_url=self._rollout_server_url, timeout=15.0
+            )
+            await self._register_with_rollout_server()
+            self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def close(self) -> None:
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            await asyncio.gather(self._heartbeat_task, return_exceptions=True)
+            self._heartbeat_task = None
+        if self._control_client is not None:
+            await self._control_client.aclose()
+            self._control_client = None
         await self._dispatcher.stop()
         await self._client.aclose()
+
+    async def _register_with_rollout_server(self) -> None:
+        if self._control_client is None:
+            return
+        try:
+            response = await self._control_client.post(
+                "/nodes/register",
+                json=NodeRegistrationRequest(
+                    node_id=self.node_id,
+                    gateway_url=self.gateway_url,
+                    max_init_workers=self.max_init_workers,
+                    max_run_workers=self.max_run_workers,
+                    max_postrun_workers=self.max_postrun_workers,
+                    heartbeat_interval_seconds=self._heartbeat_interval_seconds,
+                ).model_dump(mode="json"),
+            )
+            response.raise_for_status()
+        except Exception:
+            logger.warning("Node registration failed", exc_info=True)
+
+    async def _heartbeat_loop(self) -> None:
+        assert self._control_client is not None
+        while True:
+            await asyncio.sleep(self._heartbeat_interval_seconds)
+            try:
+                metrics = await self.stage_metrics()
+                response = await self._control_client.post(
+                    f"/nodes/{self.node_id}/heartbeat",
+                    json=NodeHeartbeatRequest(metrics=metrics).model_dump(mode="json"),
+                )
+                if response.status_code == 404:
+                    await self._register_with_rollout_server()
+                    continue
+                response.raise_for_status()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("Node heartbeat failed", exc_info=True)
 
     async def dispatch(self, request: SessionDispatchRequest) -> None:
         session_id = request.session_id
@@ -100,7 +162,7 @@ class GatewayNodeManager:
                 session_id,
                 task_id=request.task_id,
                 registered=True,
-                status="REGISTERED",
+                status=SessionStatus.REGISTERED,
             )
             self.storage.ensure_session(
                 info.session_id,
@@ -148,18 +210,13 @@ class GatewayNodeManager:
         snapshot = await self._dispatcher.snapshot()
         return self._snapshot_to_metrics(snapshot)
 
-    def _handle_dispatcher_stage_change(
-        self,
-        managed: ManagedSession,
-        stage: SessionStage,
-    ) -> None:
+    def _handle_dispatcher_stage_change(self, managed: ManagedSession) -> None:
         status = {
-            SessionStage.INITIALIZING: "INITIALIZING",
-            SessionStage.READY: "READY",
-            SessionStage.RUNNING: "RUNNING",
-            SessionStage.POSTRUN_PENDING: "POST_RUN",
-            SessionStage.POSTRUNNING: "POST_RUN",
-        }.get(stage)
+            SessionStage.INIT: SessionStatus.INITIALIZING,
+            SessionStage.READY: SessionStatus.READY,
+            SessionStage.RUNNING: SessionStatus.RUNNING,
+            SessionStage.POSTRUN: SessionStatus.POST_RUN,
+        }.get(managed.stage)
         if status is not None:
             self.session_registry.set_status(managed.request.session_id, status)
 
@@ -258,7 +315,7 @@ class GatewayNodeManager:
             if runtime is None:
                 raise RuntimeError("runtime is required for execution")
 
-            await self._maybe_start_eval_runtime_prewarm(managed)
+            self._start_eval_prewarm(managed)
             harness = self._resolve_agent_harness(request)
 
             # Setup
@@ -349,44 +406,31 @@ class GatewayNodeManager:
     # Evaluator runtime prewarm
     # ------------------------------------------------------------------
 
-    async def _maybe_start_eval_runtime_prewarm(self, managed: ManagedSession) -> None:
+    def _start_eval_prewarm(self, managed: ManagedSession) -> None:
+        """Spawn a background task to prewarm a fresh evaluator runtime."""
         request = managed.request
         if request.evaluator is None or not request.evaluator.refresh_runtime:
             return
-        if managed.eval_runtime_lease is None:
-            managed.eval_runtime_lease = PreparedRuntimeLease(
-                owner_session_id=request.session_id,
-                purpose="evaluator_refresh",
-            )
-        await self._dispatcher.request_eval_prewarm(request.session_id)
+        if managed.eval_prewarm_task is not None:
+            return
+        managed.eval_prewarm_task = asyncio.create_task(
+            self._prepare_eval_runtime(managed)
+        )
 
-    async def _handle_eval_prewarm(self, managed: ManagedSession) -> None:
-        """Prepare a fresh runtime for evaluator use."""
+    async def _prepare_eval_runtime(
+        self, managed: ManagedSession
+    ) -> BaseRuntime | None:
+        """Create and prepare a fresh runtime for the evaluator. Returns None on failure."""
         request = managed.request
-        lease = managed.eval_runtime_lease
-        if lease is None:
-            lease = PreparedRuntimeLease(
-                owner_session_id=request.session_id,
-                purpose="evaluator_refresh",
-            )
-            managed.eval_runtime_lease = lease
-        eval_runtime: BaseRuntime | None = None
+        runtime_spec = self._resolve_runtime_spec(request)
+        eval_session_dir = managed.session_dir / "eval_runtime"
+        eval_artifacts_dir = eval_session_dir / "artifacts"
+        eval_artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        eval_runtime = create_runtime(
+            runtime_spec, f"{request.session_id}-eval", eval_session_dir
+        )
         try:
-            acquired = await self._dispatcher.acquire_eval_prewarm_slot(
-                request.session_id
-            )
-            if not acquired or lease.cancelled:
-                return
-            lease.slot_held = True
-
-            runtime_spec = self._resolve_runtime_spec(request)
-            eval_session_dir = managed.session_dir / "eval_runtime"
-            eval_artifacts_dir = eval_session_dir / "artifacts"
-            eval_artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-            eval_runtime = create_runtime(
-                runtime_spec, f"{request.session_id}-eval", eval_session_dir
-            )
             await self._await_with_budget(eval_runtime.start(), managed)
             eval_actions = (
                 runtime_spec.eval_prepare
@@ -401,53 +445,50 @@ class GatewayNodeManager:
                 actions=eval_actions,
                 log_prefix="eval_prepare",
             )
-
-            lease.runtime = eval_runtime
-            lease.session_dir = eval_session_dir
-            lease.artifacts_dir = eval_artifacts_dir
-            lease.error = None
-        except GatewayExecutionTimeout as exc:
-            lease.error = str(exc)
-            logger.warning(
-                "Eval runtime prewarm timed out for session %s: %s",
-                request.session_id,
-                exc,
-            )
+            return eval_runtime
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                await eval_runtime.stop()
+            raise
         except Exception as exc:
-            lease.error = str(exc)
             logger.warning(
                 "Eval runtime prewarm failed for session %s: %s",
                 request.session_id,
                 exc,
             )
-        finally:
-            if lease.error is not None and eval_runtime is not None:
-                with suppress(Exception):
-                    await eval_runtime.stop()
-            if lease.error is not None and lease.slot_held:
-                await self._dispatcher.consume_eval_prewarm(request.session_id)
-            lease.ready.set()
+            with suppress(Exception):
+                await eval_runtime.stop()
+            return None
 
     async def _acquire_prepared_eval_runtime(
         self, managed: ManagedSession
     ) -> BaseRuntime | None:
-        """Wait for and return the prewarmed evaluator runtime."""
-        lease = managed.eval_runtime_lease
-        if lease is None:
+        """Await the prewarm task and return its runtime, if any."""
+        task = managed.eval_prewarm_task
+        if task is None:
             return None
         try:
-            await asyncio.wait_for(
-                lease.ready.wait(),
-                timeout=self._remaining_budget(managed),
+            return await asyncio.wait_for(
+                asyncio.shield(task), timeout=self._remaining_budget(managed)
             )
         except asyncio.TimeoutError as exc:
             raise GatewayExecutionTimeout(
                 "timed out waiting for a fresh evaluator runtime"
             ) from exc
-        lease = await self._dispatcher.consume_eval_prewarm(managed.request.session_id) or lease
-        if lease.error or lease.cancelled or lease.runtime is None:
+
+    async def _drain_eval_prewarm_task(
+        self, managed: ManagedSession
+    ) -> BaseRuntime | None:
+        """Resolve the prewarm task during teardown. Cancel if still running."""
+        task = managed.eval_prewarm_task
+        if task is None:
             return None
-        return lease.runtime
+        if not task.done():
+            task.cancel()
+        try:
+            return await task
+        except (asyncio.CancelledError, Exception):
+            return None
 
     # ------------------------------------------------------------------
     # POSTRUN stage
@@ -473,17 +514,13 @@ class GatewayNodeManager:
             managed.timer.mark("teardown", "started")
             await self._run_postrun_steps(managed)
             stop_tasks = []
-            if managed.eval_runtime_lease is not None:
-                managed.eval_runtime_lease.cancelled = True
-                if managed.eval_runtime_lease.slot_held:
-                    await self._dispatcher.consume_eval_prewarm(request.session_id)
-                eval_rt = managed.eval_runtime_lease.runtime
-                if eval_rt is not None:
-                    stop_tasks.append(
-                        self._stop_runtime_best_effort(
-                            eval_rt, request.session_id, "eval runtime"
-                        )
+            eval_runtime = await self._drain_eval_prewarm_task(managed)
+            if eval_runtime is not None:
+                stop_tasks.append(
+                    self._stop_runtime_best_effort(
+                        eval_runtime, request.session_id, "eval runtime"
                     )
+                )
             if managed.runtime is not None:
                 stop_tasks.append(
                     self._stop_runtime_best_effort(
@@ -511,7 +548,10 @@ class GatewayNodeManager:
             )
             self.session_registry.set_result(request.session_id, normalized)
             self.storage.delete_session(request.session_id)
-            await self._push_result(request.callback_url, normalized)
+            if await self._push_result(request.callback_url, normalized):
+                # Rollout server has acked; free the heavy payload but keep
+                # status/task_id visible for debugging via the polling endpoint.
+                self.session_registry.clear_result_payload(request.session_id)
         finally:
             await self._remove_session_dir_best_effort(
                 managed.session_dir, request.session_id
@@ -527,11 +567,11 @@ class GatewayNodeManager:
                 "session did not produce an agent result",
             )
 
-        self.session_registry.set_status(request.session_id, "BUILDING")
+        self.session_registry.set_status(request.session_id, SessionStatus.BUILDING)
         await self.storage.drain_pending_saves(request.session_id)
         managed.timer.mark("build", "started")
         try:
-            trajectory, completion_session = await self._await_with_budget(
+            trajectory = await self._await_with_budget(
                 asyncio.to_thread(self._build_trajectory, request),
                 managed,
             )
@@ -551,7 +591,7 @@ class GatewayNodeManager:
         managed.timer.mark("eval", "started")
         try:
             if request.evaluator is not None:
-                self.session_registry.set_status(request.session_id, "EVALUATING")
+                self.session_registry.set_status(request.session_id, SessionStatus.EVALUATING)
                 trajectory = await self._run_eval(
                     request,
                     trajectory,
@@ -579,15 +619,12 @@ class GatewayNodeManager:
             task_id=request.task_id,
             status=trajectory.status,
             trajectory=trajectory,
-            completion_session=completion_session,
             timing=managed.timer.to_session_timing(),
             node_id=self.node_id,
             error=error,
         )
 
-    def _build_trajectory(
-        self, request: SessionDispatchRequest
-    ) -> tuple[Trajectory, CompletionSession]:
+    def _build_trajectory(self, request: SessionDispatchRequest) -> Trajectory:
         completion_session = self.storage.load_completion_session(request.session_id)
         builder = self.builders.create(request.builder)
         result = builder.build(completion_session)
@@ -595,7 +632,7 @@ class GatewayNodeManager:
             trajectory = asyncio.run(result)
         else:
             trajectory = result
-        return Trajectory.model_validate(trajectory), completion_session
+        return Trajectory.model_validate(trajectory)
 
     async def _run_eval(
         self,
@@ -617,16 +654,10 @@ class GatewayNodeManager:
         if evaluator_spec.refresh_runtime:
             fresh_eval_runtime = await self._acquire_prepared_eval_runtime(managed)
             if fresh_eval_runtime is None:
-                lease = managed.eval_runtime_lease
-                failure = (
-                    lease.error
-                    if lease is not None and lease.error
-                    else "fresh evaluator runtime was unavailable"
-                )
                 return trajectory.model_copy(
                     update={
                         "status": "ERROR",
-                        "error": f"refresh_runtime=true requires a fresh runtime: {failure}",
+                        "error": "refresh_runtime=true requires a fresh runtime: eval runtime prewarm did not produce a usable runtime",
                     }
                 )
 
@@ -809,12 +840,14 @@ class GatewayNodeManager:
     def _cancelled_result(self, request: SessionDispatchRequest, timer: StageTimer) -> SessionResult:
         return self._error_result(request, timer, "session cancelled")
 
-    async def _push_result(self, callback_url: str | None, result: SessionResult) -> None:
+    async def _push_result(self, callback_url: str | None, result: SessionResult) -> bool:
+        """POST the terminal result to the rollout server. Return True on success."""
         if not callback_url:
-            return
+            return False
         try:
             response = await self._client.post(callback_url, json=result.model_dump(mode="json"))
             response.raise_for_status()
+            return True
         except Exception:
             logger.warning(
                 "Failed to deliver callback for session %s to %s",
@@ -822,6 +855,7 @@ class GatewayNodeManager:
                 callback_url,
                 exc_info=True,
             )
+            return False
 
     @staticmethod
     def _snapshot_to_metrics(snapshot: DispatcherSnapshot) -> NodeStageMetrics:

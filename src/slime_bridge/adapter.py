@@ -14,6 +14,8 @@ import itertools
 import logging
 from typing import Any, TYPE_CHECKING
 
+from slime_bridge._messages import messages_to_text
+
 if TYPE_CHECKING:
     from polar.rollout.models import SessionResult
     from polar.trajectory.models import Trace
@@ -76,7 +78,7 @@ def _build_sample(
 
     prompt_messages = deepcopy(trace.prompt_messages)
     response_messages = deepcopy(trace.response_messages)
-    response_text = _messages_to_text(response_messages)
+    response_text = messages_to_text(response_messages)
 
     response_log_probs = _extract_rollout_log_probs(trace)
     if not response_log_probs:
@@ -160,38 +162,6 @@ def _response_ids_from_logprobs(trace: "Trace") -> list[int]:
         for item in trace.response_logprobs
         if isinstance(item, dict) and item.get("token_id") is not None
     ]
-
-
-def _messages_to_text(messages: list[dict[str, Any]]) -> str:
-    # Known limitation: drops assistant tool_calls structure into a plain
-    # "[role] content" string. Downstream training consumes tokens and logprobs,
-    # so Sample.response is only a degraded human-readable view.
-    parts: list[str] = []
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
-        role = str(message.get("role", "assistant"))
-        content = _flatten_content(message.get("content"))
-        if content:
-            parts.append(f"[{role}] {content}")
-    return "\n\n".join(parts)
-
-
-def _flatten_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                if item.get("type") == "text":
-                    parts.append(str(item.get("text", "")))
-                elif "text" in item:
-                    parts.append(str(item.get("text", "")))
-        return "".join(parts).strip()
-    if content is None:
-        return ""
-    return str(content)
 
 
 def _load_sample_type() -> Any:

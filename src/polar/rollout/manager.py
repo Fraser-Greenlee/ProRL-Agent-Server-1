@@ -120,26 +120,24 @@ class RolloutManager:
             raise
 
         ordered_results = list(results)
-        result_paths: list[str] = []
-        for result in results:
-            result_path = self.pipeline.result_path_for(result.task_id, result.session_id)
-            if result_path is not None:
-                result_paths.append(result_path)
-        task_result = TaskResult(
+        # `_on_result` accumulated `result_paths` live as sessions completed; that
+        # list is the single source of truth. The final task result reorders the
+        # per-session results into dispatch order but does not rebuild paths.
+        with self._lock:
+            record = self._tasks[request.task_id]
+            record.status = "completed"
+            record.completed_sessions = len(ordered_results)
+            record.results = ordered_results
+            # Preserve whatever order _on_result filled in; the caller only cares
+            # that every session's path is present, not about ordering.
+            result_paths = list(record.result_paths)
+
+        return TaskResult(
             task_id=request.task_id,
             status="completed",
             results=ordered_results,
             result_paths=result_paths,
         )
-
-        with self._lock:
-            record = self._tasks[request.task_id]
-            record.status = task_result.status
-            record.completed_sessions = len(ordered_results)
-            record.results = ordered_results
-            record.result_paths = result_paths
-
-        return task_result
 
     def get_task(self, task_id: str) -> TaskStatus | None:
         with self._lock:

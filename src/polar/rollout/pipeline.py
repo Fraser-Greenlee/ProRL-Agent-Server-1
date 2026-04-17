@@ -13,21 +13,20 @@ from pathlib import Path
 import httpx
 
 from polar.rollout.balancer import NodeScheduler
-from polar.rollout.models import SessionContext, SessionDispatchRequest, SessionResult
+from polar.rollout.models import SessionContext, SessionDispatchRequest, SessionResult, SessionStatus
 from polar.trajectory.models import Trajectory
 
 logger = logging.getLogger(__name__)
 
 ResultCallback = Callable[[SessionResult], Awaitable[None] | None]
-_TERMINAL_STATUSES = {"COMPLETED", "ERROR", "TIMEOUT"}
 
 
 def _trajectory_status(status: str) -> str:
-    if status == "TIMEOUT":
-        return "TIMEOUT"
-    if status == "COMPLETED":
-        return "COMPLETED"
-    return "ERROR"
+    if status == SessionStatus.TIMEOUT:
+        return SessionStatus.TIMEOUT
+    if status == SessionStatus.COMPLETED:
+        return SessionStatus.COMPLETED
+    return SessionStatus.ERROR
 
 
 class Pipeline:
@@ -124,7 +123,7 @@ class Pipeline:
             result = await self._wait_for_result(session, dispatch_request, future)
         except TimeoutError as exc:
             logger.warning("Session %s timed out in rollout pipeline", session.session_id)
-            result = self._failure_result(session, status="TIMEOUT", error=str(exc))
+            result = self._failure_result(session, status=SessionStatus.TIMEOUT, error=str(exc))
         except Exception as exc:
             logger.exception("Dispatch failed for session %s", session.session_id)
             result = self._failure_result(session, error=str(exc))
@@ -254,7 +253,7 @@ class Pipeline:
         if isinstance(result_payload, dict):
             return SessionResult.model_validate(result_payload)
         status = str(payload.get("status", "")).upper()
-        if status in _TERMINAL_STATUSES:
+        if status in SessionStatus.terminal():
             return self._failure_result(
                 session,
                 status=status,
@@ -328,7 +327,7 @@ class Pipeline:
     def _failure_result(
         session: SessionContext,
         *,
-        status: str = "ERROR",
+        status: str = SessionStatus.ERROR,
         error: str,
     ) -> SessionResult:
         return SessionResult(

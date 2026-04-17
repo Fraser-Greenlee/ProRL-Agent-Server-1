@@ -128,8 +128,8 @@ ray job submit --address="http://127.0.0.1:8265" \
     --save "$SAVE_DIR" \
     --save-interval 5 \
     --update-weights-interval 1 \
-    --rollout-function-path polar.slime.rollout.generate_rollout_polar_async \
-    --custom-rm-path polar.slime.reward.reward_func \
+    --rollout-function-path slime_bridge.rollout.generate_rollout_polar_async \
+    --custom-rm-path slime_bridge.reward.reward_func \
     --custom-config-path "${SCRIPT_DIR}/polar_config.yaml" \
     --prompt-data "$PROMPT_DATA" \
     --input-key prompt \

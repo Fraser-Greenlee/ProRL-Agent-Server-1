@@ -2,56 +2,143 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 import socket
 from typing import Any
 from urllib.parse import urlparse
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from polar.runtime.models import RuntimeSpec
 
 
-@dataclass(frozen=True, slots=True)
-class GatewayNodeConfig:
-    id: str
-    host: str
-    port: int
+class _StrictModel(BaseModel):
+    """Pydantic base that rejects unknown keys so removed knobs fail loudly."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _SGLangConfig(_StrictModel):
+    base_url: str = "http://127.0.0.1:8000"
+
+    @field_validator("base_url")
+    @classmethod
+    def _validate_url(cls, value: str) -> str:
+        return _normalize_http_url(value, "gateway.nodes[].sglang.base_url")
+
+
+class GatewayNodeConfig(_StrictModel):
+    id: str = Field(default_factory=socket.gethostname)
+    host: str = "0.0.0.0"
+    port: int = Field(default=8081, ge=1, le=65535)
     public_url: str
-    model_served: str
-    sglang_base_url: str
-    sglang_timeout: float
-    max_init_workers: int
-    max_run_workers: int
-    max_postrun_workers: int
-    max_eval_prewarm_workers: int
-    ready_buffer_target: int
+    model_served: str = ""
+    sglang: _SGLangConfig = Field(default_factory=_SGLangConfig)
+    max_init_workers: int = Field(default=4, gt=0)
+    max_run_workers: int = Field(default=2, gt=0)
+    max_postrun_workers: int = Field(default=4, gt=0)
     default_runtime: RuntimeSpec | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _default_public_url(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("public_url") in (None, ""):
+            host = str(data.get("host", "0.0.0.0")).strip() or "0.0.0.0"
+            port = int(data.get("port", 8081))
+            data = {**data, "public_url": _default_public_url(host, port)}
+        return data
 
-@dataclass(frozen=True, slots=True)
-class GatewayConfig:
-    heartbeat_interval_seconds: int
-    rollout_server_url: str | None
-    nodes: tuple[GatewayNodeConfig, ...]
+    @field_validator("id", "host")
+    @classmethod
+    def _strip_non_empty(cls, value: str, info) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError(f"gateway.nodes[].{info.field_name} must be a non-empty string")
+        return text
+
+    @field_validator("model_served")
+    @classmethod
+    def _strip_model(cls, value: str) -> str:
+        return (value or "").strip()
+
+    @field_validator("public_url")
+    @classmethod
+    def _validate_public_url(cls, value: str) -> str:
+        return _normalize_http_url(value, "gateway.nodes[].public_url")
+
+    @property
+    def sglang_base_url(self) -> str:
+        return self.sglang.base_url
 
 
-@dataclass(frozen=True, slots=True)
-class RolloutServiceConfig:
-    host: str
-    port: int
-    public_url: str
-    save_dir: str | None
-    dispatch_poll_interval_seconds: float
-    callback_grace_seconds: float
+class GatewayConfig(_StrictModel):
+    heartbeat_interval_seconds: int = Field(default=30, gt=0)
+    rollout_server_url: str | None = None
+    nodes: tuple[GatewayNodeConfig, ...] = Field(min_length=1)
+
+    @field_validator("rollout_server_url")
+    @classmethod
+    def _validate_rollout_server_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _normalize_http_url(value, "gateway.rollout_server_url")
+
+    @model_validator(mode="after")
+    def _unique_node_ids(self) -> "GatewayConfig":
+        seen: set[str] = set()
+        for node in self.nodes:
+            if node.id in seen:
+                raise ValueError(f"Duplicate gateway node id: {node.id}")
+            seen.add(node.id)
+        return self
 
 
-@dataclass(frozen=True, slots=True)
-class TopologyConfig:
-    path: Path
-    rollout: RolloutServiceConfig
+class RolloutServiceConfig(_StrictModel):
+    host: str = "0.0.0.0"
+    port: int = Field(default=8080, ge=1, le=65535)
+    public_url: str = ""
+    save_dir: str | None = None
+    dispatch_poll_interval_seconds: float = Field(default=1.0, gt=0)
+    callback_grace_seconds: float = Field(default=5.0, ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_public_url(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("public_url") in (None, ""):
+            host = str(data.get("host", "0.0.0.0")).strip() or "0.0.0.0"
+            port = int(data.get("port", 8080))
+            data = {**data, "public_url": _default_public_url(host, port)}
+        return data
+
+    @field_validator("host")
+    @classmethod
+    def _strip_host(cls, value: str) -> str:
+        text = (value or "").strip()
+        if not text:
+            raise ValueError("rollout.host must be a non-empty string")
+        return text
+
+    @field_validator("save_dir")
+    @classmethod
+    def _strip_save_dir(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            raise ValueError("rollout.save_dir must be a non-empty string")
+        return text
+
+    @field_validator("public_url")
+    @classmethod
+    def _validate_public_url(cls, value: str) -> str:
+        return _normalize_http_url(value, "rollout.public_url")
+
+
+class TopologyConfig(_StrictModel):
+    rollout: RolloutServiceConfig = Field(default_factory=RolloutServiceConfig)
     gateway: GatewayConfig
+    path: Path | None = None
 
     @classmethod
     def load(cls, config_path: str | Path = "topology.yaml") -> "TopologyConfig":
@@ -63,21 +150,25 @@ class TopologyConfig:
 
         try:
             with path.open() as handle:
-                loaded = yaml.safe_load(handle)
+                loaded = yaml.safe_load(handle) or {}
         except yaml.YAMLError as exc:
             raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
 
-        if loaded is None:
-            loaded = {}
         if not isinstance(loaded, dict):
             raise ValueError(f"Topology file {path} must contain a top-level mapping")
 
-        rollout = cls._parse_rollout(loaded.get("rollout"))
-        gateway = cls._parse_gateway(loaded.get("gateway"), rollout.public_url)
-        return cls(path=path, rollout=rollout, gateway=gateway)
+        loaded = {**loaded, "path": path}
+        model = cls.model_validate(loaded)
+        # Default gateway.rollout_server_url to rollout.public_url when unset.
+        if model.gateway.rollout_server_url is None:
+            gateway = model.gateway.model_copy(
+                update={"rollout_server_url": model.rollout.public_url}
+            )
+            model = model.model_copy(update={"gateway": gateway})
+        return model
 
     @property
-    def bootstrap_nodes(self) -> list[dict[str, object]]:
+    def bootstrap_nodes(self) -> list[dict[str, Any]]:
         return [
             {
                 "node_id": node.id,
@@ -85,7 +176,6 @@ class TopologyConfig:
                 "max_init_workers": node.max_init_workers,
                 "max_run_workers": node.max_run_workers,
                 "max_postrun_workers": node.max_postrun_workers,
-                "ready_buffer_target": node.ready_buffer_target,
                 "heartbeat_interval_seconds": self.gateway.heartbeat_interval_seconds,
             }
             for node in self.gateway.nodes
@@ -103,190 +193,11 @@ class TopologyConfig:
             )
         return self.gateway.nodes[0]
 
-    @staticmethod
-    def _parse_rollout(raw: Any) -> RolloutServiceConfig:
-        rollout = _require_mapping(raw, "rollout")
-        host = _require_non_empty_string(rollout.get("host", "0.0.0.0"), "rollout.host")
-        port = _coerce_port(rollout.get("port", 8080), "rollout.port")
-        public_url_raw = rollout.get("public_url")
-        public_url = (
-            _coerce_http_url(public_url_raw, "rollout.public_url")
-            if public_url_raw is not None
-            else _default_public_url(host, port)
-        )
-        save_dir = rollout.get("save_dir")
-        if save_dir is not None:
-            save_dir = _require_non_empty_string(save_dir, "rollout.save_dir")
-        return RolloutServiceConfig(
-            host=host,
-            port=port,
-            public_url=public_url,
-            save_dir=save_dir,
-            dispatch_poll_interval_seconds=_coerce_positive_float(
-                rollout.get("dispatch_poll_interval_seconds", 1.0),
-                "rollout.dispatch_poll_interval_seconds",
-            ),
-            callback_grace_seconds=_coerce_non_negative_float(
-                rollout.get("callback_grace_seconds", 5.0),
-                "rollout.callback_grace_seconds",
-            ),
-        )
 
-    @staticmethod
-    def _parse_gateway(raw: Any, rollout_public_url: str) -> GatewayConfig:
-        gateway = _require_mapping(raw, "gateway")
-        nodes_raw = gateway.get("nodes")
-        if not isinstance(nodes_raw, list) or not nodes_raw:
-            raise ValueError("gateway.nodes must be a non-empty list")
-
-        seen_ids: set[str] = set()
-        nodes: list[GatewayNodeConfig] = []
-        for index, entry in enumerate(nodes_raw):
-            node = _require_mapping(entry, f"gateway.nodes[{index}]")
-            node_id = _require_non_empty_string(
-                node.get("id", socket.gethostname()),
-                f"gateway.nodes[{index}].id",
-            )
-            if node_id in seen_ids:
-                raise ValueError(f"Duplicate gateway node id: {node_id}")
-            seen_ids.add(node_id)
-
-            host = _require_non_empty_string(
-                node.get("host", "0.0.0.0"),
-                f"gateway.nodes[{index}].host",
-            )
-            port = _coerce_port(node.get("port", 8081), f"gateway.nodes[{index}].port")
-            public_url_raw = node.get("public_url")
-            public_url = (
-                _coerce_http_url(public_url_raw, f"gateway.nodes[{index}].public_url")
-                if public_url_raw is not None
-                else _default_public_url(host, port)
-            )
-            sglang = _require_mapping(node.get("sglang"), f"gateway.nodes[{index}].sglang")
-            default_runtime_raw = node.get("default_runtime")
-            default_runtime = None
-            if default_runtime_raw is not None:
-                if not isinstance(default_runtime_raw, dict):
-                    raise ValueError(
-                        f"gateway.nodes[{index}].default_runtime must be a mapping"
-                    )
-                default_runtime = RuntimeSpec.model_validate(default_runtime_raw)
-
-            max_run_workers = _coerce_positive_int(
-                node.get("max_run_workers", node.get("capacity", 1)),
-                f"gateway.nodes[{index}].max_run_workers",
-            )
-            nodes.append(
-                GatewayNodeConfig(
-                    id=node_id,
-                    host=host,
-                    port=port,
-                    public_url=public_url,
-                    model_served=str(node.get("model_served", "")),
-                    sglang_base_url=_coerce_http_url(
-                        sglang.get("base_url", "http://127.0.0.1:8000"),
-                        f"gateway.nodes[{index}].sglang.base_url",
-                    ),
-                    sglang_timeout=_coerce_positive_float(
-                        sglang.get("timeout", 300.0),
-                        f"gateway.nodes[{index}].sglang.timeout",
-                    ),
-                    max_init_workers=_coerce_positive_int(
-                        node.get("max_init_workers", 4),
-                        f"gateway.nodes[{index}].max_init_workers",
-                    ),
-                    max_run_workers=max_run_workers,
-                    max_postrun_workers=_coerce_positive_int(
-                        node.get("max_postrun_workers", 4),
-                        f"gateway.nodes[{index}].max_postrun_workers",
-                    ),
-                    max_eval_prewarm_workers=_coerce_positive_int(
-                        node.get("max_eval_prewarm_workers", max_run_workers),
-                        f"gateway.nodes[{index}].max_eval_prewarm_workers",
-                    ),
-                    ready_buffer_target=_coerce_positive_int(
-                        node.get("ready_buffer_target", max_run_workers),
-                        f"gateway.nodes[{index}].ready_buffer_target",
-                    ),
-                    default_runtime=default_runtime,
-                )
-            )
-
-        rollout_server_url_raw = gateway.get("rollout_server_url")
-        rollout_server_url = (
-            _coerce_http_url(rollout_server_url_raw, "gateway.rollout_server_url")
-            if rollout_server_url_raw is not None
-            else rollout_public_url
-        )
-        return GatewayConfig(
-            heartbeat_interval_seconds=_coerce_positive_int(
-                gateway.get("heartbeat_interval_seconds", 30),
-                "gateway.heartbeat_interval_seconds",
-            ),
-            rollout_server_url=rollout_server_url,
-            nodes=tuple(nodes),
-        )
-
-
-def _require_mapping(value: Any, field_name: str) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be a mapping")
-    return value
-
-
-def _require_non_empty_string(value: object, field_name: str) -> str:
-    if value is None:
-        raise ValueError(f"{field_name} is required")
+def _normalize_http_url(value: str, field_name: str) -> str:
     text = str(value).strip()
     if not text:
         raise ValueError(f"{field_name} must be a non-empty string")
-    return text
-
-
-def _coerce_port(value: object, field_name: str) -> int:
-    try:
-        port = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must be an integer") from exc
-    if not 1 <= port <= 65535:
-        raise ValueError(f"{field_name} must be between 1 and 65535")
-    return port
-
-
-def _coerce_positive_int(value: object, field_name: str) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must be an integer") from exc
-    if parsed <= 0:
-        raise ValueError(f"{field_name} must be greater than 0")
-    return parsed
-
-
-def _coerce_positive_float(value: object, field_name: str) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must be a number") from exc
-    if parsed <= 0:
-        raise ValueError(f"{field_name} must be greater than 0")
-    return parsed
-
-
-def _coerce_non_negative_float(value: object, field_name: str) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must be a number") from exc
-    if parsed < 0:
-        raise ValueError(f"{field_name} must be greater than or equal to 0")
-    return parsed
-
-
-def _coerce_http_url(value: object, field_name: str) -> str:
-    text = _require_non_empty_string(value, field_name)
     parsed = urlparse(text)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError(f"{field_name} must be an http:// or https:// URL")

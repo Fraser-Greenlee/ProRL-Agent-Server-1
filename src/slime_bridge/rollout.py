@@ -22,8 +22,9 @@ import uvicorn
 from fastapi import FastAPI, Request
 
 from polar.rollout.models import TaskResult, TaskStatus
-from polar.slime.adapter import session_result_to_samples
-from polar.slime.config import (
+from slime_bridge._messages import prompt_to_instruction_text
+from slime_bridge.adapter import session_result_to_samples
+from slime_bridge.config import (
     PolarSlimeConfig,
     render_instruction,
     render_task_payload,
@@ -72,7 +73,7 @@ def _build_task_payload(
     task_position: int,
 ) -> dict[str, Any]:
     first_sample = group[0]
-    prompt_text = _prompt_to_instruction_text(getattr(first_sample, "prompt", ""))
+    prompt_text = prompt_to_instruction_text(getattr(first_sample, "prompt", ""))
     instruction = render_instruction(
         args=args,
         config=config,
@@ -538,42 +539,6 @@ def _group_index_for(group: list[Any]) -> int:
     if group and getattr(group[0], "group_index", None) is not None:
         return int(group[0].group_index)
     return -1
-
-
-def _prompt_to_instruction_text(prompt: Any) -> str:
-    if isinstance(prompt, str):
-        return prompt
-    if isinstance(prompt, list):
-        parts: list[str] = []
-        for message in prompt:
-            if not isinstance(message, dict):
-                continue
-            role = str(message.get("role", "user"))
-            content = _flatten_content(message.get("content"))
-            if content:
-                parts.append(f"[{role}] {content}")
-        return "\n\n".join(parts)
-    if prompt is None:
-        return ""
-    return str(prompt)
-
-
-def _flatten_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if not isinstance(item, dict):
-                continue
-            if item.get("type") == "text":
-                parts.append(str(item.get("text", "")))
-            elif "text" in item:
-                parts.append(str(item.get("text", "")))
-        return "".join(parts).strip()
-    if content is None:
-        return ""
-    return str(content)
 
 
 def _extract_sample_reward(sample: Any, reward_key: str) -> float:

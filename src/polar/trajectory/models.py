@@ -91,7 +91,6 @@ class Trace(BaseModel):
     response_ids: list[int] = Field(default_factory=list)
     prompt_messages: list[dict[str, Any]] = Field(default_factory=list)
     response_messages: list[dict[str, Any]] = Field(default_factory=list)
-    tools: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
     response_logprobs: list[dict[str, Any]] | None = None
     reward: float | None = None

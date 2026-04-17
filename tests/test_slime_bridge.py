@@ -1,0 +1,252 @@
+"""Smoke tests for the slime_bridge extraction.
+
+The slime_bridge package is the consumer-side adapter between Slime and
+Polar — it depends on Polar but nothing in Polar depends back. These
+tests cover:
+
+- the package lives at ``slime_bridge`` (not ``polar.slime``);
+- the shared message-flattening helpers are single-sourced;
+- ``reward_func`` reads the reward already embedded in Polar samples;
+- ``render_task_payload`` / ``render_instruction`` resolve sample /
+  metadata placeholders;
+- ``session_result_to_samples`` drops traces without tokens.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+
+from slime_bridge._messages import (
+    flatten_content,
+    messages_to_text,
+    prompt_to_instruction_text,
+)
+
+
+# ---------------------------------------------------------------------------
+# Package move
+# ---------------------------------------------------------------------------
+
+
+def test_polar_slime_module_is_gone() -> None:
+    with pytest.raises(ImportError):
+        import polar.slime  # noqa: F401
+
+
+def test_slime_bridge_package_importable() -> None:
+    import slime_bridge  # noqa: F401
+    import slime_bridge.adapter  # noqa: F401
+    import slime_bridge.config  # noqa: F401
+    import slime_bridge.reward  # noqa: F401
+    import slime_bridge.rollout  # noqa: F401
+
+
+# ---------------------------------------------------------------------------
+# Shared message helpers (single-sourced in _messages.py)
+# ---------------------------------------------------------------------------
+
+
+def test_flatten_content_handles_str_list_and_none() -> None:
+    assert flatten_content("hello") == "hello"
+    assert flatten_content([{"type": "text", "text": "hi "}, {"text": "there"}]) == "hi there"
+    assert flatten_content(None) == ""
+    assert flatten_content(42) == "42"
+
+
+def test_prompt_to_instruction_text_renders_chat_list() -> None:
+    prompt = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "u"},
+    ]
+    assert prompt_to_instruction_text(prompt) == "[system] sys\n\n[user] u"
+
+
+def test_prompt_to_instruction_text_passes_str_through() -> None:
+    assert prompt_to_instruction_text("raw prompt") == "raw prompt"
+
+
+def test_messages_to_text_drops_empty_content() -> None:
+    messages = [
+        {"role": "assistant", "content": "hi"},
+        {"role": "assistant", "content": ""},
+        {"role": "assistant", "content": None},
+    ]
+    assert messages_to_text(messages) == "[assistant] hi"
+
+
+def test_slime_bridge_does_not_redefine_flatten_helpers() -> None:
+    """Guard against re-introducing duplicated helpers in rollout.py/adapter.py.
+
+    The pre-cleanup state had _prompt_to_instruction_text/_flatten_content
+    duplicated in both rollout.py and adapter.py. Any reintroduction should
+    fail this test.
+    """
+    from slime_bridge import adapter, rollout
+
+    for module in (adapter, rollout):
+        for name in ("_prompt_to_instruction_text", "_flatten_content"):
+            assert not hasattr(module, name), (
+                f"{module.__name__}.{name} was reintroduced; "
+                f"use slime_bridge._messages instead"
+            )
+
+
+# ---------------------------------------------------------------------------
+# reward_func
+# ---------------------------------------------------------------------------
+
+
+def _run(coro: Any) -> Any:
+    return asyncio.run(coro)
+
+
+def test_reward_func_reads_preset_reward_dict() -> None:
+    from slime_bridge.reward import reward_func
+
+    sample = SimpleNamespace(reward={"score": 0.75})
+    args = SimpleNamespace()
+    result = _run(reward_func(args, sample))
+    assert result == {"score": 0.75}
+
+
+def test_reward_func_handles_list_of_samples() -> None:
+    from slime_bridge.reward import reward_func
+
+    samples = [
+        SimpleNamespace(reward={"score": 1.0}),
+        SimpleNamespace(reward={"score": 0.0}),
+    ]
+    args = SimpleNamespace()
+    result = _run(reward_func(args, samples))
+    assert result == [{"score": 1.0}, {"score": 0.0}]
+
+
+def test_reward_func_respects_custom_reward_key() -> None:
+    from slime_bridge.reward import reward_func
+
+    sample = SimpleNamespace(reward={"score": 0.5})
+    args = SimpleNamespace(polar_reward_key="my_reward")
+    assert _run(reward_func(args, sample)) == {"my_reward": 0.5}
+
+
+# ---------------------------------------------------------------------------
+# Template rendering
+# ---------------------------------------------------------------------------
+
+
+def test_render_task_payload_resolves_sample_metadata_placeholders() -> None:
+    from slime_bridge.config import PolarSlimeConfig, render_task_payload
+
+    config = PolarSlimeConfig(
+        rollout_server_url="http://rollout",
+        task_template={
+            "agent": {"harness": "claude_code"},
+            "metadata": {"instance_id": "{sample.metadata.instance_id}"},
+        },
+        task_id_template="polar-{rollout_id}-{sample.group_index}",
+        instruction_template=None,
+        reward_key="score",
+        max_concurrency=1,
+        request_timeout=None,
+        tokenizer_name_or_path=None,
+        add_generation_prompt=True,
+        eval_dataset_name="polar_eval",
+    )
+    sample = SimpleNamespace(
+        group_index=3,
+        metadata={"instance_id": "django__django-11001"},
+    )
+    payload = render_task_payload(
+        args=SimpleNamespace(sglang_router_ip=None, sglang_router_port=None),
+        config=config,
+        sample=sample,
+        instruction="solve it",
+        rollout_id=7,
+        task_position=0,
+        num_rollouts=4,
+    )
+    assert payload["task_id"] == "polar-7-3"
+    assert payload["instruction"] == "solve it"
+    assert payload["num_samples"] == 4
+    assert payload["metadata"]["instance_id"] == "django__django-11001"
+
+
+def test_render_instruction_falls_back_to_raw_prompt_when_no_template() -> None:
+    from slime_bridge.config import PolarSlimeConfig, render_instruction
+
+    config = PolarSlimeConfig(
+        rollout_server_url="http://rollout",
+        task_template={"agent": {"harness": "shell"}},
+        task_id_template="polar-{rollout_id}",
+        instruction_template=None,
+        reward_key="score",
+        max_concurrency=1,
+        request_timeout=None,
+        tokenizer_name_or_path=None,
+        add_generation_prompt=True,
+        eval_dataset_name="polar_eval",
+    )
+    result = render_instruction(
+        args=SimpleNamespace(sglang_router_ip=None, sglang_router_port=None),
+        config=config,
+        sample=SimpleNamespace(metadata={}),
+        prompt_text="raw prompt",
+        rollout_id=0,
+        task_position=0,
+        num_rollouts=1,
+    )
+    assert result == "raw prompt"
+
+
+# ---------------------------------------------------------------------------
+# Adapter — session_result_to_samples drops traces without tokens
+# ---------------------------------------------------------------------------
+
+
+class _FakeSampleStatus:
+    ABORTED = "ABORTED"
+    FAILED = "FAILED"
+    TRUNCATED = "TRUNCATED"
+    COMPLETED = "COMPLETED"
+
+
+class _FakeSample:
+    Status = _FakeSampleStatus
+
+    def __init__(self, **kwargs: Any) -> None:
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+def test_session_result_to_samples_drops_empty_token_traces(monkeypatch) -> None:
+    from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
+    from polar.trajectory.models import Trace, Trajectory
+    from slime_bridge import adapter
+
+    monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
+
+    trajectory = Trajectory(
+        status="COMPLETED",
+        traces=[
+            Trace(prompt_ids=[1, 2], response_ids=[3, 4], finish_reason="stop"),
+            Trace(prompt_ids=[], response_ids=[], finish_reason="stop"),
+        ],
+    )
+    result = SessionResult(
+        session_id="s1",
+        task_id="t1",
+        status=SessionStatus.COMPLETED,
+        trajectory=trajectory,
+        timing=SessionTiming(),
+    )
+    samples = adapter.session_result_to_samples(result, group_index=0)
+    assert len(samples) == 1
+    sample = samples[0]
+    assert sample.tokens == [1, 2, 3, 4]
+    assert sample.response_length == 2
+    assert sample.status == _FakeSampleStatus.COMPLETED
+    assert sample.reward == {"score": 0.0}

@@ -85,10 +85,8 @@ gateway:
       max_init_workers: 8
       max_run_workers: 4
       max_postrun_workers: 4
-      ready_buffer_target: 4
       sglang:
         base_url: http://127.0.0.1:8000
-        timeout: 300
 ```
 
 ## Example Task Shape

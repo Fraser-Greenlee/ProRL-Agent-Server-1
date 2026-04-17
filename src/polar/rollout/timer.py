@@ -8,6 +8,12 @@ from dataclasses import dataclass, field
 from polar.rollout.models import SessionTiming
 
 
+# Finer marks (``build``, ``eval``, ``teardown``) still write into the mark
+# dictionary for debug logs but are rolled into ``postrun_ms`` in the public
+# schema.
+_POSTRUN_MARKS: tuple[str, ...] = ("postrun", "build", "eval", "teardown")
+
+
 @dataclass(slots=True)
 class StageTimer:
     """Record monotonic timestamps for session stages."""
@@ -20,39 +26,10 @@ class StageTimer:
 
     def to_session_timing(self) -> SessionTiming:
         """Return durations for the init/run/post-run lifecycle."""
-        init_ms = self._duration_ms("init")
-        run_ms = self._duration_ms("run")
-        build_ms = self._duration_ms("build")
-        eval_ms = self._duration_ms("eval")
-        postrun_ms = self._duration_ms("postrun")
-        teardown_ms = self._duration_ms("teardown")
-        total_start = (
-            self._marks.get("dispatch_started")
-            or self._marks.get("init_started")
-            or self._marks.get("run_started")
-            or self._marks.get("build_started")
-            or self._marks.get("eval_started")
-            or self._marks.get("postrun_started")
-        )
-        total_end = (
-            self._marks.get("return_finished")
-            or self._marks.get("teardown_finished")
-            or self._marks.get("postrun_finished")
-            or self._marks.get("eval_finished")
-            or self._marks.get("build_finished")
-            or self._marks.get("run_finished")
-            or self._marks.get("init_finished")
-            or total_start
-        )
-        total_ms = max(0.0, ((total_end or 0.0) - (total_start or total_end or 0.0)) * 1000.0)
         return SessionTiming(
-            init_ms=init_ms,
-            run_ms=run_ms,
-            build_ms=build_ms,
-            eval_ms=eval_ms,
-            postrun_ms=postrun_ms,
-            teardown_ms=teardown_ms,
-            total_ms=total_ms,
+            init_ms=self._duration_ms("init"),
+            run_ms=self._duration_ms("run"),
+            postrun_ms=self._postrun_span_ms(),
         )
 
     def _duration_ms(self, stage: str) -> float:
@@ -61,3 +38,19 @@ class StageTimer:
         if started is None or finished is None:
             return 0.0
         return max(0.0, (finished - started) * 1000.0)
+
+    def _postrun_span_ms(self) -> float:
+        """Earliest postrun-family started to latest postrun-family finished."""
+        starts = [
+            self._marks[f"{stage}_started"]
+            for stage in _POSTRUN_MARKS
+            if f"{stage}_started" in self._marks
+        ]
+        finishes = [
+            self._marks[f"{stage}_finished"]
+            for stage in _POSTRUN_MARKS
+            if f"{stage}_finished" in self._marks
+        ]
+        if not starts or not finishes:
+            return 0.0
+        return max(0.0, (max(finishes) - min(starts)) * 1000.0)

@@ -20,7 +20,6 @@ class GatewayNode:
     max_init_workers: int
     max_run_workers: int
     max_postrun_workers: int
-    ready_buffer_target: int
     healthy: bool
     last_heartbeat: datetime
     heartbeat_interval_seconds: int
@@ -32,6 +31,11 @@ class GatewayNode:
     def total_sessions(self) -> int:
         return self.metrics.total_sessions + self.dispatch_reservations
 
+    @property
+    def ready_buffer_target(self) -> int:
+        """Ready buffer tracks run capacity one-for-one."""
+        return self.max_run_workers
+
     def to_model(self) -> GatewayNodeInfo:
         return GatewayNodeInfo(
             node_id=self.node_id,
@@ -39,7 +43,6 @@ class GatewayNode:
             max_init_workers=self.max_init_workers,
             max_run_workers=self.max_run_workers,
             max_postrun_workers=self.max_postrun_workers,
-            ready_buffer_target=self.ready_buffer_target,
             metrics=self.metrics.model_copy(),
             dispatch_reservations=self.dispatch_reservations,
             healthy=self.healthy,
@@ -71,7 +74,6 @@ class NodeScheduler:
                 max_init_workers=max(1, int(node.get("max_init_workers", 4))),
                 max_run_workers=max_run_workers,
                 max_postrun_workers=max(1, int(node.get("max_postrun_workers", 4))),
-                ready_buffer_target=max(1, int(node.get("ready_buffer_target", max_run_workers))),
                 healthy=False,
                 last_heartbeat=_utcnow(),
                 heartbeat_interval_seconds=max(1, int(node.get("heartbeat_interval_seconds", 30))),
@@ -89,7 +91,6 @@ class NodeScheduler:
                 max_init_workers=request.max_init_workers,
                 max_run_workers=request.max_run_workers,
                 max_postrun_workers=request.max_postrun_workers,
-                ready_buffer_target=request.ready_buffer_target,
                 metrics=metrics,
                 dispatch_reservations=0,
                 healthy=True,

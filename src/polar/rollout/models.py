@@ -6,16 +6,44 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from polar.agent.models import AgentSpec
 from polar.runtime.models import RuntimeSpec
-from polar.trajectory.models import CompletionSession, EvaluatorSpec, StrategySpec, Trajectory
+from polar.trajectory.models import EvaluatorSpec, StrategySpec, Trajectory
 
 if TYPE_CHECKING:
     from polar.rollout.timer import StageTimer
+
+
+class SessionStatus(StrEnum):
+    """Canonical session lifecycle statuses.
+
+    StrEnum instances serialize to their string values, so wire compatibility
+    with older clients that read plain status strings is preserved.
+    """
+
+    REGISTERED = "REGISTERED"
+    INITIALIZING = "INITIALIZING"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    POST_RUN = "POST_RUN"
+    BUILDING = "BUILDING"
+    EVALUATING = "EVALUATING"
+    COMPLETED = "COMPLETED"
+    ERROR = "ERROR"
+    TIMEOUT = "TIMEOUT"
+
+    @classmethod
+    def terminal(cls) -> frozenset["SessionStatus"]:
+        return frozenset({cls.COMPLETED, cls.ERROR, cls.TIMEOUT})
+
+    @classmethod
+    def active(cls) -> frozenset["SessionStatus"]:
+        return frozenset(set(cls) - cls.terminal())
 
 
 def _new_stage_timer() -> "StageTimer":
@@ -64,20 +92,23 @@ class SessionDispatchResponse(BaseModel):
 
     session_id: str
     task_id: str
-    status: str
+    status: SessionStatus
     node_id: str | None = None
 
 
 class SessionTiming(BaseModel):
-    """Per-session durations in milliseconds."""
+    """Per-session durations in milliseconds.
+
+    Three phases only: runtime startup + prepare (`init_ms`), agent harness
+    execution (`run_ms`), and everything after the agent stops — build, eval,
+    teardown — rolled into (`postrun_ms`). Total wall-clock is the sum.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     init_ms: float = 0.0
     run_ms: float = 0.0
-    build_ms: float = 0.0
-    eval_ms: float = 0.0
     postrun_ms: float = 0.0
-    teardown_ms: float = 0.0
-    total_ms: float = 0.0
 
 
 class SessionResult(BaseModel):
@@ -85,9 +116,8 @@ class SessionResult(BaseModel):
 
     session_id: str
     task_id: str
-    status: str
+    status: SessionStatus
     trajectory: Trajectory
-    completion_session: CompletionSession | None = None
     timing: SessionTiming = Field(default_factory=SessionTiming)
     node_id: str | None = None
     error: str | None = None
@@ -97,7 +127,7 @@ class TaskResult(BaseModel):
     """Blocking response returned once all rollout sessions resolve."""
 
     task_id: str
-    status: str
+    status: str  # Task-level status vocabulary: "running" | "completed" | "failed"
     results: list[SessionResult]
     result_paths: list[str] = Field(default_factory=list)
 
@@ -121,7 +151,6 @@ class NodeRegistrationRequest(BaseModel):
     max_init_workers: int = Field(ge=1)
     max_run_workers: int = Field(ge=1)
     max_postrun_workers: int = Field(ge=1)
-    ready_buffer_target: int = Field(ge=1)
     heartbeat_interval_seconds: int = Field(default=30, ge=1)
 
 
@@ -161,7 +190,6 @@ class GatewayNodeInfo(BaseModel):
     max_init_workers: int
     max_run_workers: int
     max_postrun_workers: int
-    ready_buffer_target: int
     metrics: NodeStageMetrics = Field(default_factory=NodeStageMetrics)
     dispatch_reservations: int = Field(default=0, ge=0)
     healthy: bool

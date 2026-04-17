@@ -11,7 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from polar.rollout.models import SessionResult
+from polar.rollout.models import SessionResult, SessionStatus
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
@@ -53,7 +53,7 @@ class SessionInfo:
     last_activity: datetime
     task_id: str | None = None
     registered: bool = False
-    status: str = "REGISTERED"
+    status: str = SessionStatus.REGISTERED
     result: SessionResult | None = None
 
 
@@ -70,7 +70,7 @@ class SessionRegistry:
         *,
         task_id: str | None = None,
         registered: bool = False,
-        status: str = "REGISTERED",
+        status: str = SessionStatus.REGISTERED,
     ) -> SessionInfo:
         session_id = clean_session_id(session_id) or generate_session_id()
         now = _utcnow()
@@ -82,15 +82,7 @@ class SessionRegistry:
                     info.task_id = task_id
                 info.registered = info.registered or registered
                 info.status = status or info.status
-                if status in {
-                    "REGISTERED",
-                    "INITIALIZING",
-                    "READY",
-                    "RUNNING",
-                    "POST_RUN",
-                    "BUILDING",
-                    "EVALUATING",
-                }:
+                if status in SessionStatus.active():
                     info.result = None
                 return info
 
@@ -133,33 +125,47 @@ class SessionRegistry:
             info.last_activity = _utcnow()
             return info
 
+    def clear_result_payload(self, session_id: str) -> None:
+        """Drop the heavy result payload once the callback has been delivered.
+
+        Why: `SessionInfo.result` retains the full trajectory + timing payload
+        for every terminated session, which accumulates unbounded over a
+        long-running gateway process. We keep `status` and `task_id` for
+        debugging visibility but release the heavy payload.
+        """
+        with self._lock:
+            info = self._sessions.get(session_id)
+            if info is not None:
+                info.result = None
+
     def remove(self, session_id: str) -> None:
         with self._lock:
             self._sessions.pop(session_id, None)
 
     def active_count(self) -> int:
+        terminal = SessionStatus.terminal()
         with self._lock:
             return sum(
-                1
-                for info in self._sessions.values()
-                if info.status not in {"COMPLETED", "ERROR", "TIMEOUT"}
+                1 for info in self._sessions.values() if info.status not in terminal
             )
 
     def active_status_counts(self) -> dict[str, int]:
+        terminal = SessionStatus.terminal()
         with self._lock:
             counts: dict[str, int] = {}
             for info in self._sessions.values():
-                if info.status in {"COMPLETED", "ERROR", "TIMEOUT"}:
+                if info.status in terminal:
                     continue
                 counts[info.status] = counts.get(info.status, 0) + 1
             return dict(sorted(counts.items()))
 
     def active_sessions(self) -> list[dict[str, Any]]:
+        terminal = SessionStatus.terminal()
         with self._lock:
             now = _utcnow()
             rows: list[dict[str, Any]] = []
             for info in self._sessions.values():
-                if info.status in {"COMPLETED", "ERROR", "TIMEOUT"}:
+                if info.status in terminal:
                     continue
                 rows.append(
                     {
@@ -243,7 +249,7 @@ class SessionCreateResponse(BaseModel):
     task_id: str | None = None
     created_at: datetime
     completion_count: int
-    status: str = "REGISTERED"
+    status: str = SessionStatus.REGISTERED
 
 
 class SessionStatusResponse(BaseModel):
@@ -251,7 +257,7 @@ class SessionStatusResponse(BaseModel):
     task_id: str | None = None
     created_at: datetime
     completion_count: int
-    status: str = "REGISTERED"
+    status: str = SessionStatus.REGISTERED
     result: SessionResult | None = None
 
 

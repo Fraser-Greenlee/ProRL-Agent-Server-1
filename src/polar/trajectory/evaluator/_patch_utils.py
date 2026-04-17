@@ -1,8 +1,21 @@
-"""Patch-based evaluator for fresh-runtime SWE-Gym style grading."""
+"""Shared skeleton for git-diff patch evaluators.
+
+Both :mod:`polar.trajectory.evaluator.swegym_harness` and
+:mod:`polar.trajectory.evaluator.output_unit_tests` grade a trajectory by:
+
+1. Pulling a git-diff patch out of the source runtime.
+2. Filtering out noise (``__pycache__`` etc.).
+3. Optionally applying the patch on a fresh replay runtime.
+4. Running a test command and interpreting its output.
+
+Only step 4 differs between the two strategies. This module hosts the shared
+base class :class:`BasePatchEvaluator` plus the patch-wrangling helpers.
+Subclasses implement :meth:`BasePatchEvaluator._grade` and set ``MODE`` to
+tag themselves in the returned metadata.
+"""
 
 from __future__ import annotations
 
-import json
 import fnmatch
 import re
 from pathlib import Path
@@ -13,24 +26,51 @@ from polar.runtime.models import RuntimeSpec
 from polar.trajectory.evaluator.base import BaseTrajectoryEvaluator
 from polar.trajectory.models import EvalResult, Trajectory
 
-_APPLY_PATCH_PASS = "__POLAR_APPLY_PATCH_PASS__"
-_APPLY_PATCH_FAIL = "__POLAR_APPLY_PATCH_FAIL__"
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m|\r")
+APPLY_PATCH_PASS = "__POLAR_APPLY_PATCH_PASS__"
+APPLY_PATCH_FAIL = "__POLAR_APPLY_PATCH_FAIL__"
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m|\r")
+
+_DEFAULT_EXCLUDE_PATTERNS = (
+    "__pycache__/**",
+    "**/__pycache__/**",
+    "*.pyc",
+    "**/*.pyc",
+    "*.pyo",
+    "**/*.pyo",
+    ".pytest_cache/**",
+    "**/.pytest_cache/**",
+)
 
 
-class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
-    """Evaluate a git diff patch against the edited runtime or a fresh replay runtime."""
+def shell_quote(value: str) -> str:
+    """Single-quote *value* so it survives one round of bash interpolation."""
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def bounded_timeout(base_timeout: float, timeout_cap: float | None) -> float:
+    """Clamp *base_timeout* to the session-wide *timeout_cap* when provided."""
+    if timeout_cap is None:
+        return base_timeout
+    return min(base_timeout, timeout_cap)
+
+
+class BasePatchEvaluator(BaseTrajectoryEvaluator):
+    """Extract-filter-apply-test skeleton for git-diff-based grading.
+
+    Subclasses pick how the test output is interpreted by overriding
+    :meth:`_grade` and set a string ``MODE`` class attribute (stamped into
+    ``metadata['mode']``).
+    """
+
+    MODE: str = "patch"
 
     def __init__(
         self,
         *,
         repo_dir: str = "/testbed",
         patch_command: str | None = None,
-        test_command: str | None = None,
         apply_timeout: float = 60.0,
         test_timeout: float = 1200.0,
-        instance: dict[str, Any] | None = None,
-        expected_output_json: dict[str, str] | str | None = None,
         exclude_patterns: list[str] | None = None,
     ) -> None:
         self.repo_dir = repo_dir.strip()
@@ -39,37 +79,21 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         self.patch_command = (
             patch_command.strip()
             if patch_command is not None
-            else f"cd {self._shell_quote(self.repo_dir)} && git diff --binary --submodule=diff"
+            else f"cd {shell_quote(self.repo_dir)} && git diff --binary --submodule=diff"
         )
         if not self.patch_command:
             raise ValueError("patch_command must be non-empty")
-        self.test_command = test_command.strip() if test_command is not None else ""
         self.apply_timeout = float(apply_timeout)
         self.test_timeout = float(test_timeout)
         if self.apply_timeout <= 0 or self.test_timeout <= 0:
             raise ValueError("timeouts must be greater than 0")
-        self.instance = instance or {}
-        self.expected_output_json = expected_output_json
-        default_exclude_patterns = [
-            "__pycache__/**",
-            "**/__pycache__/**",
-            "*.pyc",
-            "**/*.pyc",
-            "*.pyo",
-            "**/*.pyo",
-            ".pytest_cache/**",
-            "**/.pytest_cache/**",
-        ]
         self.exclude_patterns = list(
-            dict.fromkeys(
-                [*default_exclude_patterns, *(exclude_patterns or [])]
-            )
+            dict.fromkeys([*_DEFAULT_EXCLUDE_PATTERNS, *(exclude_patterns or [])])
         )
-        if not self.instance and self.expected_output_json is None:
-            raise ValueError(
-                "swegym_git_diff requires either 'instance' for SWE-Gym grading "
-                "or 'expected_output_json' for expected-output grading"
-            )
+
+    # ------------------------------------------------------------------
+    # Top-level flow
+    # ------------------------------------------------------------------
 
     async def evaluate(
         self,
@@ -78,7 +102,7 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
     ) -> EvalResult:
         source_runtime = runtime.get("runtime")
         if not isinstance(source_runtime, BaseRuntime):
-            raise RuntimeError("swegym_git_diff evaluator requires a live runtime")
+            raise RuntimeError(f"{self.MODE} evaluator requires a live runtime")
 
         runtime_spec = runtime.get("runtime_spec")
         if runtime_spec is not None and not isinstance(runtime_spec, RuntimeSpec):
@@ -94,7 +118,7 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         timeout_cap = float(timeout_cap) if timeout_cap is not None else None
         refresh_runtime = bool(runtime.get("refresh_runtime", False))
 
-        patch_path = artifacts_dir / "swegym_git_diff.diff"
+        patch_path = artifacts_dir / "patch.diff"
         patch = await self._extract_patch(
             source_runtime,
             patch_path,
@@ -104,9 +128,8 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         )
         patch = self._filter_patch(patch)
         patch_path.write_text(patch)
-        mode = "swegym" if self.instance else "expected_output"
         metadata: dict[str, Any] = {
-            "mode": mode,
+            "mode": self.MODE,
             "patch_path": str(patch_path),
             "report": {
                 "empty_generation": len(patch.strip()) == 0,
@@ -143,32 +166,24 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
                     eval_artifacts_dir / "apply_patch.stdout.log"
                 )
                 if (
-                    _APPLY_PATCH_FAIL in apply_patch_output
-                    or _APPLY_PATCH_PASS not in apply_patch_output
+                    APPLY_PATCH_FAIL in apply_patch_output
+                    or APPLY_PATCH_PASS not in apply_patch_output
                 ):
                     metadata["report"]["failed_apply_patch"] = True
                     return EvalResult(outcome_reward=0.0, metadata=metadata)
             elif refresh_runtime:
                 raise RuntimeError(
-                    "refresh_runtime=true requires fresh_eval_runtime for swegym_git_diff"
+                    f"refresh_runtime=true requires fresh_eval_runtime for {self.MODE}"
                 )
 
-            if self.instance:
-                report, test_output_path = await self._evaluate_swegym(
-                    eval_runtime,
-                    patch,
-                    host_session_dir=eval_session_dir,
-                    log_dir=eval_artifacts_dir,
-                    env=eval_env,
-                    timeout_cap=timeout_cap,
-                )
-            else:
-                report, test_output_path = await self._evaluate_expected_output(
-                    eval_runtime,
-                    log_dir=eval_artifacts_dir,
-                    env=eval_env,
-                    timeout_cap=timeout_cap,
-                )
+            report, test_output_path = await self._grade(
+                runtime=eval_runtime,
+                patch=patch,
+                host_session_dir=eval_session_dir,
+                log_dir=eval_artifacts_dir,
+                env=eval_env,
+                timeout_cap=timeout_cap,
+            )
             metadata["report"] = report
             metadata["test_output_path"] = str(test_output_path)
             if apply_patch_output:
@@ -184,6 +199,23 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
             metadata["report"]["error_eval"] = True
             raise
 
+    async def _grade(
+        self,
+        *,
+        runtime: BaseRuntime,
+        patch: str,
+        host_session_dir: Path,
+        log_dir: Path,
+        env: dict[str, str],
+        timeout_cap: float | None,
+    ) -> tuple[dict[str, Any], Path]:
+        """Strategy-specific test execution + output interpretation."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Patch extraction / application
+    # ------------------------------------------------------------------
+
     async def _extract_patch(
         self,
         runtime: BaseRuntime,
@@ -196,7 +228,7 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         result = await runtime.exec(
             self.patch_command,
             env=env,
-            timeout_sec=self._bounded_timeout(self.apply_timeout, timeout_cap),
+            timeout_sec=bounded_timeout(self.apply_timeout, timeout_cap),
         )
         if result.stdout:
             patch_path.write_text(result.stdout)
@@ -239,7 +271,6 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         session_dir: Path,
     ) -> list[Path]:
         candidates: list[Path] = [session_dir / "logs" / "agent" / "swe-agent.patch"]
-
         repo_host_dir = runtime.resolve_host_path(self.repo_dir)
         if repo_host_dir is not None:
             trajectories_dir = repo_host_dir / "trajectories"
@@ -267,16 +298,16 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
         patch_path.write_text(patch)
         runtime_patch_path = f"{runtime.runtime_session_dir}/patch.diff"
         apply_cmd = (
-            f"cd {self._shell_quote(self.repo_dir)} && "
-            f"(git apply -v {self._shell_quote(runtime_patch_path)} && echo '{_APPLY_PATCH_PASS}' || "
+            f"cd {shell_quote(self.repo_dir)} && "
+            f"(git apply -v {shell_quote(runtime_patch_path)} && echo '{APPLY_PATCH_PASS}' || "
             f"(echo 'Failed to apply patch with git apply, trying with patch command...' && "
-            f"(patch --batch --fuzz=5 -p1 -i {self._shell_quote(runtime_patch_path)} && "
-            f"echo '{_APPLY_PATCH_PASS}' || echo '{_APPLY_PATCH_FAIL}')))"
+            f"(patch --batch --fuzz=5 -p1 -i {shell_quote(runtime_patch_path)} && "
+            f"echo '{APPLY_PATCH_PASS}' || echo '{APPLY_PATCH_FAIL}')))"
         )
         result = await runtime.exec(
             apply_cmd,
             env=env,
-            timeout_sec=self._bounded_timeout(self.apply_timeout, timeout_cap),
+            timeout_sec=bounded_timeout(self.apply_timeout, timeout_cap),
         )
         stdout_path = log_dir / "apply_patch.stdout.log"
         stderr_path = log_dir / "apply_patch.stderr.log"
@@ -289,171 +320,9 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
             raise TimeoutError("timed out while applying git diff patch")
         return output
 
-    async def _evaluate_expected_output(
-        self,
-        runtime: BaseRuntime,
-        *,
-        log_dir: Path,
-        env: dict[str, str],
-        timeout_cap: float | None,
-    ) -> tuple[dict[str, Any], Path]:
-        if not self.test_command:
-            raise ValueError(
-                "expected-output grading requires 'test_command' in evaluator config"
-            )
-        combined_path = log_dir / "expected_output.test_output.log"
-        result = await runtime.exec(
-            self.test_command,
-            env=env,
-            timeout_sec=self._bounded_timeout(self.test_timeout, timeout_cap),
-        )
-        if result.return_code == -1:
-            raise TimeoutError("expected-output evaluation timed out")
-        output = (result.stdout or "") + (result.stderr or "")
-        combined_path.write_text(output)
-        expected = self._coerce_expected_output_json()
-        parsed = self._parse_expected_output(output)
-        report = {
-            "empty_generation": False,
-            "resolved": bool(parsed) and parsed == expected,
-            "failed_apply_patch": False,
-            "error_eval": False,
-            "test_timeout": False,
-            "exit_code": result.return_code,
-            "parsed_tests": parsed,
-            "expected_tests": expected,
-        }
-        return report, combined_path
-
-    async def _evaluate_swegym(
-        self,
-        runtime: BaseRuntime,
-        patch: str,
-        *,
-        host_session_dir: Path,
-        log_dir: Path,
-        env: dict[str, str],
-        timeout_cap: float | None,
-    ) -> tuple[dict[str, Any], Path]:
-        if not self.instance:
-            raise ValueError("swegym evaluation requires an 'instance' config object")
-        instance = dict(self.instance)
-        instance_id = str(instance["instance_id"]).lower()
-        instance["instance_id"] = instance_id
-        if "version" not in instance and "base_commit" in instance:
-            instance["version"] = instance["base_commit"]
-
-        test_spec, get_eval_report = self._load_swegym_harness(instance)
-        eval_script_host = host_session_dir / "eval.sh"
-        eval_script_host.write_text(test_spec.eval_script)
-
-        # Place the log inside an instance_id-named directory so that
-        # swegym/swebench get_logs_eval can parse the repo from the path.
-        instance_log_dir = log_dir / instance_id
-        instance_log_dir.mkdir(parents=True, exist_ok=True)
-        combined_path = instance_log_dir / "test_output.txt"
-        result = await runtime.exec(
-            f"/bin/bash {self._shell_quote(f'{runtime.runtime_session_dir}/eval.sh')}",
-            env=env,
-            timeout_sec=self._bounded_timeout(self.test_timeout, timeout_cap),
-        )
-        if result.return_code == -1:
-            raise TimeoutError("swegym evaluation timed out")
-
-        combined_path.write_text((result.stdout or "") + (result.stderr or ""))
-        prediction = {"model_patch": patch, "instance_id": instance_id}
-        grading_report = self._grade_swegym_run(
-            get_eval_report,
-            test_spec=test_spec,
-            prediction=prediction,
-            log_path=combined_path,
-        )
-        report = grading_report[instance_id]
-        return (
-            {
-                "empty_generation": False,
-                "resolved": report.get("resolved", False),
-                "failed_apply_patch": False,
-                "error_eval": False,
-                "test_timeout": False,
-                "exit_code": result.return_code,
-                "grading_report": report,
-            },
-            combined_path,
-        )
-
-    def _load_swegym_harness(self, instance: dict[str, Any]) -> tuple[Any, Any]:
-        try:
-            from swegym.harness.grading import get_eval_report
-            from swegym.harness.test_spec import make_test_spec
-        except ModuleNotFoundError:
-            from swebench.harness.grading import get_eval_report
-            from swebench.harness.test_spec.test_spec import make_test_spec
-        return make_test_spec(instance), get_eval_report
-
-    @staticmethod
-    def _grade_swegym_run(
-        get_eval_report: Any,
-        *,
-        test_spec: Any,
-        prediction: dict[str, Any],
-        log_path: Path,
-    ) -> dict[str, Any]:
-        try:
-            return get_eval_report(
-                test_spec=test_spec,
-                prediction=prediction,
-                log_path=str(log_path),
-                include_tests_status=True,
-            )
-        except TypeError as exc:
-            if "unexpected keyword argument" not in str(exc):
-                raise
-            return get_eval_report(
-                test_spec=test_spec,
-                prediction=prediction,
-                test_log_path=str(log_path),
-                include_tests_status=True,
-            )
-
-    def _coerce_expected_output_json(self) -> dict[str, str]:
-        if self.expected_output_json is None:
-            raise ValueError(
-                "expected-output grading requires expected_output_json in evaluator config"
-            )
-        raw = self.expected_output_json
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        if not isinstance(parsed, dict):
-            raise ValueError("expected_output_json must decode to a JSON object")
-        return {
-            self._normalize_expected_nodeid(str(key)): str(value)
-            for key, value in parsed.items()
-        }
-
-    def _parse_expected_output(self, output: str) -> dict[str, str]:
-        parsed: dict[str, str] = {}
-        for line in output.splitlines():
-            line = _ANSI_ESCAPE_RE.sub("", line).strip()
-            if not line.startswith(("PASSED", "FAILED", "ERROR", "SKIPPED")):
-                continue
-            parts = line.split(maxsplit=1)
-            if len(parts) != 2:
-                continue
-            status, nodeid = parts
-            normalized = self._normalize_expected_nodeid(nodeid)
-            if normalized:
-                parsed[normalized] = status
-        return parsed
-
-    @staticmethod
-    def _normalize_expected_nodeid(nodeid: str) -> str:
-        nodeid = nodeid.split(" - ")[0]
-        parts = nodeid.split("::")
-        if len(parts) >= 3:
-            return ".".join(parts[-2:])
-        if len(parts) == 2:
-            return parts[-1]
-        return nodeid
+    # ------------------------------------------------------------------
+    # Patch filtering
+    # ------------------------------------------------------------------
 
     def _filter_patch(self, patch: str) -> str:
         if not patch.strip():
@@ -493,13 +362,3 @@ class SweGymGitDiffEvaluator(BaseTrajectoryEvaluator):
             if fnmatch.fnmatch(normalized, pattern):
                 return True
         return False
-
-    @staticmethod
-    def _bounded_timeout(base_timeout: float, timeout_cap: float | None) -> float:
-        if timeout_cap is None:
-            return base_timeout
-        return min(base_timeout, timeout_cap)
-
-    @staticmethod
-    def _shell_quote(value: str) -> str:
-        return "'" + value.replace("'", "'\"'\"'") + "'"

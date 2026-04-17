@@ -174,7 +174,7 @@ def build_task_request(
         },
         "builder": {"strategy": "all_records"},
         "evaluator": {
-            "strategy": "swegym_git_diff",
+            "strategy": "swegym_harness",
             "config": {
                 "repo_dir": "/testbed",
                 "patch_command": (
