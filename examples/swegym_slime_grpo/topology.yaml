@@ -14,7 +14,7 @@ gateway:
       max_init_workers: 8
       max_run_workers: 8
       max_postrun_workers: 8
-      model_served: Qwen/Qwen3-4B
+      model_served: Qwen/Qwen3-4B-Instruct-2507
       sglang:
         # Points at slime's sglang-router (started by Ray inside docker)
         base_url: http://127.0.0.1:9000

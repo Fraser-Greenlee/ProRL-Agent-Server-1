@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Convert Qwen3-4B HF weights to Megatron torch_dist format for Slime training.
+# Convert Qwen3-4B-Instruct-2507 HF weights to Megatron torch_dist format for Slime training.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -14,16 +14,16 @@ if [ ! -f "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" ]; then
     exit 1
 fi
 
-HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3-4B}"
-OUTPUT_DIR="${TORCH_DIST_DIR:-${PROJECT_ROOT}/checkpoints/Qwen3-4B_torch_dist}"
+HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3-4B-Instruct-2507}"
+OUTPUT_DIR="${TORCH_DIST_DIR:-${PROJECT_ROOT}/checkpoints/Qwen3-4B-Instruct-2507_torch_dist}"
 mkdir -p "$OUTPUT_DIR"
 
-# Qwen3-4B architecture
+# Qwen3-4B-Instruct-2507: same arch as Qwen3-4B, rotary-base 5M → 256K native ctx.
 MODEL_ARGS=(
     --swiglu --num-layers 36 --hidden-size 2560 --ffn-hidden-size 9728
     --num-attention-heads 32 --group-query-attention --num-query-groups 8
     --use-rotary-position-embeddings --disable-bias-linear
-    --normalization RMSNorm --norm-epsilon 1e-6 --rotary-base 1000000
+    --normalization RMSNorm --norm-epsilon 1e-6 --rotary-base 5000000
     --vocab-size 151936 --kv-channels 128 --qk-layernorm
 )
 

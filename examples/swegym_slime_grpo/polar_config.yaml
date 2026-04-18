@@ -28,11 +28,16 @@ polar_task_template:
           cd /polar/session/workspace && git reset --hard &&
           (command -v npm >/dev/null || /opt/miniconda3/bin/conda install -y -n base -c conda-forge nodejs >/dev/null 2>&1) &&
           export PATH="/opt/miniconda3/bin:$PATH" &&
-          npm install -g @anthropic-ai/claude-code@latest;
+          npm install -g opencode-ai@latest;
           true
   agent:
-    harness: "claude_code"
-    model_name: "Qwen/Qwen3-4B"
+    harness: "opencode"
+    # opencode addresses models as `<provider>/<model_id>`.  The gateway auto-
+    # injects OPENAI_BASE_URL pointing at the SGLang router, so we route via
+    # the `openai` provider and use the HF id SGLang serves under.
+    model_name: "openai/Qwen/Qwen3-4B-Instruct-2507"
+    env:
+      OPENCODE_FAKE_VCS: "git"
     settings: {}
   builder:
     strategy: "per_request"
@@ -46,8 +51,9 @@ polar_task_template:
       exclude_patterns:
         - "trajectories/**"
         - "**/trajectories/**"
-        - ".claude/**"
-        - "**/.claude/**"
+        - ".opencode/**"
+        - "**/.opencode/**"
+        - ".config/opencode/**"
 
 # Advantage estimator — computes per-trace advantages on the Polar side
 # before passing to Slime.  Requires --advantage-estimator external in Slime.

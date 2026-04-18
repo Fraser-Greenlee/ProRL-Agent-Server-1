@@ -36,12 +36,12 @@ if [ ! -d "${MEGATRON_DIR}/megatron" ]; then
 fi
 
 # ── Model ──────────────────────────────────────────────────────────
-HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3-4B}"
-TORCH_DIST_DIR="${TORCH_DIST_DIR:-${PROJECT_ROOT}/checkpoints/Qwen3-4B_torch_dist}"
+HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3-4B-Instruct-2507}"
+TORCH_DIST_DIR="${TORCH_DIST_DIR:-${PROJECT_ROOT}/checkpoints/Qwen3-4B-Instruct-2507_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/checkpoints/swegym_slime_grpo}"
 mkdir -p "$SAVE_DIR"
 
-# Qwen3-4B architecture (from HF config.json)
+# Qwen3-4B-Instruct-2507: same arch as Qwen3-4B, rotary-base 5M → 256K native ctx.
 MODEL_ARGS=(
     --swiglu
     --num-layers 36
@@ -54,7 +54,7 @@ MODEL_ARGS=(
     --disable-bias-linear
     --normalization RMSNorm
     --norm-epsilon 1e-6
-    --rotary-base 1000000
+    --rotary-base 5000000
     --vocab-size 151936
     --kv-channels 128
     --qk-layernorm
@@ -141,7 +141,6 @@ ray job submit --address="http://127.0.0.1:8265" \
     --rollout-batch-size 2 \
     --n-samples-per-prompt 16 \
     --rollout-max-response-len 8192 \
-    --rollout-max-prompt-len 4096 \
     --global-batch-size 32 \
     --rollout-global-dataset \
     --disable-rollout-trim-samples \
@@ -155,7 +154,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --recompute-method uniform \
     --recompute-num-layers 1 \
     --use-dynamic-batch-size \
-    --max-tokens-per-gpu 8192 \
+    --max-tokens-per-gpu 32768 \
     --advantage-estimator external \
     --use-rollout-logprobs \
     --use-tis \
