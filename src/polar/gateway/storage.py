@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -30,12 +29,10 @@ class SessionStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._sessions: dict[str, _SessionState] = {}
-        self._pending_saves: dict[str, list[asyncio.Event]] = {}
 
     def close(self) -> None:
         with self._lock:
             self._sessions.clear()
-            self._pending_saves.clear()
 
     def ensure_session(
         self,
@@ -124,18 +121,6 @@ class SessionStore:
                 for completion in state.completions
             ]
             return CompletionSession.model_validate(payload)
-
-    def register_pending_save(self, session_id: str, done: asyncio.Event) -> None:
-        """Register a pending streaming save so drain can wait for it."""
-        with self._lock:
-            self._pending_saves.setdefault(session_id, []).append(done)
-
-    async def drain_pending_saves(self, session_id: str) -> None:
-        """Wait for all pending streaming saves to finish for *session_id*."""
-        with self._lock:
-            events = self._pending_saves.pop(session_id, [])
-        for event in events:
-            await event.wait()
 
     def delete_session(self, session_id: str) -> int:
         """Drop a session and return how many messages were removed."""

@@ -26,7 +26,6 @@ class PolarSlimeConfig:
     tokenizer_name_or_path: str | None
     add_generation_prompt: bool
     eval_dataset_name: str
-    adv_estimator: Any | None = None  # StrategySpec or None
 
 
 def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
@@ -56,13 +55,6 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
         if request_timeout <= 0:
             raise ValueError("polar_request_timeout must be greater than 0")
 
-    adv_estimator_spec = None
-    adv_estimator_raw = getattr(args, "polar_adv_estimator", None)
-    if isinstance(adv_estimator_raw, dict) and "strategy" in adv_estimator_raw:
-        from polar.trajectory.models import StrategySpec
-
-        adv_estimator_spec = StrategySpec(**adv_estimator_raw)
-
     return PolarSlimeConfig(
         rollout_server_url=str(rollout_server_url).rstrip("/"),
         task_template=task_template,
@@ -80,7 +72,6 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
         tokenizer_name_or_path=getattr(args, "hf_checkpoint", None),
         add_generation_prompt=bool(getattr(args, "polar_add_generation_prompt", True)),
         eval_dataset_name=str(getattr(args, "polar_eval_dataset_name", "polar_eval")),
-        adv_estimator=adv_estimator_spec,
     )
 
 

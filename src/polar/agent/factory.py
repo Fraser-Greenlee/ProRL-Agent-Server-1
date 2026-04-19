@@ -14,9 +14,9 @@ def _builtin_harness_map() -> dict[str, type[BaseHarness]]:
     from polar.agent.harnesses.gemini_cli import GeminiCliHarness
     from polar.agent.harnesses.openhands_sdk import OpenHandsSdkHarness
     from polar.agent.harnesses.opencode import OpenCodeHarness
+    from polar.agent.harnesses.pi import PiHarness
     from polar.agent.harnesses.qwen_code import QwenCodeHarness
     from polar.agent.harnesses.shell import ShellHarness
-    from polar.agent.harnesses.swe_agent import SweAgentHarness
 
     return {
         "claude_code": ClaudeCodeHarness,
@@ -24,9 +24,9 @@ def _builtin_harness_map() -> dict[str, type[BaseHarness]]:
         "gemini_cli": GeminiCliHarness,
         "openhands_sdk": OpenHandsSdkHarness,
         "opencode": OpenCodeHarness,
+        "pi": PiHarness,
         "qwen_code": QwenCodeHarness,
         "shell": ShellHarness,
-        "swe_agent": SweAgentHarness,
     }
 
 

@@ -302,7 +302,7 @@ class AnthropicTransformer(BaseTransformer):
         if text:
             content.append({"type": "text", "text": text})
 
-        for tool_call in message.get("tool_calls", []):
+        for tool_call in message.get("tool_calls") or []:
             content.append({
                 "type": "tool_use",
                 "id": tool_call.get("id", f"toolu_{uuid.uuid4().hex[:24]}"),

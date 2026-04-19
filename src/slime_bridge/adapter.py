@@ -1,16 +1,16 @@
 """Convert Polar rollout results into Slime samples.
 
-Every trace in ``Trajectory.traces`` becomes one Slime ``Sample``.
-Builders own trace curation — the adapter does not filter. Traces that
-lack training tokens (empty prompt_ids or response_ids) are dropped so
+Every trace in ``Trajectory.traces`` becomes one Slime ``Sample``.  All
+samples produced from the same session share the same ``Sample.index``
+(the trajectory's position within the group) so the reward post-processor
+can treat them as one trajectory.  Builders own trace curation — the
+adapter does not filter; traces that lack training tokens are dropped so
 callers never smuggle placeholder tokens into the training batch.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from copy import deepcopy
-import itertools
 import logging
 from typing import Any, TYPE_CHECKING
 
@@ -27,28 +27,25 @@ def session_result_to_samples(
     result: "SessionResult",
     group_index: int,
     *,
+    trajectory_index: int,
     reward_key: str = "score",
-    index: int | None = None,
-    next_index: Callable[[], int] | None = None,
 ) -> list[Any]:
-    """Convert one Polar session result into Slime samples (one per trace)."""
+    """Convert one Polar session result into Slime samples (one per trace).
+
+    All returned samples share ``Sample.index = trajectory_index``; that's
+    the key the reward post-processor uses to collapse them to a single
+    trajectory.
+    """
     Sample = _load_sample_type()
-    traces = list(result.trajectory.traces)
-
-    if next_index is None:
-        counter = itertools.count(0 if index is None else index)
-        next_index = counter.__next__
-
     samples: list[Any] = []
-    for trace_index, trace in enumerate(traces):
-        sample_index = index if (index is not None and trace_index == 0) else next_index()
+    for trace_index, trace in enumerate(result.trajectory.traces):
         sample = _build_sample(
             Sample=Sample,
             result=result,
             trace=trace,
             trace_index=trace_index,
             group_index=group_index,
-            index=sample_index,
+            index=trajectory_index,
             reward_key=reward_key,
         )
         if sample is not None:
@@ -63,7 +60,7 @@ def _build_sample(
     trace: "Trace",
     trace_index: int,
     group_index: int,
-    index: int | None,
+    index: int,
     reward_key: str,
 ) -> Any | None:
     prompt_ids = list(trace.prompt_ids)
@@ -104,8 +101,6 @@ def _build_sample(
         "trajectory_metadata": deepcopy(result.trajectory.metadata),
         "trajectory_status": result.trajectory.status,
     }
-    if trace.advantage is not None:
-        polar_metadata["advantage"] = float(trace.advantage)
 
     return Sample(
         group_index=group_index,

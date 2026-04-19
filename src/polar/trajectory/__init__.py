@@ -1,4 +1,4 @@
-"""Trajectory builders, evaluators, advantage estimators, and shared rollout schemas."""
+"""Trajectory builders, evaluators, and shared rollout schemas."""
 
 from polar.trajectory.models import (
     CompletionRecord,

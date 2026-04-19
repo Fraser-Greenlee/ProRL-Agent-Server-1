@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sample_tasks import (
-    derived_image_for_harness,
+    derived_runtime_image,
     fetch_sample_instances,
 )
 
@@ -26,7 +26,7 @@ def main() -> None:
     rows: list[dict] = []
     for instance in instances:
         instance_id = str(instance["instance_id"])
-        image_tag = derived_image_for_harness(instance_id, "swe_agent")
+        image_tag = derived_runtime_image(instance_id)
         rows.append({
             "prompt": instance["problem_statement"].strip(),
             "label": "",

@@ -568,7 +568,6 @@ class GatewayNodeManager:
             )
 
         self.session_registry.set_status(request.session_id, SessionStatus.BUILDING)
-        await self.storage.drain_pending_saves(request.session_id)
         managed.timer.mark("build", "started")
         try:
             trajectory = await self._await_with_budget(

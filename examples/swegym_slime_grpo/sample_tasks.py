@@ -15,9 +15,7 @@ DATASET_SPLIT = "train"
 DATASET_ROWS_URL = "https://datasets-server.huggingface.co/rows"
 DATASET_PAGE_SIZE = 50
 DEFAULT_CACHE_PATH = Path.home() / ".cache" / "polar" / "swegym_sample_10.json"
-HARNESS_IMAGE_PREFIXES = {
-    "swe_agent": "polar-swegym-swe_agent",
-}
+RUNTIME_IMAGE_PREFIX = "polar-swegym-runtime"
 
 # Curated from the 293-row training split to cover multiple repositories while
 # staying on plain SWE-Gym text instances (no multimodal/image_assets rows).
@@ -91,15 +89,8 @@ def base_image_for_instance_id(instance_id: str) -> str:
     return f"docker.io/xingyaoww/sweb.eval.x86_64.{suffix}:latest"
 
 
-def derived_swe_agent_image(instance_id: str) -> str:
-    return f"polar-swegym-swe_agent:{sanitize_instance_id(instance_id)}"
-
-
-def derived_image_for_harness(instance_id: str, harness: str) -> str:
-    prefix = HARNESS_IMAGE_PREFIXES.get(harness)
-    if prefix is None:
-        raise ValueError(f"Unsupported harness for derived image naming: {harness!r}")
-    return f"{prefix}:{sanitize_instance_id(instance_id)}"
+def derived_runtime_image(instance_id: str) -> str:
+    return f"{RUNTIME_IMAGE_PREFIX}:{sanitize_instance_id(instance_id)}"
 
 
 def sample_rows_url(offset: int, length: int) -> str:

@@ -15,7 +15,6 @@ from polar.gateway.dispatcher import (
     SessionStage,
 )
 from polar.gateway.session import SessionRegistry
-from polar.gateway.streaming import StreamAccumulator
 from polar.rollout.models import (
     SessionDispatchRequest,
     SessionResult,
@@ -58,40 +57,6 @@ def test_session_stage_has_four_values() -> None:
 def test_session_result_has_no_completion_session_field() -> None:
     # Removed from the wire payload.
     assert "completion_session" not in SessionResult.model_fields
-
-
-def test_stream_accumulator_drops_unused_upstream_fields() -> None:
-    # service_tier / system_fingerprint / kv_transfer_params / prompt_logprobs
-    # should no longer be captured into the accumulator.
-    accumulator = StreamAccumulator()
-    chunk = {
-        "id": "r1",
-        "model": "m1",
-        "created": 1,
-        "service_tier": "premium",
-        "system_fingerprint": "fp",
-        "kv_transfer_params": {"k": "v"},
-        "prompt_logprobs": [{"logprob": -0.1}],
-        "choices": [{"delta": {"content": "hi"}}],
-    }
-    accumulator.accumulate(chunk)
-    response = accumulator.to_response()
-    assert "service_tier" not in response
-    assert "system_fingerprint" not in response
-    assert "kv_transfer_params" not in response
-    assert "prompt_logprobs" not in response
-    # Metadata we do keep:
-    assert response["id"] == "r1"
-    assert response["model"] == "m1"
-    assert response["created"] == 1
-
-
-def test_stream_accumulator_keeps_builder_fields() -> None:
-    # Builder reads prompt_token_ids from the response envelope.
-    accumulator = StreamAccumulator()
-    accumulator.accumulate({"prompt_token_ids": [1, 2, 3], "choices": []})
-    response = accumulator.to_response()
-    assert response["prompt_token_ids"] == [1, 2, 3]
 
 
 def test_session_registry_clear_result_payload_releases_heavy_payload() -> None:

@@ -130,6 +130,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --update-weights-interval 1 \
     --rollout-function-path slime_bridge.rollout.generate_rollout_polar_async \
     --custom-rm-path slime_bridge.reward.reward_func \
+    --custom-reward-post-process-path slime_bridge.reward_post_process.post_process_rewards \
     --custom-config-path "${SCRIPT_DIR}/polar_config.yaml" \
     --prompt-data "$PROMPT_DATA" \
     --input-key prompt \
@@ -141,9 +142,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --rollout-batch-size 2 \
     --n-samples-per-prompt 16 \
     --rollout-max-response-len 8192 \
-    --global-batch-size 32 \
-    --rollout-global-dataset \
-    --disable-rollout-trim-samples \
+    --use-dynamic-global-batch-size \
     --tensor-model-parallel-size 2 \
     --sequence-parallel \
     --pipeline-model-parallel-size 1 \
@@ -155,8 +154,8 @@ ray job submit --address="http://127.0.0.1:8265" \
     --recompute-num-layers 1 \
     --use-dynamic-batch-size \
     --max-tokens-per-gpu 32768 \
-    --advantage-estimator external \
-    --use-rollout-logprobs \
+    --advantage-estimator grpo \
+    --grpo-std-normalization \
     --use-tis \
     --use-kl-loss \
     --kl-loss-coef 0.001 \
@@ -178,7 +177,6 @@ ray job submit --address="http://127.0.0.1:8265" \
     --no-gradient-accumulation-fusion \
     --use-wandb \
     --wandb-project "${WANDB_PROJECT:-polar-swegym-grpo}" \
-    --wandb-exp-name "${WANDB_RUN_NAME:-swegym-async-grpo}" \
-    --wandb-group "${WANDB_GROUP:-swegym-async}" \
+    --wandb-group "${WANDB_GROUP:-swegym-async-grpo}" \
     --sglang-router-port 9000 \
     --sglang-tool-call-parser qwen

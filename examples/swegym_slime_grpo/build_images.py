@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build benchmark-derived SWE-Agent images for the curated sample."""
+"""Build benchmark-derived runtime images for the curated SWE-Gym sample."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from sample_tasks import (
     base_image_for_instance_id,
-    derived_swe_agent_image,
+    derived_runtime_image,
     fetch_sample_instances,
 )
 
@@ -101,11 +101,11 @@ def main() -> int:
     if not instances:
         raise SystemExit("No instances selected.")
 
-    print(f"Building {len(instances)} derived SWE-Agent image(s).")
+    print(f"Building {len(instances)} derived runtime image(s).")
     for instance in instances:
         instance_id = str(instance["instance_id"])
         base_image = base_image_for_instance_id(instance_id)
-        derived_image = derived_swe_agent_image(instance_id)
+        derived_image = derived_runtime_image(instance_id)
         if image_exists(derived_image) and not args.force:
             current_version = image_layout_version(derived_image)
             if current_version == IMAGE_LAYOUT_VERSION:

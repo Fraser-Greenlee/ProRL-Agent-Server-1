@@ -22,8 +22,8 @@ SUPPORTED_HARNESSES = (
     "codex",
     "gemini_cli",
     "opencode",
+    "pi",
     "qwen_code",
-    "swe_agent",
 )
 
 BASE_INSTRUCTION = """\
@@ -62,20 +62,9 @@ NODE_HARNESS_PACKAGES: dict[str, str] = {
     "codex": "@openai/codex@0.121.0",
     "gemini_cli": "@google/gemini-cli@0.38.1",
     "opencode": "opencode-ai@1.4.6",
+    "pi": "@mariozechner/pi-coding-agent@0.67.68",
     "qwen_code": "@qwen-code/qwen-code@0.14.5",
 }
-
-SWE_AGENT_GIT_REF = "v1.1.0"
-
-# Session-local (not $HOME): apptainer binds the host home into the
-# container, which leaks leftovers across runs and breaks venv creation.
-SESSION_VENV = "/polar/session/.venv"
-PYTHON_PREPARE = (
-    f'rm -rf {SESSION_VENV} && '
-    f'python3 -m venv {SESSION_VENV} && '
-    f'. {SESSION_VENV}/bin/activate && '
-    'python -m pip install --upgrade pip'
-)
 
 WORKSPACE_PREPARE = (
     "rm -rf /polar/session/workspace && "
@@ -91,22 +80,6 @@ def prepare_command_for_harness(harness: str) -> str:
     install_command = ""
     if harness in NODE_HARNESS_PACKAGES:
         install_command = f'npm install -g {NODE_HARNESS_PACKAGES[harness]} && '
-    elif harness == "swe_agent":
-        install_command = (
-            f"{PYTHON_PREPARE} && "
-            # Pin both the pip install and the source clone to the same SWE-Agent tag
-            # so `config/default.yaml` layout stays consistent.
-            f'python -m pip install --no-cache-dir "git+https://github.com/SWE-agent/SWE-agent.git@{SWE_AGENT_GIT_REF}" && '
-            'SITE="$(python -c "import site; print(site.getsitepackages()[0])")" && '
-            f"git clone --depth 1 --branch {SWE_AGENT_GIT_REF} https://github.com/SWE-agent/SWE-agent.git /tmp/swe-agent-src && "
-            'cp -r /tmp/swe-agent-src/config "$SITE/config" && '
-            'cp -r /tmp/swe-agent-src/tools "$SITE/tools" && '
-            'mkdir -p /polar/session/tools/swe-agent && '
-            'cp /tmp/swe-agent-src/config/default.yaml /polar/session/tools/swe-agent/default.yaml && '
-            'mkdir -p "$SITE/trajectories" && '
-            "rm -rf /tmp/swe-agent-src && "
-            # SWE-Agent runs as root (via sudo -E in the harness).
-        )
     return install_command + WORKSPACE_PREPARE
 
 
@@ -137,13 +110,8 @@ _HARNESS_EVAL_EXCLUDES: dict[str, list[str]] = {
     "codex": [".codex/**", "**/.codex/**"],
     "gemini_cli": [".gemini/**", "**/.gemini/**"],
     "opencode": [".opencode/**", "**/.opencode/**", ".config/opencode/**"],
+    "pi": [".pi/**", "**/.pi/**"],
     "qwen_code": [".qwen/**", "**/.qwen/**"],
-    "swe_agent": [
-        "trajectories/**",
-        "**/trajectories/**",
-        ".swe-agent/**",
-        "**/.swe-agent/**",
-    ],
 }
 
 
@@ -159,8 +127,8 @@ def model_name_for_harness(harness: str, override: str | None) -> str | None:
         "claude_code": "claude-opus-4-5",
         "gemini_cli": "gemini-2.5-flash-lite",
         "opencode": "openai/gpt-5.4",
+        "pi": "openai/gpt-5.4",
         "qwen_code": "qwen3-coder-plus",
-        "swe_agent": "openai/gpt-5.4",
     }
     return defaults.get(harness)
 

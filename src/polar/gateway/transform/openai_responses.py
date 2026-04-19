@@ -312,7 +312,7 @@ class OpenAIResponsesTransformer(BaseTransformer):
                 "content": [{"type": "output_text", "text": content}],
             })
 
-        for tc in message.get("tool_calls", []):
+        for tc in message.get("tool_calls") or []:
             func = tc.get("function", {})
             name = func.get("name", "")
             if name in ("shell", "execute", "run_command"):

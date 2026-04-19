@@ -15,7 +15,6 @@ import queue
 import statistics
 import threading
 import time
-from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -131,22 +130,28 @@ def _convert_task_result_to_samples(
     config: PolarSlimeConfig,
     task_result: TaskResult,
     group: list[Any],
-    *,
-    next_index: Callable[[], int] | None = None,
 ) -> list[Any]:
+    """Convert one task's session results into flat Slime samples.
+
+    Each session → one trajectory → N traces → N samples, all tagged
+    with the same ``Sample.index`` so the reward post-processor groups
+    them as one trajectory.  The index is taken from the originating
+    group sample at matching position, falling back to the position
+    within the task result.
+    """
     group_index = _group_index_for(group)
-    expected_indexes = [getattr(s, "index", None) for s in group]
     group_samples: list[Any] = []
     for pos, session_result in enumerate(task_result.results):
-        idx = expected_indexes[pos] if pos < len(expected_indexes) else None
-        converted = session_result_to_samples(
-            session_result,
-            group_index,
-            reward_key=config.reward_key,
-            index=idx,
-            next_index=next_index,
+        source = group[pos] if pos < len(group) else None
+        traj_idx = int(getattr(source, "index", pos) if source is not None else pos)
+        group_samples.extend(
+            session_result_to_samples(
+                session_result,
+                group_index,
+                trajectory_index=traj_idx,
+                reward_key=config.reward_key,
+            )
         )
-        group_samples.extend(converted)
     return group_samples
 
 
@@ -304,7 +309,6 @@ class AsyncPolarRolloutWorker:
             logger.warning("Task %s ended with status=%s, skipping", task_result.task_id, task_result.status)
             return
 
-        _apply_advantage_estimation(self.config, task_result)
         group_samples = _convert_task_result_to_samples(self.config, task_result, group)
         self.output_queue.put((group_id, group_samples))
 
@@ -391,21 +395,10 @@ async def _run_eval_rollout(
             *(_run_one(pos, g) for pos, g in enumerate(sample_groups))
         )
 
-    for task_result in task_results:
-        _apply_advantage_estimation(config, task_result)
-
     output_groups: list[list[Any]] = []
-    next_output_index = _seed_next_output_index(sample_groups)
-    counter = [next_output_index]
-
-    def _next() -> int:
-        value = counter[0]
-        counter[0] += 1
-        return value
-
     for group, task_result in zip(sample_groups, task_results, strict=True):
         output_groups.append(
-            _convert_task_result_to_samples(config, task_result, group, next_index=_next)
+            _convert_task_result_to_samples(config, task_result, group)
         )
 
     metrics = _build_metrics(config, task_results, output_groups)
@@ -438,16 +431,6 @@ def _pull_sample_groups(data_source: Any, batch_size: int) -> list[list[Any]]:
         if not group:
             raise ValueError("Slime data source returned an empty sample group")
     return groups
-
-
-def _seed_next_output_index(sample_groups: list[list[Any]]) -> int:
-    source_indexes = [
-        int(sample.index)
-        for group in sample_groups
-        for sample in group
-        if getattr(sample, "index", None) is not None
-    ]
-    return min(source_indexes) if source_indexes else 0
 
 
 def _build_metrics(
@@ -557,13 +540,12 @@ def _extract_sample_reward(sample: Any, reward_key: str) -> float:
 
 
 def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[str, float]:
-    """Session-timing means (deduped by session_id), reward_std, advantage_std."""
+    """Session-timing means (deduped by session_id) + reward_std."""
     out: dict[str, float] = {}
     seen: set[str] = set()
     init_ms: list[float] = []
     run_ms: list[float] = []
     postrun_ms: list[float] = []
-    advantages: list[float] = []
     for sample in flat_samples:
         polar_meta = sample.metadata.get("polar", {})
         session_id = sample.session_id
@@ -573,8 +555,6 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
             init_ms.append(float(timing.get("init_ms", 0.0)))
             run_ms.append(float(timing.get("run_ms", 0.0)))
             postrun_ms.append(float(timing.get("postrun_ms", 0.0)))
-        if "advantage" in polar_meta:
-            advantages.append(float(polar_meta["advantage"]))
 
     if init_ms:
         out["polar/session_ms/init_mean"] = sum(init_ms) / len(init_ms)
@@ -582,36 +562,12 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
         out["polar/session_ms/postrun_mean"] = sum(postrun_ms) / len(postrun_ms)
     if len(rewards) > 1:
         out["polar/reward_std"] = statistics.pstdev(rewards)
-    if len(advantages) > 1:
-        out["polar/advantage_std"] = statistics.pstdev(advantages)
     return out
 
 
 def _is_truncated(sample: Any) -> bool:
     status = getattr(sample, "status", None)
     return getattr(status, "value", status) == "truncated"
-
-
-def _apply_advantage_estimation(config: "PolarSlimeConfig", task_result: "TaskResult") -> None:
-    """Run Polar's advantage estimator on a single task group's trajectories.
-
-    Modifies ``task_result.results`` in-place so that each trace carries a
-    pre-computed ``advantage`` scalar before the adapter converts to Slime samples.
-    """
-    if config.adv_estimator is None:
-        return
-
-    from polar.trajectory.registry import default_adv_estimator_registry
-
-    registry = default_adv_estimator_registry()
-    estimator = registry.create(config.adv_estimator)
-
-    trajectories = [sr.trajectory for sr in task_result.results]
-    updated = estimator.estimate(trajectories)
-    for i, trajectory in enumerate(updated):
-        task_result.results[i] = task_result.results[i].model_copy(
-            update={"trajectory": trajectory}
-        )
 
 
 def _load_rollout_train_output_type() -> Any:

@@ -85,15 +85,3 @@ def default_evaluator_registry() -> StrategyRegistry:
     return registry
 
 
-def default_adv_estimator_registry() -> StrategyRegistry:
-    """Pre-populated registry with built-in advantage estimators."""
-    from polar.trajectory.adv_estimator import (
-        BaseAdvantageEstimator,
-        HierarchicalGroupAdvantageEstimator,
-        ShareAdvInGroupAdvantageEstimator,
-    )
-
-    registry: StrategyRegistry[BaseAdvantageEstimator] = StrategyRegistry(BaseAdvantageEstimator)
-    registry.register("hierarchical_group", HierarchicalGroupAdvantageEstimator)
-    registry.register("share_adv_in_group", ShareAdvInGroupAdvantageEstimator)
-    return registry

@@ -94,7 +94,6 @@ class Trace(BaseModel):
     finish_reason: str | None = None
     response_logprobs: list[dict[str, Any]] | None = None
     reward: float | None = None
-    advantage: float | None = None
 
 
 class Trajectory(BaseModel):

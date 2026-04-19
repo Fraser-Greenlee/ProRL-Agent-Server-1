@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import hashlib
@@ -14,7 +13,6 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from starlette.background import BackgroundTask
 
 from polar.config import GatewayNodeConfig, TopologyConfig
 from polar.gateway.detection import APIType, detect, extract_model
@@ -37,9 +35,6 @@ from polar.gateway.session import (
     resolve_session_id,
 )
 from polar.gateway.storage import SessionStore
-from polar.gateway.streaming import (
-    StreamAccumulator,
-)
 from polar.gateway.transform import TransformManager
 from polar.gateway.transform.base import BaseTransformer
 from polar.rollout.models import SessionDispatchRequest, SessionDispatchResponse, SessionStatus
@@ -551,76 +546,53 @@ async def _handle_streaming(
     original_model: str,
     session_info: Any | None,
 ) -> StreamingResponse | JSONResponse:
+    # SGLang's tool-call parser swallows per-token logprobs/input_token_ids when
+    # streaming, which breaks training. Call SGLang non-streaming to capture the
+    # full response with token data, then fake-stream SSE events back to the
+    # client (no user-visible difference since the whole response arrives at once).
     state = get_state()
+    non_stream_request = {**openai_request, "stream": False}
     try:
-        raw_stream = await state.sglang.open_completion_stream(openai_request)
+        response = await state.sglang.completion(non_stream_request)
     except UpstreamError as exc:
-        logger.warning("Streaming setup error for session %s: %s", session_id, exc)
+        logger.warning("Upstream error for streaming session %s: %s", session_id, exc)
         return _upstream_error_response(api_type, exc)
 
-    accumulator = StreamAccumulator()
+    state.storage.save_message(
+        session_id,
+        openai_request,
+        response,
+        original_request=original_request,
+        model_requested=original_model,
+        model_used=openai_request["model"],
+        api_type=api_type.value,
+        task_id=session_info.task_id if session_info else None,
+        created_at=session_info.created_at.isoformat() if session_info else None,
+    )
+
+    synthetic_chunk = _response_to_stream_chunk(response)
     stream_state = transformer.create_stream_state(original_request)
-    outcome = {"persist": False}
-    save_done = asyncio.Event()
-    state.storage.register_pending_save(session_id, save_done)
 
     async def generate():
-        is_first = True
-        had_error = False
         try:
-            async for chunk in raw_stream.aiter_chunks():
-                accumulator.accumulate(chunk)
-                if stream_state is not None:
-                    transformed = stream_state.process_chunk(chunk, is_first=is_first)
-                    output = _format_stream_events(api_type, transformed) if transformed else ""
-                else:
-                    output = format_stream_output(
-                        api_type,
-                        transformer,
-                        chunk,
-                        original_request,
-                        is_first,
-                    )
-                if output:
-                    yield output
-                is_first = False
-        except Exception as exc:
-            had_error = True
-            logger.error("Stream error: %s", exc)
-            yield _stream_error_output(api_type, exc)
-        finally:
-            await raw_stream.aclose()
-
-        if not had_error:
             if stream_state is not None:
+                events = stream_state.process_chunk(synthetic_chunk, is_first=True)
+                if events:
+                    yield _format_stream_events(api_type, events)
                 final_events = stream_state.finalize()
                 if final_events:
                     yield _format_stream_events(api_type, final_events)
+            else:
+                output = format_stream_output(
+                    api_type, transformer, synthetic_chunk, original_request, True,
+                )
+                if output:
+                    yield output
             if api_type == APIType.OPENAI_CHAT:
                 yield "data: [DONE]\n\n"
-            outcome["persist"] = True
-
-    async def finalize() -> None:
-        try:
-            if not outcome["persist"]:
-                return
-            try:
-                response = accumulator.to_response()
-                state.storage.save_message(
-                    session_id,
-                    openai_request,
-                    response,
-                    original_request=original_request,
-                    model_requested=original_model,
-                    model_used=openai_request["model"],
-                    api_type=api_type.value,
-                    task_id=session_info.task_id if session_info else None,
-                    created_at=session_info.created_at.isoformat() if session_info else None,
-                )
-            except Exception as exc:
-                logger.error("Failed to save streaming response: %s", exc)
-        finally:
-            save_done.set()
+        except Exception as exc:
+            logger.error("Synthetic stream error: %s", exc)
+            yield _stream_error_output(api_type, exc)
 
     return StreamingResponse(
         generate(),
@@ -630,8 +602,49 @@ async def _handle_streaming(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
-        background=BackgroundTask(finalize),
     )
+
+
+def _response_to_stream_chunk(response: dict[str, Any]) -> dict[str, Any]:
+    """Convert a non-streaming chat completion into a single 'delta' chunk
+    suitable for a transformer's stream_state.process_chunk / transform_stream_chunk."""
+    choices = response.get("choices") or [{}]
+    choice = choices[0]
+    message = choice.get("message", {}) or {}
+
+    tool_calls_delta: list[dict[str, Any]] = []
+    for i, tc in enumerate(message.get("tool_calls") or []):
+        func = tc.get("function", {}) or {}
+        tool_calls_delta.append({
+            "index": i,
+            "id": tc.get("id"),
+            "type": tc.get("type", "function"),
+            "function": {
+                "name": func.get("name", ""),
+                "arguments": func.get("arguments", ""),
+            },
+        })
+
+    delta: dict[str, Any] = {"role": "assistant"}
+    if message.get("content") is not None:
+        delta["content"] = message.get("content")
+    if message.get("reasoning_content") is not None:
+        delta["reasoning_content"] = message.get("reasoning_content")
+    if tool_calls_delta:
+        delta["tool_calls"] = tool_calls_delta
+
+    return {
+        "id": response.get("id"),
+        "object": "chat.completion.chunk",
+        "created": response.get("created"),
+        "model": response.get("model"),
+        "choices": [{
+            "index": 0,
+            "delta": delta,
+            "finish_reason": choice.get("finish_reason"),
+        }],
+        "usage": response.get("usage"),
+    }
 
 
 def serve(

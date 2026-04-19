@@ -122,7 +122,6 @@ class BasePatchEvaluator(BaseTrajectoryEvaluator):
         patch = await self._extract_patch(
             source_runtime,
             patch_path,
-            session_dir=session_dir,
             env=eval_env,
             timeout_cap=timeout_cap,
         )
@@ -221,7 +220,6 @@ class BasePatchEvaluator(BaseTrajectoryEvaluator):
         runtime: BaseRuntime,
         patch_path: Path,
         *,
-        session_dir: Path,
         env: dict[str, str],
         timeout_cap: float | None,
     ) -> str:
@@ -240,49 +238,7 @@ class BasePatchEvaluator(BaseTrajectoryEvaluator):
             raise RuntimeError(
                 f"git diff command failed with exit code {result.return_code}: {result.stderr}"
             )
-        patch = result.stdout or ""
-        if patch.strip():
-            return patch
-
-        fallback_patch = self._read_fallback_patch(runtime, session_dir)
-        if fallback_patch.strip():
-            patch_path.parent.mkdir(parents=True, exist_ok=True)
-            patch_path.with_suffix(".fallback.log").write_text(
-                "git diff was empty; using saved agent patch artifact\n"
-            )
-            return fallback_patch
-        return patch
-
-    def _read_fallback_patch(self, runtime: BaseRuntime, session_dir: Path) -> str:
-        for candidate in self._fallback_patch_candidates(runtime, session_dir):
-            if not candidate.is_file():
-                continue
-            try:
-                text = candidate.read_text()
-            except OSError:
-                continue
-            if text.strip():
-                return text
-        return ""
-
-    def _fallback_patch_candidates(
-        self,
-        runtime: BaseRuntime,
-        session_dir: Path,
-    ) -> list[Path]:
-        candidates: list[Path] = [session_dir / "logs" / "agent" / "swe-agent.patch"]
-        repo_host_dir = runtime.resolve_host_path(self.repo_dir)
-        if repo_host_dir is not None:
-            trajectories_dir = repo_host_dir / "trajectories"
-            if trajectories_dir.exists():
-                candidates.extend(
-                    sorted(
-                        trajectories_dir.rglob("*.patch"),
-                        key=lambda path: path.stat().st_mtime,
-                        reverse=True,
-                    )
-                )
-        return candidates
+        return result.stdout or ""
 
     async def _apply_patch(
         self,

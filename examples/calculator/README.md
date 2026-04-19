@@ -88,6 +88,6 @@ uv run python examples/calculator/submit_all.py --num-samples 4
 - `codex`
 - `gemini_cli`
 - `opencode`
+- `pi`
 - `qwen_code`
-- `swe_agent`
 

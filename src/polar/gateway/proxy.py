@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 
@@ -45,70 +45,6 @@ class UpstreamTimeoutError(UpstreamError):
 
 class UpstreamTransportError(UpstreamError):
     """Raised for connection and transport failures."""
-
-
-class OpenedStream:
-    """An already-opened upstream stream with a primed first chunk."""
-
-    def __init__(self, response: httpx.Response):
-        self._response = response
-        self._lines = response.aiter_lines()
-        self._buffered_chunks: list[dict[str, Any]] = []
-        self._done = False
-        self._closed = False
-
-    async def prime(self) -> None:
-        """Read the first parseable chunk before the HTTP 200 is committed downstream."""
-        first_chunk = await self._next_chunk()
-        if first_chunk is not None:
-            self._buffered_chunks.append(first_chunk)
-
-    async def aiter_chunks(self) -> AsyncIterator[dict[str, Any]]:
-        """Iterate buffered and live SSE data chunks."""
-        while self._buffered_chunks:
-            yield self._buffered_chunks.pop(0)
-
-        while not self._done:
-            chunk = await self._next_chunk()
-            if chunk is None:
-                return
-            yield chunk
-
-    async def _next_chunk(self) -> dict[str, Any] | None:
-        while not self._done:
-            try:
-                line = await self._lines.__anext__()
-            except StopAsyncIteration:
-                self._done = True
-                return None
-            except httpx.TimeoutException as exc:
-                raise UpstreamTimeoutError("Upstream streaming response timed out") from exc
-            except httpx.RequestError as exc:
-                raise UpstreamTransportError(
-                    f"Upstream streaming connection failed: {exc}"
-                ) from exc
-
-            line = line.strip()
-            if not line or not line.startswith("data: "):
-                continue
-
-            data = line[6:]
-            if data == "[DONE]":
-                self._done = True
-                return None
-
-            try:
-                return json.loads(data)
-            except json.JSONDecodeError:
-                logger.warning("Failed to parse SSE chunk: %s", data[:200])
-
-        return None
-
-    async def aclose(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        await self._response.aclose()
 
 
 class SGLangClient:
@@ -180,48 +116,6 @@ class SGLangClient:
 
         await self._raise_for_status(resp)
         return resp.json()
-
-    async def open_completion_stream(self, request: dict[str, Any]) -> OpenedStream:
-        """Open, validate, and prime a streaming response before returning it."""
-        client = await self._get_client()
-        request_copy = request.copy()
-        request_copy["stream"] = True
-        response: httpx.Response | None = None
-
-        try:
-            upstream_request = client.build_request(
-                "POST",
-                "/v1/chat/completions",
-                json=request_copy,
-                headers={"Content-Type": "application/json"},
-            )
-            response = await client.send(upstream_request, stream=True)
-            await self._raise_for_status(response)
-
-            stream = OpenedStream(response)
-            try:
-                await stream.prime()
-            except Exception:
-                await stream.aclose()
-                raise
-            return stream
-        except UpstreamError:
-            if response is not None and not response.is_closed:
-                await response.aclose()
-            raise
-        except httpx.RequestError as exc:
-            if response is not None and not response.is_closed:
-                await response.aclose()
-            raise self._translate_transport_error(exc) from exc
-
-    async def completion_stream(self, request: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        """Backwards-compatible helper for callers that still expect an iterator."""
-        stream = await self.open_completion_stream(request)
-        try:
-            async for chunk in stream.aiter_chunks():
-                yield chunk
-        finally:
-            await stream.aclose()
 
     async def list_models(self) -> dict[str, Any]:
         """Passthrough GET /v1/models."""

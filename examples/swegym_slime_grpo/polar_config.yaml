@@ -12,8 +12,10 @@ polar_eval_dataset_name: "swegym_eval"
 polar_task_template:
   timeout_seconds: 2400
   runtime:
-    backend: "docker"
-    image: "{sample.metadata.polar_image}"
+    backend: "apptainer"
+    # Apptainer reads the image from the local Docker daemon (same image built
+    # by build_images.py); plain Docker refs like "foo:tag" won't resolve.
+    image: "docker-daemon:{sample.metadata.polar_image}"
     network: "host"
     workdir: "/polar/session/workspace"
     prepare:
@@ -54,16 +56,5 @@ polar_task_template:
         - ".opencode/**"
         - "**/.opencode/**"
         - ".config/opencode/**"
-
-# Advantage estimator — computes per-trace advantages on the Polar side
-# before passing to Slime.  Requires --advantage-estimator external in Slime.
-# Set to null (or remove) to let Slime compute advantages internally.
-#
-# share_adv_in_group: all traces in a trajectory share one outcome reward
-# (the swebench_harness resolved/unresolved signal), so they share one
-# GRPO-standardized advantage — subagents, parallel agents etc. "eat from
-# the big pot".
-polar_adv_estimator:
-  strategy: "share_adv_in_group"
 
 polar_task_id_template: "polar-swegym-grpo-{rollout_id}-{sample.group_index}"

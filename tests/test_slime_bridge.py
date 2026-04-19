@@ -243,10 +243,13 @@ def test_session_result_to_samples_drops_empty_token_traces(monkeypatch) -> None
         trajectory=trajectory,
         timing=SessionTiming(),
     )
-    samples = adapter.session_result_to_samples(result, group_index=0)
+    samples = adapter.session_result_to_samples(
+        result, group_index=0, trajectory_index=7
+    )
     assert len(samples) == 1
     sample = samples[0]
     assert sample.tokens == [1, 2, 3, 4]
     assert sample.response_length == 2
     assert sample.status == _FakeSampleStatus.COMPLETED
     assert sample.reward == {"score": 0.0}
+    assert sample.index == 7

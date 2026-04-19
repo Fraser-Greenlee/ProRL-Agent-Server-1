@@ -1,6 +1,6 @@
-# SWE-Gym Slime GRPO (Shared-Advantage)
+# SWE-Gym Slime GRPO
 
-Fully async RL training on the curated 10-task SWE-Gym sample using **Polar** for agent rollout and **Slime** for distributed training with native GPU-to-GPU weight sync. Polar owns advantage estimation via its `ShareAdvInGroupAdvantageEstimator` — every trace inside one trajectory shares the same GRPO-standardized advantage, derived from the single `swebench_harness` outcome reward.
+Fully async RL training on the curated 10-task SWE-Gym sample using **Polar** for agent rollout and **Slime** for distributed training with native GPU-to-GPU weight sync. Advantage estimation lives entirely inside Slime: the rollout adapter tags every trace in a trajectory with the same `Sample.index`, and Slime's `--custom-reward-post-process-path` hook collapses them to one outcome reward per trajectory before GRPO normalizes across trajectories in the group. 
 
 ## Architecture
 
@@ -16,7 +16,7 @@ Fully async RL training on the curated 10-task SWE-Gym sample using **Polar** fo
 ┌──────────────────┐    ┌──────────┴───────────────────┐
 │  SGLang ×4       │    │  Polar Rollout  :8080        │
 │  GPU 0-3         │◀───│    └─ Gateway  :8100         │
-│  (Slime-managed) │    │         └─ SWE-Agent in      │
+│  (Slime-managed) │    │         └─ Agent harness in  │
 │  Router :9000    │    │            Apptainer (CPU)   │
 └──────────────────┘    └──────────────────────────────┘
 ```
@@ -46,14 +46,11 @@ uv pip install --prerelease=allow sglang==0.5.10
 git clone https://github.com/NVIDIA/Megatron-LM.git Megatron-LM
 uv pip install -e Megatron-LM
 
-# 5. Build SWE-Agent container images
+# 5. Build per-instance runtime container images
 python examples/swegym_slime_grpo/build_images.py
 
 # 6. Apply SGLang patch (adds token IDs to logprobs) — expects sglang==0.5.10
 bash scripts/patch/patch_sglang.sh
-
-# 7. Apply Slime patch (adds external advantage estimator support) — expects slime==0.2.4
-bash scripts/patch/patch_slime.sh
 ```
 
 ## Quick Start
@@ -74,18 +71,20 @@ Override paths if cloned elsewhere:
 SLIME_DIR=/path/to/slime MEGATRON_DIR=/path/to/Megatron-LM bash run.sh
 ```
 
-Configure in `polar_config.yaml` under `polar_adv_estimator`. Remove the block entirely to fall back to Slime's built-in estimators.
+### Advantage estimation
+
+`run.sh` runs Slime's built-in GRPO (`--advantage-estimator grpo --grpo-std-normalization`) with `--custom-reward-post-process-path slime_bridge.reward_post_process.post_process_rewards`. The hook dedupes traces from the same Polar session to one reward per trajectory, then normalizes across trajectories in the group — the shared-within-trajectory, normalized-across-trajectories behavior previously implemented as a Polar-side estimator now lives in a 60-line Slime plugin.
 
 ### Off-policy correction (`--use-tis`)
 
-When `--advantage-estimator external` is combined with `--use-rollout-logprobs`, the trainer must also set `--use-tis` so samples that straddle a weight update receive truncated importance sampling correction. Without `--use-tis`, those samples train uncorrected — silently degrading signal. `run.sh` sets this flag; keep it when deriving new configs.
+When `--use-rollout-logprobs` is set, the trainer must also set `--use-tis` so samples that straddle a weight update receive truncated importance sampling correction. Without `--use-tis`, those samples train uncorrected — silently degrading signal. `run.sh` sets this flag; keep it when deriving new configs.
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `run.sh` | Main launch: starts Polar, Ray + Slime (manages SGLang), and training |
-| `polar_config.yaml` | Polar bridge config (task template, concurrency, advantage estimator) |
+| `polar_config.yaml` | Polar bridge config (task template, concurrency) |
 | `topology.yaml` | Polar cluster topology (rollout + gateway, points at Slime's SGLang router) |
 | `prepare_data.py` | Fetches SWE-Gym tasks, writes JSONL for Slime |
 | `convert_weights.sh` | HF to Megatron torch_dist weight conversion |
