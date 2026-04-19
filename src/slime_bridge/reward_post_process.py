@@ -11,6 +11,12 @@ Adapter contract:
     the same ``Sample.index`` (the trajectory's position within the group).
     Samples from different sessions in the same group get distinct indices.
 
+FAILED/ABORTED trajectories (agent ERROR or TIMEOUT) are excluded from the
+group baseline: they don't contribute to mean/std, and their own normalized
+reward is forced to 0.  This prevents agent-side failures — which are
+semantically "no outcome" rather than "outcome = 0" — from biasing the
+advantage of the surviving samples in the group.
+
 Degenerate case (one trace per trajectory) collapses to plain GRPO
 group-normalization — no special-casing needed.
 """
@@ -44,7 +50,10 @@ def post_process_rewards(
     )
 
     # Key each sample by its trajectory; first-seen reward per trajectory wins.
+    # A trajectory is marked failed if *any* of its traces has FAILED/ABORTED
+    # status (in practice all traces share the session status, but be safe).
     traj_reward: dict[tuple[int, int], float] = {}
+    traj_failed: dict[tuple[int, int], bool] = {}
     group_keys: dict[int, list[tuple[int, int]]] = {}
     key_by_sample: list[tuple[int, int]] = []
     for i, sample in enumerate(samples):
@@ -52,18 +61,39 @@ def post_process_rewards(
         traj_idx = int(sample.index) if sample.index is not None else i
         key = (group_idx, traj_idx)
         key_by_sample.append(key)
+        failed = _is_failed_trajectory(sample)
         if key not in traj_reward:
             traj_reward[key] = raw_rewards[i]
+            traj_failed[key] = failed
             group_keys.setdefault(group_idx, []).append(key)
+        elif failed:
+            traj_failed[key] = True
 
     normalized: dict[tuple[int, int], float] = {}
     for keys in group_keys.values():
+        valid_mask = torch.tensor([not traj_failed[k] for k in keys], dtype=torch.bool)
+        if not bool(valid_mask.any()):
+            # All trajectories in this group failed — no signal available.
+            for k in keys:
+                normalized[k] = 0.0
+            continue
         vals = torch.tensor([traj_reward[k] for k in keys], dtype=torch.float32)
-        vals = vals - vals.mean()
+        valid_vals = vals[valid_mask]
+        vals = vals - valid_vals.mean()
         if std_norm:
-            vals = vals / (vals.std() + 1e-6) if len(vals) > 1 else torch.zeros_like(vals)
+            vals = vals / (valid_vals.std() + 1e-6) if len(valid_vals) > 1 else torch.zeros_like(vals)
+        # Failed trajectories' loss_mask is already 0, but zeroing here keeps
+        # their advantage out of any downstream stats/logging too.
+        vals = vals * valid_mask.to(vals.dtype)
         for k, v in zip(keys, vals.tolist(), strict=True):
             normalized[k] = float(v)
 
     rewards = [normalized[k] for k in key_by_sample]
     return raw_rewards, rewards
+
+
+def _is_failed_trajectory(sample: Any) -> bool:
+    """True if the sample's status marks it as agent ERROR or TIMEOUT."""
+    status = getattr(sample, "status", None)
+    name = getattr(status, "name", None) or str(status).rsplit(".", 1)[-1]
+    return name.upper() in ("FAILED", "ABORTED")

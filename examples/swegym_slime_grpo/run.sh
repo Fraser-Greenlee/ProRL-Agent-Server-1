@@ -61,7 +61,7 @@ MODEL_ARGS=(
 )
 
 # ── Data ───────────────────────────────────────────────────────────
-PROMPT_DATA="${SCRIPT_DIR}/swegym_10_tasks.jsonl"
+PROMPT_DATA="${SCRIPT_DIR}/swegym_30_tasks.jsonl"
 if [ ! -f "$PROMPT_DATA" ]; then
     echo "Preparing training data..."
     python "${SCRIPT_DIR}/prepare_data.py"
@@ -109,8 +109,8 @@ RUNTIME_ENV_JSON="{
   }
 }"
 
-# 10 tasks, rollout_batch_size=2, n_samples_per_prompt=16
-# → 5 training steps, each task seen exactly once
+# 30 tasks, rollout_batch_size=2, n_samples_per_prompt=16
+# → 15 training steps × 2 prompts = 30 task exposures (each task seen ~1 time)
 # → 32 samples per step (2 prompts × 16 rollouts)
 # → global_batch_size=32 (must be divisible by DP=2 → 16 per rank)
 echo "=== Launching train_async.py ==="
@@ -138,7 +138,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --metadata-key metadata \
     --rollout-shuffle \
     --reward-key score \
-    --num-rollout 5 \
+    --num-rollout 15 \
     --rollout-batch-size 2 \
     --n-samples-per-prompt 16 \
     --rollout-max-response-len 8192 \

@@ -18,7 +18,7 @@ from sample_tasks import (
     fetch_sample_instances,
 )
 
-OUTPUT = Path(__file__).resolve().parent / "swegym_10_tasks.jsonl"
+OUTPUT = Path(__file__).resolve().parent / "swegym_30_tasks.jsonl"
 
 
 def main() -> None:
