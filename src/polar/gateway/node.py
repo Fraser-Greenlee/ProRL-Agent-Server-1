@@ -722,8 +722,11 @@ class GatewayNodeManager:
                 for trace, reward in zip(traces, eval_result.trace_rewards)
             ]
         elif eval_result.outcome_reward is not None and traces:
-            last = traces[-1].model_copy(update={"reward": eval_result.outcome_reward})
-            traces = traces[:-1] + [last]
+            # Broadcast trajectory-level reward 
+            traces = [
+                trace.model_copy(update={"reward": eval_result.outcome_reward})
+                for trace in traces
+            ]
 
         eval_metadata = {
             "strategy": evaluator_spec.strategy,

@@ -20,13 +20,9 @@ class OpenCodeHarness(BaseHarness):
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._config_dir}")
-
-        # Build opencode.json config with provider/model
         model = self.model_name or "openai/gpt-5.4"
         provider, model_id = (
-            model.split("/", 1)
-            if "/" in model
-            else ("openai", model)
+            model.split("/", 1) if "/" in model else ("openai", model)
         )
 
         config: dict = {

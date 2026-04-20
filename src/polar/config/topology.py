@@ -100,7 +100,7 @@ class RolloutServiceConfig(_StrictModel):
     public_url: str = ""
     save_dir: str | None = None
     dispatch_poll_interval_seconds: float = Field(default=1.0, gt=0)
-    callback_grace_seconds: float = Field(default=5.0, ge=0)
+    callback_grace_seconds: float = Field(default=120.0, ge=0)
 
     @model_validator(mode="before")
     @classmethod

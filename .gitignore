@@ -17,3 +17,5 @@ reference_projects/
 docs/
 logs/
 train-logs/
+slime/
+Megatron-LM/

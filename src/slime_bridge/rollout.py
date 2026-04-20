@@ -662,21 +662,41 @@ def _extract_sample_reward(sample: Any, reward_key: str) -> float:
 
 
 def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[str, float]:
-    """Session-timing means (deduped by session_id) + reward_std."""
+    """Session-level aggregates: timing means, reward std, usable vs
+    placeholder sample counts, and traces-per-session mean.
+
+    Placeholder samples are emitted by ``slime_bridge.adapter`` when a
+    Polar session returned zero usable traces (typically the pipeline
+    race or a genuine agent failure). Separating them from real samples
+    is critical for spotting reward collapses caused by the rollout
+    pipeline rather than the model.
+    """
     out: dict[str, float] = {}
     seen: set[str] = set()
     init_ms: list[float] = []
     run_ms: list[float] = []
     postrun_ms: list[float] = []
+    session_is_placeholder: dict[str, bool] = {}
+    session_trace_count: dict[str, int] = {}
+    placeholder_samples = 0
     for sample in flat_samples:
         polar_meta = sample.metadata.get("polar", {})
         session_id = polar_meta.get("session_id")
-        if session_id and session_id not in seen:
+        is_placeholder = bool(polar_meta.get("placeholder"))
+        if is_placeholder:
+            placeholder_samples += 1
+        if not session_id:
+            continue
+        if session_id not in seen:
             seen.add(session_id)
             timing = polar_meta.get("timing") or {}
             init_ms.append(float(timing.get("init_ms", 0.0)))
             run_ms.append(float(timing.get("run_ms", 0.0)))
             postrun_ms.append(float(timing.get("postrun_ms", 0.0)))
+            session_is_placeholder[session_id] = is_placeholder
+            session_trace_count[session_id] = 0 if is_placeholder else 1
+        elif not is_placeholder:
+            session_trace_count[session_id] += 1
 
     if init_ms:
         out["polar/session_ms/init_mean"] = sum(init_ms) / len(init_ms)
@@ -684,6 +704,17 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
         out["polar/session_ms/postrun_mean"] = sum(postrun_ms) / len(postrun_ms)
     if len(rewards) > 1:
         out["polar/reward_std"] = statistics.pstdev(rewards)
+
+    total_sessions = len(seen)
+    empty_sessions = sum(1 for p in session_is_placeholder.values() if p)
+    out["polar/placeholder_samples"] = float(placeholder_samples)
+    out["polar/usable_samples"] = float(len(flat_samples) - placeholder_samples)
+    out["polar/empty_sessions"] = float(empty_sessions)
+    out["polar/total_sessions"] = float(total_sessions)
+    if total_sessions > 0:
+        out["polar/traces_per_session/mean"] = (
+            sum(session_trace_count.values()) / total_sessions
+        )
     return out
 
 

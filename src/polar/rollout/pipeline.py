@@ -39,7 +39,7 @@ class Pipeline:
         save_dir: str | None,
         scheduler: NodeScheduler,
         dispatch_poll_interval_seconds: float = 1.0,
-        callback_grace_seconds: float = 5.0,
+        callback_grace_seconds: float = 180.0,
     ) -> None:
         self.callback_url = callback_url.rstrip("/")
         self.save_dir = Path(save_dir) if save_dir else None
@@ -197,35 +197,37 @@ class Pipeline:
         if session.gateway_url is None:
             raise RuntimeError("session gateway_url was not assigned")
 
+        # Interleave callback-wait and gateway-poll so the poll path is a
+        # live safety net (not dead code). Covers two races:
+        #   1. Callback HTTP POST dropped/delayed — poll GET finds the result.
+        #   2. Gateway flips status→terminal a tick before serializing the
+        #      result payload — we re-poll next iteration instead of
+        #      synthesizing a failure.
         callback_deadline = self._callback_deadline_monotonic(session)
-        try:
-            return await asyncio.wait_for(
-                asyncio.shield(future),
-                timeout=self._remaining_callback_window_seconds(session),
-            )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Callback timed out for session %s on node %s; polling result",
-                session.session_id,
-                session.node_id,
-            )
+        poll_interval = max(self.dispatch_poll_interval_seconds, 5.0)
 
-        while time.monotonic() < callback_deadline:
-            result = await self._poll_session_result(
-                session,
-                timeout=self._remaining_callback_window_seconds(session),
-            )
+        while True:
+            remaining = callback_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(future),
+                    timeout=min(poll_interval, remaining),
+                )
+            except asyncio.TimeoutError:
+                pass
+            try:
+                result = await self._poll_session_result(session, timeout=30.0)
+            except Exception:
+                logger.exception(
+                    "poll_session_result failed for session %s", session.session_id
+                )
+                result = None
             if result is not None:
                 if not future.done():
                     future.set_result(result)
                 return result
-            sleep_seconds = min(
-                self.dispatch_poll_interval_seconds,
-                max(0.0, callback_deadline - time.monotonic()),
-            )
-            if sleep_seconds <= 0:
-                break
-            await asyncio.sleep(sleep_seconds)
 
         raise TimeoutError(
             f"session {dispatch_request.session_id} did not return a terminal result "
@@ -252,13 +254,12 @@ class Pipeline:
         result_payload = payload.get("result")
         if isinstance(result_payload, dict):
             return SessionResult.model_validate(result_payload)
-        status = str(payload.get("status", "")).upper()
-        if status in SessionStatus.terminal():
-            return self._failure_result(
-                session,
-                status=status,
-                error=f"terminal session state {status} without session result payload",
-            )
+        # Gateway may flip status→terminal before the result payload is
+        # serialized into the GET response. Returning None here keeps the
+        # outer loop polling until either the payload lands or the callback
+        # deadline expires — preventing synthesized empty-trace "failures"
+        # that poisoned GRPO batches (see feedback_sglang_tool_parser.md
+        # et al).
         return None
 
     def _remaining_timeout_seconds(self, session: SessionContext) -> float:

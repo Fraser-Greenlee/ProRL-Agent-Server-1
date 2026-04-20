@@ -114,7 +114,7 @@ def _build_sample(
         response_log_probs = [0.0] * len(response_ids)
 
     status = _sample_status(Sample, result, trace)
-    reward_value = _reward_value(result, trace)
+    reward_value = _reward_value(trace)
 
     loss_mask = [1] * len(response_ids)
     if status in (Sample.Status.ABORTED, Sample.Status.FAILED):
@@ -164,9 +164,12 @@ def _build_dummy_sample(
     index: int,
     reward_key: str,
 ) -> Any:
-    """Minimal zero-gradient placeholder — keeps per-session sample count
-    at 1 so slime's _get_rollout_data doesn't crash on an empty flattened
-    sample list. 1-token prompt + 1-token response, loss_mask=0.
+    """Minimal near-zero-gradient placeholder — keeps per-session sample
+    count at 1 so slime's _get_rollout_data doesn't crash on an empty
+    flattened list. ``loss_mask=[1]`` ensures the global mask sum stays
+    non-zero even if every session in a batch fails; distributed_masked_whiten
+    crashes on sum=0. The single-token <pad→pad> prediction contributes a
+    negligible, benign gradient.
     """
     polar_metadata: dict[str, Any] = {
         "node_id": result.node_id,
@@ -189,31 +192,20 @@ def _build_dummy_sample(
         response="",
         response_length=1,
         reward={reward_key: 0.0},
-        loss_mask=[0],
+        loss_mask=[1],
         rollout_log_probs=[0.0],
         status=Sample.Status.ABORTED,
         metadata={"polar": polar_metadata},
     )
 
 
-def _reward_value(result: "SessionResult", trace: "Trace") -> float:
-    """Binary resolved/unresolved reward from the swebench_harness evaluator.
+def _reward_value(trace: "Trace") -> float:
+    """Read the reward the evaluator already placed on the trace.
 
-    Partial-credit tiers were tried in Run #19 as a hack to give GRPO gradient
-    when no rollout resolved the task — that opens the door to reward hacking
-    (policy learns to emit "looks-like-a-patch" output). With per-trace sample
-    fan-out (one Sample per trace sharing a trajectory index), variance comes
-    from the higher sample count, not shaped reward.
+    Reward assignment is the evaluator's job (including any broadcasting
+    from session-level outcomes). slime_bridge just consumes what's there.
     """
-    if trace.reward is not None:
-        return float(trace.reward)
-    evaluation = result.trajectory.metadata.get("evaluation") or {}
-    if not isinstance(evaluation, dict):
-        return 0.0
-    report = evaluation.get("report") or {}
-    if not isinstance(report, dict):
-        return 0.0
-    return 1.0 if report.get("resolved") else 0.0
+    return float(trace.reward) if trace.reward is not None else 0.0
 
 
 def _sample_status(Sample: Any, result: "SessionResult", trace: "Trace") -> Any:

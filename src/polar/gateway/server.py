@@ -546,12 +546,9 @@ async def _handle_streaming(
     original_model: str,
     session_info: Any | None,
 ) -> StreamingResponse | JSONResponse:
-    # SGLang's tool-call parser swallows per-token logprobs/input_token_ids when
-    # streaming, which breaks training. Call SGLang non-streaming to capture the
-    # full response with token data, then fake-stream SSE events back to the
-    # client (no user-visible difference since the whole response arrives at once).
     state = get_state()
-    non_stream_request = {**openai_request, "stream": False}
+    non_stream_request = {k: v for k, v in openai_request.items() if k != "stream_options"}
+    non_stream_request["stream"] = False
     try:
         response = await state.sglang.completion(non_stream_request)
     except UpstreamError as exc:
