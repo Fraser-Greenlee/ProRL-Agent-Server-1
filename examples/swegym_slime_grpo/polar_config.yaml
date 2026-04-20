@@ -12,10 +12,11 @@ polar_eval_dataset_name: "swegym_eval"
 polar_task_template:
   timeout_seconds: 2400
   runtime:
-    backend: "apptainer"
-    # Apptainer reads the image from the local Docker daemon (same image built
-    # by build_images.py); plain Docker refs like "foo:tag" won't resolve.
-    image: "docker-daemon:{sample.metadata.polar_image}"
+    backend: "docker"
+    # Use the image built by build_images.py directly — apptainer's
+    # unprivileged-userns mode fails on this host (no subuid/subgid mappings),
+    # so we fall back to docker which works out of the box.
+    image: "{sample.metadata.polar_image}"
     network: "host"
     workdir: "/polar/session/workspace"
     prepare:
@@ -37,7 +38,7 @@ polar_task_template:
     # opencode addresses models as `<provider>/<model_id>`.  The gateway auto-
     # injects OPENAI_BASE_URL pointing at the SGLang router, so we route via
     # the `openai` provider and use the HF id SGLang serves under.
-    model_name: "openai/Qwen/Qwen3-4B-Instruct-2507"
+    model_name: "openai/Qwen/Qwen3.5-27B"
     env:
       OPENCODE_FAKE_VCS: "git"
     settings: {}

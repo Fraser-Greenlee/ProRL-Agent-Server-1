@@ -29,16 +29,24 @@ def session_result_to_samples(
     *,
     trajectory_index: int,
     reward_key: str = "score",
+    max_tokens: int | None = None,
 ) -> list[Any]:
-    """Convert one Polar session result into Slime samples (one per trace).
+    """Convert one Polar session result into Slime samples — one per trace.
 
-    All returned samples share ``Sample.index = trajectory_index``; that's
-    the key the reward post-processor uses to collapse them to a single
-    trajectory.
+    Every usable trace becomes an independent Sample sharing the same
+    ``(group_index, index)`` key. Slime's reward post-processor collapses
+    them back into a single trajectory for advantage normalization, but
+    every trace contributes its own assistant-generated tokens to the
+    gradient. 
+
+    Traces with empty tokens or exceeding ``max_tokens`` are dropped
+    (logged). If *all* traces are dropped we emit a single zero-gradient
+    placeholder so Slime's flattener doesn't crash on an empty list.
     """
     Sample = _load_sample_type()
+    traces = result.trajectory.traces
     samples: list[Any] = []
-    for trace_index, trace in enumerate(result.trajectory.traces):
+    for trace_index, trace in enumerate(traces):
         sample = _build_sample(
             Sample=Sample,
             result=result,
@@ -47,10 +55,25 @@ def session_result_to_samples(
             group_index=group_index,
             index=trajectory_index,
             reward_key=reward_key,
+            max_tokens=max_tokens,
         )
         if sample is not None:
             samples.append(sample)
-    return samples
+
+    if samples:
+        return samples
+
+    logger.warning(
+        "Session %s: no usable trace (traces=%d, max_tokens=%s); emitting dummy placeholder",
+        result.session_id, len(traces), max_tokens,
+    )
+    return [_build_dummy_sample(
+        Sample=Sample,
+        result=result,
+        group_index=group_index,
+        index=trajectory_index,
+        reward_key=reward_key,
+    )]
 
 
 def _build_sample(
@@ -62,6 +85,7 @@ def _build_sample(
     group_index: int,
     index: int,
     reward_key: str,
+    max_tokens: int | None = None,
 ) -> Any | None:
     prompt_ids = list(trace.prompt_ids)
     response_ids = list(trace.response_ids) or _response_ids_from_logprobs(trace)
@@ -70,6 +94,14 @@ def _build_sample(
         logger.warning(
             "Dropping trace %d from session %s: missing tokens (prompt=%d, response=%d)",
             trace_index, result.session_id, len(prompt_ids), len(response_ids),
+        )
+        return None
+
+    total_len = len(prompt_ids) + len(response_ids)
+    if max_tokens is not None and total_len > max_tokens:
+        logger.warning(
+            "Dropping trace %d from session %s: total_len=%d > max_tokens=%d",
+            trace_index, result.session_id, total_len, max_tokens,
         )
         return None
 
@@ -93,6 +125,7 @@ def _build_sample(
     polar_metadata: dict[str, Any] = {
         "node_id": result.node_id,
         "result_error": result.error,
+        "session_id": result.session_id,
         "session_status": result.status,
         "task_id": result.task_id,
         "timing": result.timing.model_dump(mode="python"),
@@ -100,6 +133,12 @@ def _build_sample(
         "trajectory_error": result.trajectory.error,
         "trajectory_metadata": deepcopy(result.trajectory.metadata),
         "trajectory_status": result.trajectory.status,
+        # Preserved for the longest-trace wandb artifact dump; training reads
+        # tokens+logprobs, not these.
+        "trace_debug": {
+            "finish_reason": trace.finish_reason,
+            "response_messages": deepcopy(response_messages),
+        },
     }
 
     return Sample(
@@ -113,19 +152,68 @@ def _build_sample(
         loss_mask=loss_mask,
         rollout_log_probs=response_log_probs,
         status=status,
-        session_id=result.session_id,
+        metadata={"polar": polar_metadata},
+    )
+
+
+def _build_dummy_sample(
+    *,
+    Sample: Any,
+    result: "SessionResult",
+    group_index: int,
+    index: int,
+    reward_key: str,
+) -> Any:
+    """Minimal zero-gradient placeholder — keeps per-session sample count
+    at 1 so slime's _get_rollout_data doesn't crash on an empty flattened
+    sample list. 1-token prompt + 1-token response, loss_mask=0.
+    """
+    polar_metadata: dict[str, Any] = {
+        "node_id": result.node_id,
+        "result_error": result.error,
+        "session_id": result.session_id,
+        "session_status": result.status,
+        "task_id": result.task_id,
+        "timing": result.timing.model_dump(mode="python"),
+        "trace_index": -1,
+        "trajectory_error": result.trajectory.error,
+        "trajectory_metadata": deepcopy(result.trajectory.metadata),
+        "trajectory_status": result.trajectory.status,
+        "placeholder": True,
+    }
+    return Sample(
+        group_index=group_index,
+        index=index,
+        prompt="",
+        tokens=[0, 0],
+        response="",
+        response_length=1,
+        reward={reward_key: 0.0},
+        loss_mask=[0],
+        rollout_log_probs=[0.0],
+        status=Sample.Status.ABORTED,
         metadata={"polar": polar_metadata},
     )
 
 
 def _reward_value(result: "SessionResult", trace: "Trace") -> float:
+    """Binary resolved/unresolved reward from the swebench_harness evaluator.
+
+    Partial-credit tiers were tried in Run #19 as a hack to give GRPO gradient
+    when no rollout resolved the task — that opens the door to reward hacking
+    (policy learns to emit "looks-like-a-patch" output). With per-trace sample
+    fan-out (one Sample per trace sharing a trajectory index), variance comes
+    from the higher sample count, not shaped reward.
+    """
     if trace.reward is not None:
         return float(trace.reward)
-
-    evaluation = result.trajectory.metadata.get("evaluation", {})
-    if isinstance(evaluation, dict) and evaluation.get("outcome_reward") is not None:
-        return float(evaluation["outcome_reward"])
-    return 0.0
+    evaluation = result.trajectory.metadata.get("evaluation") or {}
+    if not isinstance(evaluation, dict):
+        return 0.0
+    report = evaluation.get("report") or {}
+    if not isinstance(report, dict):
+        return 0.0
+    return 1.0 if report.get("resolved") else 0.0
 
 
 def _sample_status(Sample: Any, result: "SessionResult", trace: "Trace") -> Any:

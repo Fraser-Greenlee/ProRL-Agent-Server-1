@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import json
 import logging
 import queue
 import statistics
+import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -35,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 2.0  # seconds between task-status polls (eval / no-callback path)
 _CALLBACK_FALLBACK_POLL_SECONDS = 60.0  # defensive backstop for dropped callbacks
+_LONGEST_TRACE_ARTIFACT_INTERVAL = 5  # dump longest trace every N rollouts
 
 # ---------------------------------------------------------------------------
 # Global worker singleton
@@ -126,10 +130,26 @@ async def _submit_and_wait_for_task(
     )
 
 
+def _resolve_max_tokens(args: Any) -> int | None:
+    """Per-sample token cap Slime's dynamic batcher can fit on one GPU.
+
+    Megatron asserts every sample length <= max_tokens_per_gpu * cp_size.
+    Deep agent trajectories can exceed this (24-turn sessions → 80k+ tokens)
+    and must be dropped before they reach the batcher.
+    """
+    mtpg = getattr(args, "max_tokens_per_gpu", None)
+    if not mtpg:
+        return None
+    cp_size = int(getattr(args, "context_parallel_size", 1) or 1)
+    return int(mtpg) * cp_size
+
+
 def _convert_task_result_to_samples(
     config: PolarSlimeConfig,
     task_result: TaskResult,
     group: list[Any],
+    *,
+    max_tokens: int | None = None,
 ) -> list[Any]:
     """Convert one task's session results into flat Slime samples.
 
@@ -150,6 +170,7 @@ def _convert_task_result_to_samples(
                 group_index,
                 trajectory_index=traj_idx,
                 reward_key=config.reward_key,
+                max_tokens=max_tokens,
             )
         )
     return group_samples
@@ -309,7 +330,10 @@ class AsyncPolarRolloutWorker:
             logger.warning("Task %s ended with status=%s, skipping", task_result.task_id, task_result.status)
             return
 
-        group_samples = _convert_task_result_to_samples(self.config, task_result, group)
+        group_samples = _convert_task_result_to_samples(
+            self.config, task_result, group,
+            max_tokens=_resolve_max_tokens(self.args),
+        )
         self.output_queue.put((group_id, group_samples))
 
     async def _submit_with_callback(
@@ -396,9 +420,13 @@ async def _run_eval_rollout(
         )
 
     output_groups: list[list[Any]] = []
+    max_tokens = _resolve_max_tokens(args)
     for group, task_result in zip(sample_groups, task_results, strict=True):
         output_groups.append(
-            _convert_task_result_to_samples(config, task_result, group)
+            _convert_task_result_to_samples(
+                config, task_result, group,
+                max_tokens=max_tokens,
+            )
         )
 
     metrics = _build_metrics(config, task_results, output_groups)
@@ -508,6 +536,8 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
     elapsed = time.monotonic() - start
     logger.info("Async rollout collected %d groups in %.1fs (queue=%d)", len(data), elapsed, async_worker.queue_size())
 
+    _maybe_dump_longest_trace_artifact(rollout_id, data)
+
     RolloutFnTrainOutput = _load_rollout_train_output_type()
     flat = [s for g in data for s in g]
     rewards = [_extract_sample_reward(s, async_worker.config.reward_key) for s in flat]
@@ -519,6 +549,98 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
         metrics["polar/reward_mean"] = sum(rewards) / len(rewards)
     metrics.update(_polar_extra_metrics(flat, rewards))
     return RolloutFnTrainOutput(samples=data, metrics=metrics)
+
+
+def _maybe_dump_longest_trace_artifact(
+    rollout_id: int, data: list[list[Any]], *, interval: int = _LONGEST_TRACE_ARTIFACT_INTERVAL
+) -> None:
+    """Dump the longest session in this rollout's batch as a wandb artifact.
+
+    Groups samples by ``session_id``, picks the session with the largest
+    aggregated assistant tokens, and writes its full message chain (per
+    trace) to a JSON artifact. Silently no-ops if wandb isn't initialized.
+    """
+    if interval <= 0 or rollout_id % interval != 0:
+        return
+    try:
+        import wandb
+    except ImportError:
+        return
+    if getattr(wandb, "run", None) is None:
+        return
+
+    by_session: dict[str, list[Any]] = {}
+    for group in data:
+        for sample in group:
+            sid = getattr(sample, "session_id", None) or "unknown"
+            by_session.setdefault(sid, []).append(sample)
+    if not by_session:
+        return
+
+    def _session_tokens(samples: list[Any]) -> int:
+        return sum(int(getattr(s, "response_length", 0) or 0) for s in samples)
+
+    longest_sid, longest_samples = max(by_session.items(), key=lambda kv: _session_tokens(kv[1]))
+    total_tokens = _session_tokens(longest_samples)
+    if total_tokens <= 0:
+        return
+
+    longest_samples = sorted(
+        longest_samples,
+        key=lambda s: int((s.metadata.get("polar") or {}).get("trace_index", 0) or 0),
+    )
+    traces = []
+    for sample in longest_samples:
+        polar_meta = sample.metadata.get("polar") or {}
+        trace_debug = polar_meta.get("trace_debug") or {}
+        status = getattr(sample, "status", None)
+        traces.append({
+            "trace_index": polar_meta.get("trace_index"),
+            "finish_reason": trace_debug.get("finish_reason"),
+            "response_length": int(getattr(sample, "response_length", 0) or 0),
+            "status": getattr(status, "value", None) if status is not None else None,
+            "prompt_messages": sample.prompt if isinstance(sample.prompt, list) else [],
+            "response_messages": trace_debug.get("response_messages") or [],
+        })
+
+    first = longest_samples[0]
+    first_meta = first.metadata.get("polar") or {}
+    reward = getattr(first, "reward", None)
+    if isinstance(reward, dict):
+        session_reward = float(reward.get("score", 0.0))
+    elif isinstance(reward, (int, float)):
+        session_reward = float(reward)
+    else:
+        session_reward = 0.0
+
+    payload = {
+        "rollout_id": int(rollout_id),
+        "session_id": longest_sid,
+        "task_id": first_meta.get("task_id"),
+        "node_id": first_meta.get("node_id"),
+        "total_assistant_tokens": int(total_tokens),
+        "session_reward": session_reward,
+        "num_traces": len(traces),
+        "traces": traces,
+    }
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            fpath = Path(tmp) / f"longest_trace_r{rollout_id}.json"
+            fpath.write_text(json.dumps(payload, ensure_ascii=False, indent=2))
+            artifact = wandb.Artifact(
+                name=f"longest_trace_r{rollout_id}", type="rollout-trace"
+            )
+            artifact.add_file(str(fpath))
+            wandb.run.log_artifact(artifact)
+    except Exception:
+        logger.exception("Failed to log longest-trace wandb artifact")
+        return
+
+    logger.info(
+        "Logged longest-trace artifact rollout=%d session=%s traces=%d tokens=%d",
+        rollout_id, longest_sid, len(traces), total_tokens,
+    )
 
 
 def _group_index_for(group: list[Any]) -> int:
@@ -548,7 +670,7 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
     postrun_ms: list[float] = []
     for sample in flat_samples:
         polar_meta = sample.metadata.get("polar", {})
-        session_id = sample.session_id
+        session_id = polar_meta.get("session_id")
         if session_id and session_id not in seen:
             seen.add(session_id)
             timing = polar_meta.get("timing") or {}

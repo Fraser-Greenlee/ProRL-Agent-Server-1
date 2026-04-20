@@ -131,7 +131,10 @@ def _load_harness(instance: dict[str, Any]) -> tuple[Any, Any]:
         from swegym.harness.test_spec import make_test_spec
     except ModuleNotFoundError:
         from swebench.harness.grading import get_eval_report
-        from swebench.harness.test_spec.test_spec import make_test_spec
+        try:
+            from swebench.harness.test_spec.test_spec import make_test_spec
+        except ModuleNotFoundError:
+            from swebench.harness.test_spec import make_test_spec
     return make_test_spec(instance), get_eval_report
 
 
