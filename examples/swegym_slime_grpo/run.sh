@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-# Async GRPO training on the SWE-Gym sample via Polar + Slime (Qwen3-4B-Instruct-2507).
+# Async GRPO training on the SWE-Gym sample via Polar + Slime (Qwen3.5-4B).
+#
+# Qwen3.5-4B is a VLM checkpoint (Qwen3_5ForConditionalGeneration) with
+# hybrid attention (1 full + 3 GatedDeltaNet linear per 4 layers). Text-only
+# RL requires the SGLang VLM input_ids patch (see MEMORY.md).
 #
 # GPU layout (8x B200):
 #   GPU 0-3     – SGLang inference (4 engines × TP=1, managed by Slime/Ray)
@@ -38,41 +42,47 @@ if [ ! -d "${MEGATRON_DIR}/megatron" ]; then
 fi
 
 # ── Model ──────────────────────────────────────────────────────────
-# Qwen3-4B-Instruct-2507: plain text Qwen3 architecture, already converted to
-# torch_dist at checkpoints/Qwen3-4B-Instruct-2507_torch_dist/ — so we load via
-# standard (non-bridge) Megatron path.
-HF_CHECKPOINT="${HF_CHECKPOINT:-/home/nfs/binfengx/.cache/huggingface/hub/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554}"
-REF_LOAD="${REF_LOAD:-${PROJECT_ROOT}/checkpoints/Qwen3-4B-Instruct-2507_torch_dist}"
-SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/logs/ckpt_swegym_slime_grpo_4b}"
+# Qwen3.5-4B: VLM checkpoint; we train text-only.  HF weights are loaded
+# through slime_plugins.mbridge.qwen3_5 (text_config-aware) at convert-time.
+HF_CHECKPOINT="${HF_CHECKPOINT:-/home/nfs/binfengx/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a}"
+REF_LOAD="${REF_LOAD:-${PROJECT_ROOT}/checkpoints/Qwen3.5-4B_torch_dist}"
+SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/logs/ckpt_swegym_slime_grpo_qwen35_4b}"
 mkdir -p "$SAVE_DIR"
 if [ ! -e "$HF_CHECKPOINT" ]; then
     echo "ERROR: HF checkpoint not found at $HF_CHECKPOINT"
-    echo "  hf download Qwen/Qwen3-4B-Instruct-2507"
+    echo "  hf download Qwen/Qwen3.5-4B"
     exit 1
 fi
 if [ ! -d "$REF_LOAD" ] || [ ! -f "$REF_LOAD/latest_checkpointed_iteration.txt" ]; then
     echo "ERROR: Megatron torch_dist checkpoint not found at $REF_LOAD"
-    echo "  Run a torch_dist conversion against $HF_CHECKPOINT first."
+    echo "  Run bash examples/swegym_slime_grpo/convert_weights.sh first."
     exit 1
 fi
 
-# Mirrors slime/scripts/models/qwen3-4B-Instruct-2507.sh (rotary_base=5M).
+# Mirrors slime/slime/scripts/models/qwen3.5-4B.sh.  --spec wires in the hybrid
+# GatedDeltaNet + full-attention layer layout.  tie_word_embeddings=true in HF
+# config → do NOT pass --untie-embeddings-and-output-weights.
 MODEL_ARGS=(
-    --swiglu
-    --num-layers 36
-    --hidden-size 2560
-    --ffn-hidden-size 9728
-    --num-attention-heads 32
-    --group-query-attention
-    --num-query-groups 8
-    --use-rotary-position-embeddings
+    --spec "slime_plugins.models.qwen3_5" "get_qwen3_5_spec"
     --disable-bias-linear
-    --normalization RMSNorm
-    --norm-epsilon 1e-6
-    --rotary-base 5000000
-    --vocab-size 151936
-    --kv-channels 128
     --qk-layernorm
+    --group-query-attention
+    --num-attention-heads 16
+    --num-query-groups 4
+    --kv-channels 256
+    --num-layers 32
+    --hidden-size 2560
+    --ffn-hidden-size 9216
+    --use-gated-attention
+    --normalization RMSNorm
+    --apply-layernorm-1p
+    --position-embedding-type rope
+    --norm-epsilon 1e-6
+    --rotary-percent 0.25
+    --swiglu
+    --vocab-size 248320
+    --rotary-base 10000000
+    --attention-output-gate
 )
 
 # First run has an empty SAVE_DIR — slime's load_checkpoint asserts on empty.
@@ -161,10 +171,10 @@ ray job submit --address="http://127.0.0.1:8265" \
     --metadata-key metadata \
     --rollout-shuffle \
     --reward-key score \
-    --num-rollout 30 \
+    --num-rollout 32 \
     --rollout-batch-size 4 \
     --n-samples-per-prompt 8 \
-    --rollout-max-response-len 4096 \
+    --rollout-max-response-len 8192 \
     --rollout-max-prompt-len 16000 \
     --dynamic-history \
     --num-steps-per-rollout 1 \
@@ -178,7 +188,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --recompute-method uniform \
     --recompute-num-layers 1 \
     --use-dynamic-batch-size \
-    --max-tokens-per-gpu 32768 \
+    --max-tokens-per-gpu 200000 \
     --log-probs-chunk-size 512 \
     --advantage-estimator grpo \
     --normalize-advantages \
@@ -205,5 +215,5 @@ ray job submit --address="http://127.0.0.1:8265" \
     --sglang-tool-call-parser qwen25 \
     --use-wandb \
     --wandb-project "${WANDB_PROJECT:-polar-swegym-grpo}" \
-    --wandb-group "${WANDB_GROUP:-swegym-qwen3-4b-async-grpo}" \
+    --wandb-group "${WANDB_GROUP:-swegym-qwen35-4b-async-grpo}" \
     --sglang-router-port 9000

@@ -3,17 +3,15 @@
 
 polar_rollout_url: "http://127.0.0.1:8080"
 polar_reward_key: "score"
-polar_max_concurrency: 32
+polar_max_concurrency: 64
 polar_request_timeout: 3600
 polar_eval_dataset_name: "swegym_eval"
 
 # Short prompt prefix — just enough to bias the 4B model toward the edit tool
 # without ballooning the system prompt (opencode's 10K-token tool-schema prompt
-# overwhelmed Qwen3-4B; qwen-code is leaner and tuned for Qwen models).
+# overwhelms 4B-class Qwen models; qwen-code is leaner and tuned for Qwen).
 polar_instruction_template: |
   Fix the following issue in the repository at /polar/session/workspace.
-  Read the relevant files, then use your tools to edit the code. You must
-  make at least one concrete file edit before ending.
 
   {instruction}
 
@@ -51,12 +49,12 @@ polar_task_template:
   agent:
     # qwen-code is Qwen's own fork of gemini-cli — same OpenAI-compat API
     # shape but a much lighter system prompt. opencode's 10K-token tool-schema
-    # system prompt silenced Qwen3-4B (empty outputs, no tool_calls).
+    # system prompt silences 4B-class Qwen (empty outputs, no tool_calls).
     harness: "qwen_code"
     # qwen-code reads the model from $OPENAI_MODEL. The polar gateway
     # auto-injects OPENAI_BASE_URL + OPENAI_API_KEY pointing at the SGLang
     # router, so we just pass the HF id SGLang serves under.
-    model_name: "Qwen/Qwen3-4B-Instruct-2507"
+    model_name: "Qwen/Qwen3.5-4B"
   builder:
     strategy: "per_request"
   evaluator:

@@ -1,6 +1,11 @@
 # SWE-Gym Slime GRPO
 
-Fully async RL training on the curated 10-task SWE-Gym sample using **Polar** for agent rollout and **Slime** for distributed training with native GPU-to-GPU weight sync. Advantage estimation lives entirely inside Slime: the rollout adapter tags every trace in a trajectory with the same `Sample.index`, and Slime's `--custom-reward-post-process-path` hook collapses them to one outcome reward per trajectory before GRPO normalizes across trajectories in the group. 
+Fully async RL training on 30 curated SWE-Gym sample using **Polar** for agent rollout and **Slime** for distributed training with native GPU-to-GPU weight sync.
+
+Base model: **Qwen/Qwen3.5-4B** (VLM checkpoint, trained text-only; hybrid attention
+with 1 full + 3 GatedDeltaNet linear per 4 layers).
+
+This demo runs on single node (8 x B200).
 
 ## Architecture
 
@@ -27,7 +32,7 @@ Fully async RL training on the curated 10-task SWE-Gym sample using **Polar** fo
 | 4-7   | Megatron GRPO training (Ray)                | 8265 (Ray) |
 | CPU   | Polar rollout + gateway node                | 8080, 8100 |
 
-## Prerequisites
+## Installation
 
 ```bash
 # 1. Install Polar
@@ -39,24 +44,30 @@ uv pip install -e slime
 # See slime/build_conda.sh for full dependency list
 # (megatron-core, transformer_engine, flash_attn, apex, ray, etc.)
 
-# 3. Pin SGLang to the patched version
+# 3. Qwen3.5 GatedDeltaNet needs flash-linear-attention
+uv pip install --prerelease=allow flash-linear-attention
+
+# 4. Pin SGLang to the patched version
 uv pip install --prerelease=allow sglang==0.5.10
 
-# 4. Clone Megatron-LM (needed for training internals)
+# 5. Clone Megatron-LM (needed for training internals)
 git clone https://github.com/NVIDIA/Megatron-LM.git Megatron-LM
 uv pip install -e Megatron-LM
 
-# 5. Build per-instance runtime container images
+# 6. Build per-instance runtime container images
 python examples/swegym_slime_grpo/build_images.py
 
-# 6. Apply SGLang patch (adds token IDs to logprobs) — expects sglang==0.5.10
+# 7. Apply SGLang patches:
+#    - token-ids-in-logprobs patch (expects sglang==0.5.10)
+#    - VLM text-only input_ids patch (Qwen3.5-4B is a VLM checkpoint served
+#      text-only; SGLang otherwise drops input_token_ids for text chat)
 bash scripts/patch/patch_sglang.sh
 ```
 
 ## Quick Start
 
 ```bash-0
-# Prepare training data (fetches 10 SWE-Gym tasks from HuggingFace)
+# Prepare training data (fetches 30 SWE-Gym tasks from HuggingFace)
 python examples/swegym_slime_grpo/prepare_data.py
 
 # Convert HF weights to Megatron format

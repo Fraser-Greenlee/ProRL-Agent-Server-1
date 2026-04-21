@@ -29,12 +29,6 @@ def parse_args() -> argparse.Namespace:
         help="Only build the derived image for this curated instance_id.",
     )
     parser.add_argument(
-        "--max-tasks",
-        type=int,
-        default=10,
-        help="Maximum number of curated tasks to build when no --instance-id is supplied.",
-    )
-    parser.add_argument(
         "--force",
         action="store_true",
         help="Rebuild even if the derived image tag already exists locally.",
@@ -92,7 +86,7 @@ def select_instances(args: argparse.Namespace) -> list[dict[str, object]]:
         if missing:
             raise SystemExit(f"Unknown curated instance_id(s): {', '.join(missing)}")
         return selected
-    return instances[: args.max_tasks]
+    return instances
 
 
 def main() -> int:
