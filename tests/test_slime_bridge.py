@@ -253,3 +253,75 @@ def test_session_result_to_samples_drops_empty_token_traces(monkeypatch) -> None
     assert sample.status == _FakeSampleStatus.COMPLETED
     assert sample.reward == {"score": 0.0}
     assert sample.index == 7
+
+
+# ---------------------------------------------------------------------------
+# Adapter — loss_mask masks canonical interstitials but keeps real assistant
+# tokens even when their logprob is exactly 0 (high-confidence predictions).
+# ---------------------------------------------------------------------------
+
+
+def test_session_result_to_samples_masks_canonical_interstitial(monkeypatch) -> None:
+    from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
+    from polar.trajectory.models import Trace, Trajectory
+    from slime_bridge import adapter
+
+    monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
+
+    # Mixed response: real assistant (real logprob), real assistant (logprob=0
+    # but still the model's own sample), canonical interstitial (no "token"
+    # field), real assistant again.
+    response_logprobs = [
+        {"token": "<a>", "token_id": 10, "logprob": -0.5},
+        {"token": "<b>", "token_id": 11, "logprob": 0.0},       # legit p=1 sample
+        {"token_id": 12, "logprob": 0.0},                        # interstitial
+        {"token_id": 13, "logprob": 0.0},                        # interstitial
+        {"token": "<c>", "token_id": 14, "logprob": -0.2},
+    ]
+    trace = Trace(
+        prompt_ids=[1, 2],
+        response_ids=[10, 11, 12, 13, 14],
+        response_logprobs=response_logprobs,
+        finish_reason="stop",
+    )
+    trajectory = Trajectory(status="COMPLETED", traces=[trace])
+    result = SessionResult(
+        session_id="s1",
+        task_id="t1",
+        status=SessionStatus.COMPLETED,
+        trajectory=trajectory,
+        timing=SessionTiming(),
+    )
+
+    samples = adapter.session_result_to_samples(
+        result, group_index=0, trajectory_index=0
+    )
+    assert len(samples) == 1
+    sample = samples[0]
+    # Real assistant positions (including the logprob=0 one) stay trainable;
+    # interstitial positions are masked out.
+    assert sample.loss_mask == [1, 1, 0, 0, 1]
+    # Rollout logprobs still span every position (trainer needs them aligned).
+    assert sample.rollout_log_probs == [-0.5, 0.0, 0.0, 0.0, -0.2]
+
+
+def test_session_result_to_samples_defaults_mask_when_no_logprobs(monkeypatch) -> None:
+    from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
+    from polar.trajectory.models import Trace, Trajectory
+    from slime_bridge import adapter
+
+    monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
+
+    trace = Trace(prompt_ids=[1], response_ids=[10, 11, 12], finish_reason="stop")
+    trajectory = Trajectory(status="COMPLETED", traces=[trace])
+    result = SessionResult(
+        session_id="s1",
+        task_id="t1",
+        status=SessionStatus.COMPLETED,
+        trajectory=trajectory,
+        timing=SessionTiming(),
+    )
+    samples = adapter.session_result_to_samples(
+        result, group_index=0, trajectory_index=0
+    )
+    assert samples[0].loss_mask == [1, 1, 1]

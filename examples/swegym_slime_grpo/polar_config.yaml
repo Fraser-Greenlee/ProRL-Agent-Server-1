@@ -3,7 +3,7 @@
 
 polar_rollout_url: "http://127.0.0.1:8080"
 polar_reward_key: "score"
-polar_max_concurrency: 64
+polar_max_concurrency: 32
 polar_request_timeout: 3600
 polar_eval_dataset_name: "swegym_eval"
 

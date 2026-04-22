@@ -18,7 +18,7 @@ if [ ! -f "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" ]; then
 fi
 
 HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3.5-4B}"
-OUTPUT_DIR="${TORCH_DIST_DIR:-${PROJECT_ROOT}/checkpoints/Qwen3.5-4B_torch_dist}"
+OUTPUT_DIR="${TORCH_DIST_DIR:-${PROJECT_ROOT}/tmp/checkpoints/Qwen3.5-4B_torch_dist}"
 mkdir -p "$OUTPUT_DIR"
 
 # Mirrors slime/slime/scripts/models/qwen3.5-4B.sh.

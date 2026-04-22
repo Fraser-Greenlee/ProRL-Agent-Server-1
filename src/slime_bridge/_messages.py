@@ -44,20 +44,24 @@ def flatten_content(content: Any) -> str:
 def prompt_to_instruction_text(prompt: Any) -> str:
     """Flatten a dataset prompt (str or chat-message list) into instruction text.
 
-    List prompts are rendered as ``[role] content`` blocks joined by blank
-    lines, mirroring :func:`messages_to_text` for a symmetric view of
-    conversation data.
+    Single-role lists (e.g. just ``[{"role": "user", "content": ...}]``, which
+    is how we shape prompts for VLM checkpoints that require list form) render
+    as the bare content so the instruction template sees the same text as the
+    string-prompt path. Multi-role lists fall back to ``[role] content`` blocks
+    joined by blank lines for a symmetric view of conversation data.
     """
     if isinstance(prompt, str):
         return prompt
     if isinstance(prompt, list):
+        messages = [m for m in prompt if isinstance(m, dict)]
+        contents = [flatten_content(m.get("content")) for m in messages]
+        roles = {str(m.get("role", "user")) for m in messages}
+        if len(roles) <= 1:
+            return "\n\n".join(c for c in contents if c)
         parts: list[str] = []
-        for message in prompt:
-            if not isinstance(message, dict):
-                continue
-            role = str(message.get("role", "user"))
-            content = flatten_content(message.get("content"))
+        for message, content in zip(messages, contents):
             if content:
+                role = str(message.get("role", "user"))
                 parts.append(f"[{role}] {content}")
         return "\n\n".join(parts)
     if prompt is None:

@@ -678,13 +678,13 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
     postrun_ms: list[float] = []
     session_is_placeholder: dict[str, bool] = {}
     session_trace_count: dict[str, int] = {}
-    placeholder_samples = 0
+    zombie_samples = 0
     for sample in flat_samples:
         polar_meta = sample.metadata.get("polar", {})
         session_id = polar_meta.get("session_id")
         is_placeholder = bool(polar_meta.get("placeholder"))
         if is_placeholder:
-            placeholder_samples += 1
+            zombie_samples += 1
         if not session_id:
             continue
         if session_id not in seen:
@@ -707,8 +707,8 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
 
     total_sessions = len(seen)
     empty_sessions = sum(1 for p in session_is_placeholder.values() if p)
-    out["polar/placeholder_samples"] = float(placeholder_samples)
-    out["polar/usable_samples"] = float(len(flat_samples) - placeholder_samples)
+    out["polar/zombie_samples"] = float(zombie_samples)
+    out["polar/usable_samples"] = float(len(flat_samples) - zombie_samples)
     out["polar/empty_sessions"] = float(empty_sessions)
     out["polar/total_sessions"] = float(total_sessions)
     if total_sessions > 0:

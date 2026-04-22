@@ -116,7 +116,7 @@ def _build_sample(
     status = _sample_status(Sample, result, trace)
     reward_value = _reward_value(trace)
 
-    loss_mask = [1] * len(response_ids)
+    loss_mask = _loss_mask_from_logprobs(trace, len(response_ids))
     if status in (Sample.Status.ABORTED, Sample.Status.FAILED):
         loss_mask = [0] * len(response_ids)
 
@@ -227,6 +227,40 @@ def _extract_rollout_log_probs(trace: "Trace") -> list[float]:
         for item in trace.response_logprobs
         if isinstance(item, dict)
     ]
+
+
+def _loss_mask_from_logprobs(trace: "Trace", response_len: int) -> list[int]:
+    """Build a per-token loss mask from the trace's response_logprobs.
+
+    Prefix-merging builders produce a mixed token stream: raw assistant
+    tokens interleaved with canonical interstitials (tool responses,
+    chat-template glue).  Only the former should contribute to training.
+
+    The builder marks them distinctly in ``response_logprobs``: real
+    server-returned entries include a ``"token"`` (string) field;
+    interstitial slots are synthesized as ``{"token_id": ..., "logprob":
+    0.0}`` with no ``"token"`` field.  We key the mask off that field's
+    presence — ``logprob == 0.0`` is *not* a safe discriminator because
+    legitimate high-confidence tokens can also hit logprob 0.
+
+    Falls back to all-1 when the trace has no logprobs (e.g. dummy
+    placeholders or builders that do not emit logprobs).
+    """
+    logprobs = trace.response_logprobs
+    if not logprobs:
+        return [1] * response_len
+    mask = [
+        1 if (isinstance(entry, dict) and "token" in entry) else 0
+        for entry in logprobs
+    ]
+    # If logprob length disagrees with response length, don't mask tokens we
+    # can't reason about — default them to trainable.  Length mismatch
+    # shouldn't happen in normal flow; this is defensive.
+    if len(mask) < response_len:
+        mask.extend([1] * (response_len - len(mask)))
+    elif len(mask) > response_len:
+        mask = mask[:response_len]
+    return mask
 
 
 def _response_ids_from_logprobs(trace: "Trace") -> list[int]:

@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-name", help="Override model for all harnesses")
     parser.add_argument("--topology", default=str(DEFAULT_TOPOLOGY))
     parser.add_argument("--num-samples", type=int, default=4)
-    parser.add_argument("--timeout-seconds", type=float, default=900.0)
+    parser.add_argument("--timeout-seconds", type=float, default=300.0)
     parser.add_argument("--runtime-backend", choices=["docker", "apptainer"], default="docker")
     parser.add_argument("--rollout-url", help="Override rollout server URL")
     parser.add_argument(

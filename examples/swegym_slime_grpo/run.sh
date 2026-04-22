@@ -45,8 +45,8 @@ fi
 # Qwen3.5-4B: VLM checkpoint; we train text-only.  HF weights are loaded
 # through slime_plugins.mbridge.qwen3_5 (text_config-aware) at convert-time.
 HF_CHECKPOINT="${HF_CHECKPOINT:-/home/nfs/binfengx/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a}"
-REF_LOAD="${REF_LOAD:-${PROJECT_ROOT}/checkpoints/Qwen3.5-4B_torch_dist}"
-SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/logs/ckpt_swegym_slime_grpo_qwen35_4b}"
+REF_LOAD="${REF_LOAD:-${PROJECT_ROOT}/tmp/checkpoints/Qwen3.5-4B_torch_dist}"
+SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/tmp/ckpt/swegym_slime_grpo_qwen35_4b}"
 mkdir -p "$SAVE_DIR"
 if [ ! -e "$HF_CHECKPOINT" ]; then
     echo "ERROR: HF checkpoint not found at $HF_CHECKPOINT"
@@ -137,7 +137,9 @@ RUNTIME_ENV_JSON="{
     \"WANDB_API_KEY\": \"${WANDB_API_KEY:-}\",
     \"WANDB_DIR\": \"${PROJECT_ROOT}/logs\",
     \"LD_LIBRARY_PATH\": \"${CUDNN_LIB}:${LD_LIBRARY_PATH:-}\",
-    \"PYTORCH_CUDA_ALLOC_CONF\": \"max_split_size_mb:2048,expandable_segments:True\"
+    \"PYTORCH_CUDA_ALLOC_CONF\": \"max_split_size_mb:2048,expandable_segments:True\",
+    \"NVTE_DEBUG\": \"1\",
+    \"NVTE_DEBUG_LEVEL\": \"2\"
   }
 }"
 
@@ -171,7 +173,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --metadata-key metadata \
     --rollout-shuffle \
     --reward-key score \
-    --num-rollout 32 \
+    --num-epoch 1 \
     --rollout-batch-size 4 \
     --n-samples-per-prompt 8 \
     --rollout-max-response-len 8192 \
@@ -188,7 +190,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --recompute-method uniform \
     --recompute-num-layers 1 \
     --use-dynamic-batch-size \
-    --max-tokens-per-gpu 200000 \
+    --max-tokens-per-gpu 160000 \
     --log-probs-chunk-size 512 \
     --advantage-estimator grpo \
     --normalize-advantages \
@@ -212,7 +214,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --attention-backend auto \
     --no-gradient-accumulation-fusion \
     --sglang-mem-fraction-static 0.8 \
-    --sglang-tool-call-parser qwen25 \
+    --sglang-tool-call-parser qwen3_coder \
     --use-wandb \
     --wandb-project "${WANDB_PROJECT:-polar-swegym-grpo}" \
     --wandb-group "${WANDB_GROUP:-swegym-qwen35-4b-async-grpo}" \
