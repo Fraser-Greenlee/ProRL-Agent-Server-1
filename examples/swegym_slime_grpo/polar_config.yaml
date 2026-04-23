@@ -14,7 +14,7 @@ polar_instruction_template: |
 # Task template rendered per sample group.  Placeholders are filled
 # from the context: {instruction}, {num_samples}, {sample.*}, {args.*}.
 polar_task_template:
-  timeout_seconds: 1600
+  timeout_seconds: 1200
   runtime:
     backend: "docker"
     # Use the image built by build_images.py directly — apptainer's
@@ -38,12 +38,12 @@ polar_task_template:
           . "$NVM_DIR/nvm.sh" &&
           (nvm use 22 >/dev/null 2>&1 || nvm install 22 >/dev/null 2>&1) &&
           nvm use 22 >/dev/null 2>&1 &&
-          (command -v claude >/dev/null || npm install -g @anthropic-ai/claude-code@latest >/dev/null 2>&1) &&
+          (command -v codex >/dev/null || npm install -g @openai/codex@latest >/dev/null 2>&1) &&
           ln -sf "$(command -v node)" /usr/local/bin/node &&
-          ln -sf "$(command -v claude)" /usr/local/bin/claude;
+          ln -sf "$(command -v codex)" /usr/local/bin/codex;
           true
   agent:
-    harness: "claude_code"
+    harness: "codex"
     model_name: "Qwen/Qwen3.5-4B"
   builder:
     strategy: "prefix_merging"
@@ -57,7 +57,5 @@ polar_task_template:
       exclude_patterns:
         - "trajectories/**"
         - "**/trajectories/**"
-        - ".claude/**"
-        - "**/.claude/**"
 
 polar_task_id_template: "polar-swegym-grpo-{rollout_id}-{sample.group_index}"
