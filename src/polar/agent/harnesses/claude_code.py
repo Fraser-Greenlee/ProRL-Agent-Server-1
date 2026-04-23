@@ -74,7 +74,6 @@ class ClaudeCodeHarness(BaseHarness):
             **self.env,
             "CLAUDE_CONFIG_DIR": self._config_dir,
             # Allow --dangerously-skip-permissions / bypassPermissions inside
-            # the container (root-or-not); matches Harbor's pattern.
             "IS_SANDBOX": "1",
             # Suppress Statsig / telemetry calls that the CLI otherwise makes
             # to api.anthropic.com even when ANTHROPIC_BASE_URL points elsewhere.

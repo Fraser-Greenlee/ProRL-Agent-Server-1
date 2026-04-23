@@ -278,11 +278,13 @@ class OpenAIResponsesTransformer(BaseTransformer):
         if "stream" in body:
             result["stream"] = body["stream"]
 
-        tools = body.get("tools", [])
+        # SGLang rejects tool_choice without a non-empty tools list; bind
+        # the pair so one can't be forwarded without the other.
+        tools = self._convert_tools(body.get("tools", []))
         if tools:
-            result["tools"] = self._convert_tools(tools)
-        if "tool_choice" in body:
-            result["tool_choice"] = body["tool_choice"]
+            result["tools"] = tools
+            if "tool_choice" in body:
+                result["tool_choice"] = body["tool_choice"]
 
         return self._enhance_for_training(
             result,

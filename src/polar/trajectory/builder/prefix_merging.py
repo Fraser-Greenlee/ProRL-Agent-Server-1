@@ -1,23 +1,5 @@
 """Chain builder with raw-response + canonical-interstitial token stream.
 
-Motivation
-----------
-An earlier revision detected chains at the **message** level but split the
-merged trace at the **token** level by requiring ``first.prompt_ids`` to be
-a byte-exact prefix of ``last.prompt_ids + last.response_ids``.  Any drift
-across requests (context-sensitive BPE merges, template variants) tripped
-that global check and the whole chain silently collapsed to the last
-completion alone.
-
-A follow-up revision appended each completion's ``response_ids`` and did a
-*local* prefix check between adjacent completions — but the same BPE drift
-problem resurfaced on every turn (``tokenize(decode(raw_response)) !=
-raw_response`` at multi-line JSON / special chars), collapsing chains to
-2–3 turns in practice.
-
-Current approach (raw + canonical interstitial)
------------------------------------------------
-
 * The **assistant body** comes from the raw sampled ids (``C_i.response_ids``).
   These are what the model actually emitted, so their logprobs are real.
   We never decode→re-encode them, so BPE drift cannot bite.
@@ -217,7 +199,12 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         for completion in session.completions:
             trace = build_trace_from_completion(completion)
             prompt_key = _grouping_key(trace.prompt_messages, self._ignore_patterns)
-            chain_idx = self._pop_chain(prompt_key, waiting_chains)
+            chain_idx = self._pop_compatible_chain(
+                prompt_key=prompt_key,
+                prompt_ids=trace.prompt_ids,
+                chains=chains,
+                waiting_chains=waiting_chains,
+            )
 
             if chain_idx is not None:
                 chains[chain_idx].append(completion)
@@ -446,13 +433,46 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         ]
 
     @staticmethod
-    def _pop_chain(
+    def _pop_compatible_chain(
+        *,
         prompt_key: str,
+        prompt_ids: list[int],
+        chains: list[list[CompletionRecord]],
         waiting_chains: dict[str, deque[int]],
     ) -> int | None:
+        """Pop a waiting chain that matches both at message-key and token levels.
+
+        The message-level key (produced by ``_grouping_key``) is only a
+        *necessary* condition for joining a chain.  Its normalization drops
+        tool messages, empty/``<think>`` assistants, and anything matched by
+        the regex ``ignore_patterns`` — all of which can hide genuine
+        token-level divergence (cache-control shifts, tools schema rewrites,
+        ``<system-reminder>`` injections).
+
+        The *sufficient* condition is the strict append-only token-prefix
+        invariant: ``C_{k+1}.prompt_ids`` must start with ``C_k.prompt_ids``.
+        Enforcing this at chain-join time means a completion whose raw
+        tokenization diverges from the waiting chain's tail starts its own
+        new chain, instead of being silently appended (only to be dropped
+        later in finalization).
+
+        Scans candidates in FIFO order; returns the first compatible index
+        and pops it.  Returns None if no candidate passes the token check.
+        """
         queue = waiting_chains.get(prompt_key)
-        if queue:
-            chain_idx = queue.popleft()
+        if not queue:
+            return None
+        for pos, chain_idx in enumerate(queue):
+            last_trace = build_trace_from_completion(chains[chain_idx][-1])
+            last_pids = last_trace.prompt_ids
+            if (
+                not prompt_ids
+                or not last_pids
+                or len(prompt_ids) < len(last_pids)
+                or prompt_ids[: len(last_pids)] != last_pids
+            ):
+                continue
+            del queue[pos]
             if not queue:
                 waiting_chains.pop(prompt_key, None)
             return chain_idx

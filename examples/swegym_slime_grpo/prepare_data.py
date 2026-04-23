@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the SWE-Gym 30-task sample as a JSONL dataset for Slime training.
+"""Prepare the SWE-Gym 50-task sample as a JSONL dataset for Slime training.
 
 Each row contains:
   - prompt:       chat-formatted list [{"role": "user", "content": problem_statement}]
@@ -21,7 +21,7 @@ from sample_tasks import (
     fetch_sample_instances,
 )
 
-OUTPUT = Path(__file__).resolve().parent / "swegym_30_tasks.jsonl"
+OUTPUT = Path(__file__).resolve().parent / "swegym_50_tasks.jsonl"
 
 
 def main() -> None:

@@ -172,7 +172,7 @@ def build_task_request(
             "settings": {},
             "env": {},
         },
-        "builder": {"strategy": "per_request"},
+        "builder": {"strategy": "prefix_merging"},
         "evaluator": {
             "strategy": "swebench_harness",
             "config": {

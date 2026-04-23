@@ -94,7 +94,7 @@ else
 fi
 
 # ── Data ───────────────────────────────────────────────────────────
-PROMPT_DATA="${SCRIPT_DIR}/swegym_30_tasks.jsonl"
+PROMPT_DATA="${SCRIPT_DIR}/swegym_50_tasks.jsonl"
 if [ ! -f "$PROMPT_DATA" ]; then
     echo "Preparing training data..."
     python "${SCRIPT_DIR}/prepare_data.py"
@@ -161,7 +161,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --ref-load "$REF_LOAD" \
     --load "$LOAD_DIR" \
     --save "$SAVE_DIR" \
-    --save-interval 10 \
+    --save-interval 5 \
     --update-weights-interval 1 \
     --rollout-function-path slime_bridge.rollout.generate_rollout_polar_async \
     --custom-rm-path slime_bridge.reward.reward_func \
@@ -173,11 +173,11 @@ ray job submit --address="http://127.0.0.1:8265" \
     --metadata-key metadata \
     --rollout-shuffle \
     --reward-key score \
-    --num-epoch 1 \
-    --rollout-batch-size 4 \
+    --num-epoch 2 \
+    --rollout-batch-size 8 \
     --n-samples-per-prompt 8 \
-    --rollout-max-response-len 8192 \
-    --rollout-max-prompt-len 16000 \
+    --rollout-max-response-len 16000 \
+    --rollout-max-prompt-len 32000 \
     --dynamic-history \
     --num-steps-per-rollout 1 \
     --tensor-model-parallel-size 2 \

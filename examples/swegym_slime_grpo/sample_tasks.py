@@ -1,4 +1,4 @@
-"""Helpers for the curated 10-task SWE-Gym sample."""
+"""Helpers for the curated 50-task SWE-Gym sample."""
 
 from __future__ import annotations
 
@@ -170,6 +170,107 @@ SAMPLE_TASKS: list[dict[str, str]] = [
         "instance_id": "modin-project__modin-7225",
         "repo": "modin-project/modin",
         "summary": "Stop modin.pandas.api.extensions from clobbering pandas re-exports.",
+    },
+    # --- Expanded sample (+20 tasks, total 50) for larger training batches ---
+    {
+        "instance_id": "getmoto__moto-4860",
+        "repo": "getmoto/moto",
+        "summary": "Use extend (not append) in TimestreamTable.write_records.",
+    },
+    {
+        "instance_id": "getmoto__moto-4918",
+        "repo": "getmoto/moto",
+        "summary": "Allow deleting Secrets Manager secrets by full ARN.",
+    },
+    {
+        "instance_id": "getmoto__moto-4969",
+        "repo": "getmoto/moto",
+        "summary": "Fix ECR batch_delete_image reporting spurious failures.",
+    },
+    {
+        "instance_id": "getmoto__moto-4972",
+        "repo": "getmoto/moto",
+        "summary": "Stop mock_logs delete_metric_filter from raising InvalidParameterException.",
+    },
+    {
+        "instance_id": "pandas-dev__pandas-47504",
+        "repo": "pandas-dev/pandas",
+        "summary": "Make read_xml iterparse handle multiple toplevel elements with lxml.",
+    },
+    {
+        "instance_id": "pandas-dev__pandas-47780",
+        "repo": "pandas-dev/pandas",
+        "summary": "Unify null-type handling in PeriodIndex.",
+    },
+    {
+        "instance_id": "pandas-dev__pandas-47804",
+        "repo": "pandas-dev/pandas",
+        "summary": "Return Interchange Column.null_count as builtin int, not NumPy scalar.",
+    },
+    {
+        "instance_id": "pandas-dev__pandas-47927",
+        "repo": "pandas-dev/pandas",
+        "summary": "Support Interval.__contains__ with another Interval.",
+    },
+    {
+        "instance_id": "Project-MONAI__MONAI-1571",
+        "repo": "Project-MONAI/MONAI",
+        "summary": "Let classification work under DDP with rich meta data.",
+    },
+    {
+        "instance_id": "Project-MONAI__MONAI-1884",
+        "repo": "Project-MONAI/MONAI",
+        "summary": "Allow ConcatItemsd to accept a single key.",
+    },
+    {
+        "instance_id": "Project-MONAI__MONAI-2010",
+        "repo": "Project-MONAI/MONAI",
+        "summary": "Fix duplicated RandSpatialCropSamplesd entries in key_transforms.",
+    },
+    {
+        "instance_id": "dask__dask-10422",
+        "repo": "dask/dask",
+        "summary": "Accept disk-backed MutableMapping in dask.array.to_zarr with distributed scheduler.",
+    },
+    {
+        "instance_id": "dask__dask-10521",
+        "repo": "dask/dask",
+        "summary": "Fix override_with handling in dask.config.get.",
+    },
+    {
+        "instance_id": "python__mypy-10174",
+        "repo": "python/mypy",
+        "summary": "Stop strict-equality false positive when strict optional is off.",
+    },
+    {
+        "instance_id": "python__mypy-10308",
+        "repo": "python/mypy",
+        "summary": "Avoid INTERNAL ERROR on __add__ in related Protocol classes.",
+    },
+    {
+        "instance_id": "iterative__dvc-1651",
+        "repo": "iterative/dvc",
+        "summary": "Make `dvc status --remote` imply --cloud.",
+    },
+    {
+        "instance_id": "iterative__dvc-1782",
+        "repo": "iterative/dvc",
+        "summary": "Fix `dvc repro` metrics display.",
+    },
+    {
+        "instance_id": "conan-io__conan-10959",
+        "repo": "conan-io/conan",
+        "summary": "Fix default_python_requires_id_mode raising an error.",
+    },
+    {
+        "instance_id": "pydantic__pydantic-8004",
+        "repo": "pydantic/pydantic",
+        "summary": "Support PrivateAttr with Annotated without AttributeError.",
+    },
+    {
+        "instance_id": "facebookresearch__hydra-1551",
+        "repo": "facebookresearch/hydra",
+        "summary": "Allow experiment pattern with overrides in main config file.",
     },
 ]
 

@@ -51,7 +51,7 @@ class QwenCodeHarness(BaseHarness):
         env: dict[str, str] = {**self.env}
         # qwen-code reads the model from OPENAI_MODEL; passing both an env var
         # and a --model CLI flag created conflicts on proxied backends, so only
-        # the env var form is used (mirrors terminal-bench / Harbor).
+        # the env var form is used
         if self.model_name:
             env["OPENAI_MODEL"] = self.model_name
 

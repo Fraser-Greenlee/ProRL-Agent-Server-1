@@ -336,18 +336,28 @@ def test_prefix_merging_survives_bpe_drift_inside_assistant_body() -> None:
     assert trace.response_ids == asst1_raw + expected_interstitial + asst2_raw
 
 
-def test_prefix_merging_breaks_on_canonical_prefix_divergence() -> None:
-    """If the harness rewrites earlier messages, the canonical prefix check must break."""
+def test_prefix_merging_splits_on_token_prefix_divergence() -> None:
+    """Message-key matches but raw tokens diverge (harness rewrote earlier
+    content, e.g. cache_control shift / system-reminder injection).  Chain
+    detection must refuse to join these into one chain — they should become
+    two independent chains instead of a single truncated one.
+    """
     sys_user = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "u"},
     ]
-    asst1_raw = [200, _EOT]
     c1_prompt = list(_SYS_PROMPT) + list(_USER_PROMPT) + list(_GEN_PROMPT)
-    # c2 claims the same chain but its prompt prefix disagrees (sys token changed).
-    c2_prompt = [99, 99, 99] + list(_USER_PROMPT) + list(_GEN_PROMPT) + [200, _EOT, _NL, _IM_START, 500, _EOT, _NL] + list(_GEN_PROMPT)
+    # c2's message_key would match c1 + c1's response (tool role is stripped
+    # by _grouping_key) but its raw prompt tokens start differently.
+    c2_prompt = (
+        [99, 99, 99]
+        + list(_USER_PROMPT)
+        + list(_GEN_PROMPT)
+        + [200, _EOT, _NL, _IM_START, 500, _EOT, _NL]
+        + list(_GEN_PROMPT)
+    )
 
-    c1 = _make_record("c1", c1_prompt, sys_user, asst1_raw, {"role": "assistant", "content": "a1"})
+    c1 = _make_record("c1", c1_prompt, sys_user, [200, _EOT], {"role": "assistant", "content": "a1"})
     c2 = _make_record(
         "c2",
         c2_prompt,
@@ -358,11 +368,65 @@ def test_prefix_merging_breaks_on_canonical_prefix_divergence() -> None:
 
     traj = _run_builder(PrefixMergingBuilder(), [c1, c2])
     stats = traj.metadata["reconstruction_stats"]
-    # c1, c2 still form one chain by message key, but token-level merge only
-    # keeps c1.
-    assert stats["chains_total"] == 1
-    assert stats["completions_merged"] == 1
-    assert stats["chains_reconstructed_truncated"] == 1
+    # Two independent chains, each single-completion and trivially "full".
+    assert stats["chains_total"] == 2
+    assert stats["chains_reconstructed_full"] == 2
+    assert stats["chains_reconstructed_truncated"] == 0
+    assert stats["completions_merged"] == 2
+    assert len(traj.traces) == 2
+    # First trace = C_1 alone.  Second trace = C_2 alone (new chain root).
+    assert traj.traces[0].response_ids == [200, _EOT]
+    assert traj.traces[1].response_ids == [400, _EOT]
+
+
+def test_prefix_merging_swegym_pattern_splits_instead_of_collapsing() -> None:
+    """Regression test for the SWE-gym pattern: 3 completions whose
+    message_keys all match append-only semantics, but whose raw prompt_ids
+    diverge after C_1 (simulating cache-control / tools-schema shifts).
+    Previously this collapsed into one chain whose finalize truncated to
+    the first turn — misattributing the session reward to the opening
+    assistant message.  The fix splits them into three independent chains.
+    """
+    sys_user = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "u"},
+    ]
+
+    # All three prompts look message-equivalent after _grouping_key strips
+    # tool_response entries, but each has a slightly different opening token
+    # (simulating harness perturbation between turns).
+    c1_prompt = list(_SYS_PROMPT) + list(_USER_PROMPT) + list(_GEN_PROMPT)
+    c2_prompt = [9001, 9002] + c1_prompt[2:] + [200, _EOT, _NL] + list(_GEN_PROMPT)
+    c3_prompt = [9003, 9004] + c2_prompt[2:] + [400, _EOT, _NL] + list(_GEN_PROMPT)
+
+    c1 = _make_record("c1", c1_prompt, sys_user, [200, _EOT], {"role": "assistant", "content": "a1"})
+    c2 = _make_record(
+        "c2",
+        c2_prompt,
+        sys_user + [{"role": "assistant", "content": "a1"}, {"role": "tool", "content": "t1"}],
+        [400, _EOT],
+        {"role": "assistant", "content": "a2"},
+    )
+    c3 = _make_record(
+        "c3",
+        c3_prompt,
+        sys_user
+        + [
+            {"role": "assistant", "content": "a1"},
+            {"role": "tool", "content": "t1"},
+            {"role": "assistant", "content": "a2"},
+            {"role": "tool", "content": "t2"},
+        ],
+        [500, _EOT],
+        {"role": "assistant", "content": "a3"},
+    )
+
+    traj = _run_builder(PrefixMergingBuilder(), [c1, c2, c3])
+    stats = traj.metadata["reconstruction_stats"]
+    assert stats["chains_total"] == 3
+    assert stats["chains_reconstructed_full"] == 3
+    assert stats["chains_reconstructed_truncated"] == 0
+    assert stats["completions_merged"] == 3
 
 
 def test_prefix_merging_handles_truncated_response_without_eot() -> None:

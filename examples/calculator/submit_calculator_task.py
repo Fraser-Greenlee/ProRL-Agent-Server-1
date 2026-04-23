@@ -136,7 +136,7 @@ def model_name_for_harness(harness: str, override: str | None) -> str | None:
 def agent_settings_for_harness(harness: str) -> dict[str, Any]:
     if harness == "claude_code":
         return {
-            "max_turns": 8,
+            "max_turns": 20,
             "max_thinking_tokens": 2048,
             "append_system_prompt": (
                 "For short single-file tasks, prefer one Read, one Edit covering all required "

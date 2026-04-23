@@ -178,17 +178,18 @@ class GoogleTransformer(BaseTransformer):
         if body.get("_streaming", False):
             result["stream"] = True
 
+        # SGLang rejects tool_choice without a non-empty tools list; bind
+        # the pair so one can't be forwarded without the other.
         tools = self._convert_tools(
             body.get("tools") or config_section.get("tools") or []
         )
         if tools:
             result["tools"] = tools
-
-        tool_choice = self._convert_tool_choice(
-            body.get("toolConfig") or config_section.get("toolConfig") or {}
-        )
-        if tool_choice is not None:
-            result["tool_choice"] = tool_choice
+            tool_choice = self._convert_tool_choice(
+                body.get("toolConfig") or config_section.get("toolConfig") or {}
+            )
+            if tool_choice is not None:
+                result["tool_choice"] = tool_choice
 
         return self._enhance_for_training(
             result,

@@ -7,11 +7,20 @@ Aligned with agent-harness-proxy/src/harness_proxy/transform/anthropic.py.
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from polar.gateway.transform.base import BaseTransformer
+
+# Claude Code SDK leaks `x-anthropic-billing-header: ...cch=<hash>;` as the
+# first line of the system prompt. The cch= hash changes per request, so
+# rendered prompt tokens drift every turn and prefix_merging can't chain
+# multi-turn traces. Strip the line before forwarding to SGLang.
+_CLAUDE_CODE_BILLING_HEADER_RE = re.compile(
+    r"^\s*x-anthropic-billing-header:[^\n]*\n?", re.IGNORECASE
+)
 
 
 @dataclass
@@ -245,6 +254,9 @@ class AnthropicTransformer(BaseTransformer):
         system = body.get("system")
         if system:
             system_content = self._flatten_content(system)
+            # Drop Claude Code's per-request billing header line (breaks
+            # prefix_merging because cch= changes every turn).
+            system_content = _CLAUDE_CODE_BILLING_HEADER_RE.sub("", system_content)
             if system_content:
                 messages.append({"role": "system", "content": system_content})
 
@@ -271,14 +283,16 @@ class AnthropicTransformer(BaseTransformer):
         if body.get("stream", False):
             result["stream"] = True
 
-        # Tools
+        # Tools. Claude Code sometimes sends tools=[] on compaction/summary
+        # turns; forwarding tool_choice without a non-empty tools list makes
+        # SGLang reject with "tool_choice only allowed when tools specified".
         if "tools" in body:
-            result["tools"] = self._transform_tools_to_openai(body["tools"])
-            # Anthropic API defaults tool_choice to "auto" when omitted, but
-            # vLLM/SGLang needs it explicitly to activate tool-call parsing.
-            result["tool_choice"] = self._transform_tool_choice_to_openai(
-                body.get("tool_choice", {"type": "auto"})
-            )
+            tools = self._transform_tools_to_openai(body["tools"])
+            if tools:
+                result["tools"] = tools
+                result["tool_choice"] = self._transform_tool_choice_to_openai(
+                    body.get("tool_choice", {"type": "auto"})
+                )
 
         return self._enhance_for_training(
             result,

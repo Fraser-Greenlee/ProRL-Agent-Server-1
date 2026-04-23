@@ -178,7 +178,6 @@ def main():
     temperature = os.environ.get("LLM_TEMPERATURE")
     max_output_tokens = os.environ.get("LLM_MAX_OUTPUT_TOKENS")
 
-    # Match Harbor's simple LLM kwargs — no SecretStr, no reasoning params
     llm_kwargs = dict(
         model=model,
         api_key=api_key,
