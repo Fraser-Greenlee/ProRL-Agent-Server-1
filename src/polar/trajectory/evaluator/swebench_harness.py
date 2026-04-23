@@ -96,6 +96,7 @@ class SwebenchHarnessEvaluator(BasePatchEvaluator):
         combined_path = instance_log_dir / "test_output.txt"
         result = await runtime.exec(
             f"/bin/bash {shell_quote(f'{runtime.runtime_session_dir}/eval.sh')}",
+            cwd=self.repo_dir,
             env=env,
             timeout_sec=bounded_timeout(self.test_timeout, timeout_cap),
         )

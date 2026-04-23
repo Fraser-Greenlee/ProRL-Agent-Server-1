@@ -123,33 +123,11 @@ def model_name_for_harness(harness: str, override: str | None) -> str | None:
     return defaults.get(harness)
 
 
-def agent_settings_for_harness(harness: str) -> dict[str, Any]:
-    if harness == "claude_code":
-        return {
-            "max_turns": 20,
-            "max_thinking_tokens": 2048,
-            "append_system_prompt": (
-                "For short single-file tasks, prefer one Read, one Edit covering all required "
-                "changes, then run `python3 test_calculator.py`. Do not stop after describing "
-                "a tool call in text; emit the actual tool call. For this task, `_parse_expr` "
-                "must handle both `+` and `-`, `_parse_term` must handle `*` and `/` with "
-                "integer division, `_parse_factor` must handle integers and parenthesized "
-                "expressions, and `__call__` must return `value`. Include the `return value` "
-                "change in the same first Edit as the parser-method changes. Use one loop over "
-                "`('+', '-')` in `_parse_expr` and one loop over `('*', '/')` in `_parse_term`."
-            ),
-        }
-    return {}
-
-
 def agent_spec_for_harness(harness: str, override_model: str | None) -> dict[str, Any]:
     spec: dict[str, Any] = {"harness": harness}
     model_name = model_name_for_harness(harness, override_model)
     if model_name is not None:
         spec["model_name"] = model_name
-    settings = agent_settings_for_harness(harness)
-    if settings:
-        spec["settings"] = settings
     return spec
 
 

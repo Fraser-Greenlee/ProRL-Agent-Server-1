@@ -7,7 +7,7 @@ import shlex
 
 from polar.agent.base import BaseHarness
 from polar.agent.models import AgentSpec
-from polar.runtime.base import BaseRuntime, RUNTIME_AGENT_LOG_DIR
+from polar.runtime.base import BaseRuntime, RUNTIME_AGENT_LOG_DIR, RUNTIME_SESSION_DIR
 from polar.runtime.models import ExecInput
 
 
@@ -16,7 +16,9 @@ class ClaudeCodeHarness(BaseHarness):
 
     def __init__(self, agent_spec: AgentSpec) -> None:
         super().__init__(agent_spec)
-        self._config_dir = "$HOME/.claude"
+        # Absolute path outside the workspace — $HOME won't expand in docker
+        # exec -e, and a literal "$HOME" dir would get swept into git add -A.
+        self._config_dir = f"{RUNTIME_SESSION_DIR}/.claude"
 
     async def setup(self, runtime: BaseRuntime) -> None:
         await runtime.exec(f"mkdir -p {self._config_dir}")

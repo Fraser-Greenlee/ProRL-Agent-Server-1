@@ -678,6 +678,7 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
     postrun_ms: list[float] = []
     session_is_placeholder: dict[str, bool] = {}
     session_trace_count: dict[str, int] = {}
+    session_report: dict[str, dict[str, Any]] = {}
     zombie_samples = 0
     for sample in flat_samples:
         polar_meta = sample.metadata.get("polar", {})
@@ -695,6 +696,10 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
             postrun_ms.append(float(timing.get("postrun_ms", 0.0)))
             session_is_placeholder[session_id] = is_placeholder
             session_trace_count[session_id] = 0 if is_placeholder else 1
+            evaluation = (polar_meta.get("trajectory_metadata") or {}).get("evaluation") or {}
+            report = evaluation.get("report") or {}
+            if isinstance(report, dict):
+                session_report[session_id] = report
         elif not is_placeholder:
             session_trace_count[session_id] += 1
 
@@ -715,6 +720,19 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
         out["polar/traces_per_session/mean"] = (
             sum(session_trace_count.values()) / total_sessions
         )
+    if session_report:
+        graded_sessions = len(session_report)
+        resolved = sum(1 for r in session_report.values() if r.get("resolved"))
+        failed_apply = sum(1 for r in session_report.values() if r.get("failed_apply_patch"))
+        empty_gen = sum(1 for r in session_report.values() if r.get("empty_generation"))
+        error_eval = sum(1 for r in session_report.values() if r.get("error_eval"))
+        test_timeout = sum(1 for r in session_report.values() if r.get("test_timeout"))
+        out["polar/eval/graded_sessions"] = float(graded_sessions)
+        out["polar/eval/resolved_rate"] = resolved / graded_sessions
+        out["polar/eval/failed_apply_rate"] = failed_apply / graded_sessions
+        out["polar/eval/empty_generation_rate"] = empty_gen / graded_sessions
+        out["polar/eval/error_eval_rate"] = error_eval / graded_sessions
+        out["polar/eval/test_timeout_rate"] = test_timeout / graded_sessions
     return out
 
 

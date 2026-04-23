@@ -121,13 +121,17 @@ Two knobs control session fan-out, and they **must** be kept in sync:
 
 If `polar_max_concurrency` > `max_run_workers`, excess sessions queue at the node and eventually time out (`timeout_seconds`), returning as empty placeholders with reward 0. The `reward_post_process` hook zeros their advantages so training continues as a no-op, but the step is wasted.
 
-This repo ships with **32 / 32 / 32 / 32** — aligned. Prior 64-wide runs saturated the
-Polar gateway's httpx connection pool (thousands of `httpx.PoolTimeout` errors as sessions
-multiplied LLM-call + polling traffic), which surfaced as slowly-climbing empty-rollout
-counts. 32 workers fits well within the pool and keeps all eight B200s busy — the host
-(224 cores / 2 TB RAM) is nowhere near CPU/RAM-bound at this size. On a smaller machine,
-lower all four together. `timeout_seconds: 5400` gives long-running SWE-Gym sessions
-(test runs, large repos) room to finish.
+This repo ships with **16 / 16 / 16 / 16** — aligned. A prior 32-wide run saturated the
+docker daemon (32 sessions × 2 containers = 64 concurrent containers, each running
+`nvm install 22 && npm install -g @openai/codex` at session start), producing
+`docker create failed with exit code -1`, `git diff ... exit code 137` (SIGKILL'd
+mid-exec), and `docker rm -f failed` cascades. Two changes fix both the daemon pressure
+and the wasted work: (1) Node 22 + `@openai/codex` are now baked into the image at
+build time (Dockerfile v3), so `prepare` is just workspace copy + symlinks; (2) a
+separate `eval_prepare` runs in the eval container without the codex/node setup.
+16 workers keeps all eight B200s busy on this host (224 cores / 2 TB RAM). On a
+smaller machine lower all four together. `timeout_seconds: 3600` gives long-running
+SWE-Gym sessions (test runs, large repos) ample room to finish.
 
 ### Observed behavior on 8×B200
 

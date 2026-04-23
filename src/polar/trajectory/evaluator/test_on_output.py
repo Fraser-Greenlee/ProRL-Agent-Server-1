@@ -99,6 +99,7 @@ class TestOnOutputEvaluator(BasePatchEvaluator):
         combined_path = log_dir / "expected_output.test_output.log"
         result = await runtime.exec(
             self.test_command,
+            cwd=self.repo_dir,
             env=env,
             timeout_sec=bounded_timeout(self.test_timeout, timeout_cap),
         )

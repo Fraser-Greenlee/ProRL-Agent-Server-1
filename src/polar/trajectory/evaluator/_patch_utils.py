@@ -169,6 +169,10 @@ class BasePatchEvaluator(BaseTrajectoryEvaluator):
                     or APPLY_PATCH_PASS not in apply_patch_output
                 ):
                     metadata["report"]["failed_apply_patch"] = True
+                    # Surface the tail of the apply output into the result so
+                    # we can diagnose failures after session_dir is cleaned up.
+                    metadata["apply_patch_output"] = apply_patch_output[-8000:]
+                    metadata["apply_patch_patch_head"] = patch[:4000]
                     return EvalResult(outcome_reward=0.0, metadata=metadata)
             elif refresh_runtime:
                 raise RuntimeError(
@@ -260,8 +264,12 @@ class BasePatchEvaluator(BaseTrajectoryEvaluator):
             f"(patch --batch --fuzz=5 -p1 -i {shell_quote(runtime_patch_path)} && "
             f"echo '{APPLY_PATCH_PASS}' || echo '{APPLY_PATCH_FAIL}')))"
         )
+        # Pin cwd to repo_dir: the eval runtime is fresh and its spec.workdir
+        # (e.g. /polar/session/workspace) won't exist there, so falling through
+        # to spec.workdir would make `docker exec -w ...` fail at OCI chdir.
         result = await runtime.exec(
             apply_cmd,
+            cwd=self.repo_dir,
             env=env,
             timeout_sec=bounded_timeout(self.apply_timeout, timeout_cap),
         )

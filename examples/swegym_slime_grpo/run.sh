@@ -190,7 +190,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --recompute-method uniform \
     --recompute-num-layers 1 \
     --use-dynamic-batch-size \
-    --max-tokens-per-gpu 160000 \
+    --max-tokens-per-gpu 80000 \
     --log-probs-chunk-size 512 \
     --advantage-estimator grpo \
     --normalize-advantages \

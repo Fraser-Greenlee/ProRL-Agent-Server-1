@@ -16,7 +16,7 @@ from sample_tasks import (
 
 EXAMPLE_DIR = Path(__file__).resolve().parent
 DOCKERFILE_DIR = EXAMPLE_DIR
-IMAGE_LAYOUT_VERSION = "2"
+IMAGE_LAYOUT_VERSION = "4"
 IMAGE_VERSION_LABEL = "io.polar.swegym-image-version"
 
 
