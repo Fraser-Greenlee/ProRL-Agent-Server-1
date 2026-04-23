@@ -46,14 +46,7 @@ polar_task_template:
     harness: "claude_code"
     model_name: "Qwen/Qwen3.5-4B"
   builder:
-    # Claude Code injects <system-reminder> blocks and billing headers into
-    # the request stream; strip them before the chain-grouping key check so
-    # multi-turn chains aren't broken by harness-side noise.
     strategy: "prefix_merging"
-    config:
-      ignore_patterns:
-        - "x-anthropic-billing-header:[^\\n]+"
-        - "<system-reminder>.*?</system-reminder>"
   evaluator:
     strategy: "swebench_harness"
     refresh_runtime: true

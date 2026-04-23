@@ -1,44 +1,40 @@
-"""Chain builder with raw-response + canonical-interstitial token stream.
+"""Prefix-merging trajectory builder.
 
-* The **assistant body** comes from the raw sampled ids (``C_i.response_ids``).
-  These are what the model actually emitted, so their logprobs are real.
-  We never decode→re-encode them, so BPE drift cannot bite.
-* The **interstitials** (tool results, intermediate user turns, chat-template
-  glue like ``<|im_end|>\\n<|im_start|>...<|im_end|>\\n<|im_start|>assistant``)
-  come from ``C_{i+1}.prompt_ids`` — the server's canonical tokenization.
+Reconstructs a single token-level training trace out of the many independent
+LLM completions an agent emits during one rollout.  A harness (claude_code,
+codex, pi, ...) drives the agent and each turn hits the gateway as a separate
+completion request; this builder stitches those completions back into the
+``prompt + response_1 + interstitial + response_2 + ...`` stream that an RL
+trainer needs, without introducing tokenization drift.
 
-The critical insight is that the prefix check is **canonical-vs-canonical**
-(``C_{i+1}.prompt_ids[:len(C_i.prompt_ids)] == C_i.prompt_ids``) rather than
-raw-vs-canonical, and therefore passes reliably.
+Design in two stages:
 
-To split the canonical tail into "canonical C_i response" (discard) vs
-"interstitial" (keep), we scan for the first end-of-turn token
-(``<|im_end|>`` on Qwen-family, configurable).  Everything past that
-marker is canonical chat-template glue + tool messages and is appended
-to the stream.  If the raw response already ended with the end-of-turn
-token (the usual case when ``finish_reason`` ∈ {stop, tool_calls}), we
-skip the duplicate; otherwise (truncation) we prepend it.
+1. **Grouping** — detect which completions belong to the same append-only
+   agent chain.  A cheap message-level key is used as an O(1) index, and a
+   strict token-prefix check (``C_{k+1}.prompt_ids`` must start with
+   ``C_k.prompt_ids``) is the final arbiter.  Completions whose tokens
+   diverge start a fresh chain instead of silently polluting an existing one.
 
-Stream construction
--------------------
-    stream = list(C_1.prompt_ids)
-    stream += C_1.response_ids           # raw
-    for C_{i+1} in chain[1:]:
-        if C_{i+1}.prompt_ids[:len(C_i.prompt_ids)] != C_i.prompt_ids:
-            break                         # message prefix diverged
-        tail = C_{i+1}.prompt_ids[len(C_i.prompt_ids):]
-        K = tail.index(EOT)               # first end-of-turn token
-        interstitial = tail[K:] or tail[K+1:]   # see _slice_interstitial
-        stream += interstitial + list(C_{i+1}.response_ids)
+2. **Finalization** — walk each chain and build a merged token stream:
 
-Interstitial tokens get ``None`` logprob slots — the adapter must mask
-them out of loss.
+   - Assistant bodies come from the **raw** ``response_ids`` actually sampled
+     by the model.  Their logprobs are real and we never decode→re-encode,
+     so BPE non-canonicality cannot bite.
+   - Interstitials (tool results, chat-template glue, intermediate user
+     turns) come from ``C_{i+1}.prompt_ids`` — the server's **canonical**
+     tokenization.  The boundary between "canonical copy of the previous
+     assistant body" and the actual interstitial is the first end-of-turn
+     token (``<|im_end|>`` on Qwen / ChatML; auto-detected or configurable).
+   - Interstitial slots get synthesized logprobs with no ``token`` field,
+     which the downstream adapter uses to zero their loss mask.
+
+See ``docs/prefix_merging_algorithm.md`` for a full walkthrough with
+examples, invariants, and edge cases.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from collections import defaultdict, deque
 from copy import deepcopy
 from typing import Any
@@ -103,16 +99,10 @@ def _is_grouping_noise_message(message: dict[str, Any]) -> bool:
     return False
 
 
-def _normalize_messages(
-    messages: list[dict[str, Any]],
-    ignore_patterns: list[re.Pattern[str]],
-) -> str:
+def _normalize_messages(messages: list[dict[str, Any]]) -> str:
     """Flatten a message list into a deterministic key string.
 
     Format: ``role:content<SEP>role:content<SEP>...``
-
-    *ignore_patterns* are applied to the final string so that matched regions
-    (e.g. harness-injected cache headers) are stripped before comparison.
     """
     parts = []
     for msg in messages:
@@ -122,16 +112,10 @@ def _normalize_messages(
         else:
             content = _flatten_message_content(msg.get("content"))
         parts.append(f"{role}:{content}")
-    key = "<SEP>".join(parts)
-    for pattern in ignore_patterns:
-        key = pattern.sub("", key)
-    return key
+    return "<SEP>".join(parts)
 
 
-def _grouping_key(
-    messages: list[dict[str, Any]],
-    ignore_patterns: list[re.Pattern[str]],
-) -> str:
+def _grouping_key(messages: list[dict[str, Any]]) -> str:
     """Normalize the structural conversation context used for chaining.
 
     Tool-result messages are omitted because they are harness artifacts that
@@ -144,7 +128,6 @@ def _grouping_key(
             for expanded_message in _expand_messages_for_grouping(message)
             if not _is_grouping_noise_message(expanded_message)
         ],
-        ignore_patterns,
     )
 
 
@@ -153,12 +136,6 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
 
     Parameters
     ----------
-    ignore_patterns:
-        Regex strings (DOTALL) applied to the normalized message key
-        during chain detection.  Matched regions are stripped before
-        comparison so harness-injected noise (cache headers, etc.) does
-        not prevent chaining.  Does not affect token-level
-        reconstruction.
     end_of_turn_token_id:
         Explicit end-of-turn (EOT) token id used to locate the
         canonical-tail split between the prior assistant body and the
@@ -171,13 +148,8 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
     def __init__(
         self,
         *,
-        ignore_patterns: list[str] | None = None,
         end_of_turn_token_id: int | None = None,
     ) -> None:
-        self._ignore_pattern_text = list(ignore_patterns or [])
-        self._ignore_patterns: list[re.Pattern[str]] = [
-            re.compile(p, re.DOTALL) for p in self._ignore_pattern_text
-        ]
         self._configured_eot_id = end_of_turn_token_id
 
     async def build(self, session: CompletionSession) -> Trajectory:
@@ -198,7 +170,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
 
         for completion in session.completions:
             trace = build_trace_from_completion(completion)
-            prompt_key = _grouping_key(trace.prompt_messages, self._ignore_patterns)
+            prompt_key = _grouping_key(trace.prompt_messages)
             chain_idx = self._pop_compatible_chain(
                 prompt_key=prompt_key,
                 prompt_ids=trace.prompt_ids,
@@ -212,10 +184,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 chain_idx = len(chains)
                 chains.append([completion])
 
-            next_key = _grouping_key(
-                trace.prompt_messages + trace.response_messages,
-                self._ignore_patterns,
-            )
+            next_key = _grouping_key(trace.prompt_messages + trace.response_messages)
             waiting_chains[next_key].append(chain_idx)
 
         stats: dict[str, int] = {
@@ -444,10 +413,9 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
 
         The message-level key (produced by ``_grouping_key``) is only a
         *necessary* condition for joining a chain.  Its normalization drops
-        tool messages, empty/``<think>`` assistants, and anything matched by
-        the regex ``ignore_patterns`` — all of which can hide genuine
-        token-level divergence (cache-control shifts, tools schema rewrites,
-        ``<system-reminder>`` injections).
+        tool messages and empty/``<think>`` assistants — both of which can
+        hide genuine token-level divergence (cache-control shifts, tools
+        schema rewrites, ``<system-reminder>`` injections).
 
         The *sufficient* condition is the strict append-only token-prefix
         invariant: ``C_{k+1}.prompt_ids`` must start with ``C_k.prompt_ids``.

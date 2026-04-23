@@ -83,16 +83,6 @@ def prepare_command_for_harness(harness: str) -> str:
     return install_command + WORKSPACE_PREPARE
 
 
-def builder_spec_for_harness(harness: str) -> dict[str, Any]:
-    config: dict[str, Any] = {}
-    if harness == "claude_code":
-        config["ignore_patterns"] = [
-            r"x-anthropic-billing-header:[^\n]+",
-            r"<system-reminder>.*?</system-reminder>",
-        ]
-    return {"strategy": "prefix_merging", **({"config": config} if config else {})}
-
-
 # Common stray artifacts that can end up in cwd regardless of harness.
 # The evaluator already skips __pycache__, *.pyc, *.pyo, .pytest_cache.
 _COMMON_EVAL_EXCLUDES: list[str] = [
@@ -225,7 +215,7 @@ def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
             "workdir": "/polar/session/workspace",
         },
         "agent": agent_spec_for_harness(args.harness, args.model_name),
-        "builder": builder_spec_for_harness(args.harness),
+        "builder": {"strategy": "prefix_merging"},
         "evaluator": {
             "strategy": "test_on_output",
             "config": {
