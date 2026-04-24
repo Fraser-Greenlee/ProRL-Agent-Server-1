@@ -20,6 +20,7 @@ class _SessionState:
     model_requested: str | None = None
     model_used: str | None = None
     api_type: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
     completions: list[CompletionRecord] = field(default_factory=list)
 
 
@@ -43,6 +44,7 @@ class SessionStore:
         *,
         task_id: str | None = None,
         created_at: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create or refresh session metadata."""
         with self._lock:
@@ -53,6 +55,7 @@ class SessionStore:
                 model_requested=model_requested,
                 model_used=model_used,
                 api_type=api_type,
+                metadata=metadata,
             )
             return self._metadata_payload_locked(state)
 
@@ -68,6 +71,7 @@ class SessionStore:
         api_type: str | None = None,
         task_id: str | None = None,
         created_at: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Append one completion record to the in-memory session."""
         effective_model_used = model_used or request.get("model", "unknown")
@@ -78,6 +82,7 @@ class SessionStore:
                 "request": request,
                 "original_request": original_request or {},
                 "response": response,
+                "metadata": dict(metadata or {}),
             }
         )
 
@@ -89,6 +94,7 @@ class SessionStore:
                 model_requested=model_requested,
                 model_used=effective_model_used,
                 api_type=api_type,
+                metadata=metadata,
             )
             state.completions.append(record)
             state.completion_count = len(state.completions)
@@ -157,11 +163,14 @@ class SessionStore:
         model_requested: str | None,
         model_used: str | None,
         api_type: str | None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         state.task_id = self._merge_field(state.task_id, task_id)
         state.model_requested = self._merge_field(state.model_requested, model_requested)
         state.model_used = self._merge_field(state.model_used, model_used)
         state.api_type = self._merge_field(state.api_type, api_type)
+        if metadata:
+            state.metadata.update(metadata)
 
     def _metadata_payload_locked(self, state: _SessionState) -> dict[str, Any]:
         return {
@@ -172,6 +181,7 @@ class SessionStore:
             "model_requested": state.model_requested,
             "model_used": state.model_used,
             "api_type": state.api_type,
+            "metadata": dict(state.metadata),
         }
 
     @staticmethod

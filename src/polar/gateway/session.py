@@ -55,6 +55,7 @@ class SessionInfo:
     registered: bool = False
     status: str = SessionStatus.REGISTERED
     result: SessionResult | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class SessionRegistry:
@@ -71,6 +72,7 @@ class SessionRegistry:
         task_id: str | None = None,
         registered: bool = False,
         status: str = SessionStatus.REGISTERED,
+        metadata: dict[str, Any] | None = None,
     ) -> SessionInfo:
         session_id = clean_session_id(session_id) or generate_session_id()
         now = _utcnow()
@@ -82,6 +84,8 @@ class SessionRegistry:
                     info.task_id = task_id
                 info.registered = info.registered or registered
                 info.status = status or info.status
+                if metadata:
+                    info.metadata = {**(info.metadata or {}), **metadata}
                 if status in SessionStatus.active():
                     info.result = None
                 return info
@@ -93,6 +97,7 @@ class SessionRegistry:
                 task_id=task_id,
                 registered=registered,
                 status=status,
+                metadata=dict(metadata or {}),
             )
             self._sessions[session_id] = info
             return info

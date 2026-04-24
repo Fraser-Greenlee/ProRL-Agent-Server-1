@@ -4,7 +4,13 @@
 polar_rollout_url: "http://127.0.0.1:8080"
 polar_reward_key: "score"
 polar_max_concurrency: 16
+polar_max_session_concurrency: 128
+polar_max_async_level: 2
+polar_max_off_policy_steps: 1
+polar_max_task_retries: 2
 polar_request_timeout: 3600
+polar_callback_host: "127.0.0.1"
+polar_allow_weight_update_overlap: true
 polar_eval_dataset_name: "swegym_eval"
 polar_instruction_template: |
   Fix the following issue in the repository at /polar/session/workspace.

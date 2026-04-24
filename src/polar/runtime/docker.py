@@ -155,6 +155,7 @@ class DockerRuntime(BaseRuntime):
     async def upload_file(self, local_path: str, remote_path: str) -> None:
         try:
             if self._copy_to_bind_mount(local_path, remote_path):
+                await self._make_runtime_path_writable(remote_path, recursive=False)
                 return
         except PermissionError:
             pass
@@ -167,10 +168,12 @@ class DockerRuntime(BaseRuntime):
         )
         if rc != 0:
             raise RuntimeError(f"docker cp upload_file failed with exit code {rc}")
+        await self._make_runtime_path_writable(remote_path, recursive=False)
 
     async def upload_dir(self, local_path: str, remote_path: str) -> None:
         try:
             if self._copy_to_bind_mount(local_path, remote_path):
+                await self._make_runtime_path_writable(remote_path, recursive=True)
                 return
         except PermissionError:
             pass
@@ -182,6 +185,26 @@ class DockerRuntime(BaseRuntime):
         )
         if rc != 0:
             raise RuntimeError(f"docker cp upload_dir failed with exit code {rc}")
+        await self._make_runtime_path_writable(remote_path, recursive=True)
+
+    async def _make_runtime_path_writable(
+        self, remote_path: str, *, recursive: bool
+    ) -> None:
+        if self._chmod_needed is False:
+            return
+        chmod_args = ["chmod"]
+        if recursive:
+            chmod_args.append("-R")
+        chmod_args.extend(["a+rwX", remote_path])
+        rc, _, stderr = await self._run_local_command(
+            "docker", "exec", "--user", "root",
+            self._container_name, *chmod_args,
+            capture=True, timeout=self._STOP_TIMEOUT,
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"docker chmod failed for {remote_path} with exit code {rc}: {stderr}"
+            )
 
     async def download_file(self, remote_path: str, local_path: str) -> None:
         try:

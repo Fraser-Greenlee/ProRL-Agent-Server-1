@@ -163,6 +163,7 @@ class GatewayNodeManager:
                 task_id=request.task_id,
                 registered=True,
                 status=SessionStatus.REGISTERED,
+                metadata=dict(request.metadata),
             )
             self.storage.ensure_session(
                 info.session_id,
@@ -171,6 +172,7 @@ class GatewayNodeManager:
                 api_type=None,
                 task_id=info.task_id,
                 created_at=info.created_at.isoformat(),
+                metadata=dict(request.metadata),
             )
 
             timer = StageTimer()
@@ -621,6 +623,7 @@ class GatewayNodeManager:
             timing=managed.timer.to_session_timing(),
             node_id=self.node_id,
             error=error,
+            metadata=dict(request.metadata),
         )
 
     def _build_trajectory(self, request: SessionDispatchRequest) -> Trajectory:
@@ -809,13 +812,18 @@ class GatewayNodeManager:
             status="ERROR",
             trajectory=Trajectory(
                 status="ERROR",
-                metadata={"builder": request.builder.strategy, "record_count": 0},
+                metadata={
+                    "builder": request.builder.strategy,
+                    "record_count": 0,
+                    "task_metadata": dict(request.metadata),
+                },
                 traces=[],
                 error=error,
             ),
             timing=timer.to_session_timing(),
             node_id=self.node_id,
             error=error,
+            metadata=dict(request.metadata),
         )
 
     def _timeout_result(
@@ -830,13 +838,18 @@ class GatewayNodeManager:
             status="TIMEOUT",
             trajectory=Trajectory(
                 status="TIMEOUT",
-                metadata={"builder": request.builder.strategy, "record_count": 0},
+                metadata={
+                    "builder": request.builder.strategy,
+                    "record_count": 0,
+                    "task_metadata": dict(request.metadata),
+                },
                 traces=[],
                 error=error,
             ),
             timing=timer.to_session_timing(),
             node_id=self.node_id,
             error=error,
+            metadata=dict(request.metadata),
         )
 
     def _cancelled_result(self, request: SessionDispatchRequest, timer: StageTimer) -> SessionResult:

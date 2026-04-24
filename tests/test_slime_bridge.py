@@ -151,7 +151,13 @@ def test_render_task_payload_resolves_sample_metadata_placeholders() -> None:
         instruction_template=None,
         reward_key="score",
         max_concurrency=1,
+        max_session_concurrency=1,
+        max_async_level=2,
+        max_off_policy_steps=1,
+        max_task_retries=2,
         request_timeout=None,
+        callback_host="127.0.0.1",
+        scoring_mode="group",
         tokenizer_name_or_path=None,
         add_generation_prompt=True,
         eval_dataset_name="polar_eval",
@@ -185,7 +191,13 @@ def test_render_instruction_falls_back_to_raw_prompt_when_no_template() -> None:
         instruction_template=None,
         reward_key="score",
         max_concurrency=1,
+        max_session_concurrency=1,
+        max_async_level=2,
+        max_off_policy_steps=1,
+        max_task_retries=2,
         request_timeout=None,
+        callback_host="127.0.0.1",
+        scoring_mode="group",
         tokenizer_name_or_path=None,
         add_generation_prompt=True,
         eval_dataset_name="polar_eval",
@@ -232,7 +244,15 @@ def test_session_result_to_samples_drops_empty_token_traces(monkeypatch) -> None
     trajectory = Trajectory(
         status="COMPLETED",
         traces=[
-            Trace(prompt_ids=[1, 2], response_ids=[3, 4], finish_reason="stop"),
+            Trace(
+                prompt_ids=[1, 2],
+                response_ids=[3, 4],
+                response_logprobs=[
+                    {"token": "a", "token_id": 3, "logprob": -0.3},
+                    {"token": "b", "token_id": 4, "logprob": -0.4},
+                ],
+                finish_reason="stop",
+            ),
             Trace(prompt_ids=[], response_ids=[], finish_reason="stop"),
         ],
     )
@@ -305,7 +325,7 @@ def test_session_result_to_samples_masks_canonical_interstitial(monkeypatch) -> 
     assert sample.rollout_log_probs == [-0.5, 0.0, 0.0, 0.0, -0.2]
 
 
-def test_session_result_to_samples_defaults_mask_when_no_logprobs(monkeypatch) -> None:
+def test_session_result_to_samples_requires_logprobs_for_trainable_trace(monkeypatch) -> None:
     from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
     from polar.trajectory.models import Trace, Trajectory
     from slime_bridge import adapter
@@ -321,7 +341,112 @@ def test_session_result_to_samples_defaults_mask_when_no_logprobs(monkeypatch) -
         trajectory=trajectory,
         timing=SessionTiming(),
     )
-    samples = adapter.session_result_to_samples(
-        result, group_index=0, trajectory_index=0
+    with pytest.raises(adapter.RolloutLogprobError):
+        adapter.session_result_to_samples(result, group_index=0, trajectory_index=0)
+
+
+def test_dummy_placeholder_is_fully_masked(monkeypatch) -> None:
+    from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
+    from polar.trajectory.models import Trajectory
+    from slime_bridge import adapter
+
+    monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
+
+    result = SessionResult(
+        session_id="s1",
+        task_id="t1",
+        status=SessionStatus.ERROR,
+        trajectory=Trajectory(status="ERROR", traces=[], error="no trace"),
+        timing=SessionTiming(),
     )
-    assert samples[0].loss_mask == [1, 1, 1]
+    samples = adapter.session_result_to_samples(result, group_index=0, trajectory_index=0)
+    assert len(samples) == 1
+    assert samples[0].loss_mask == [0]
+    assert samples[0].rollout_log_probs == [0.0]
+    assert samples[0].remove_sample is True
+
+
+# ---------------------------------------------------------------------------
+# Async rollout worker buffering / staleness
+# ---------------------------------------------------------------------------
+
+
+def _worker_args(**overrides: Any) -> SimpleNamespace:
+    values = {
+        "polar_rollout_url": "http://rollout",
+        "polar_task_template": {"agent": {"harness": "shell"}},
+        "rollout_batch_size": 1,
+        "n_samples_per_prompt": 1,
+        "update_weights_interval": 1,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+class _NoopDataSource:
+    def get_samples(self, num_samples: int) -> list[list[Any]]:
+        del num_samples
+        return []
+
+
+def test_async_worker_keeps_completed_overflow() -> None:
+    from slime_bridge.rollout import AsyncPolarRolloutWorker, _CompletedGroup
+
+    worker = AsyncPolarRolloutWorker(_worker_args(), _NoopDataSource())
+    worker.output_queue.put(
+        _CompletedGroup(
+            group_id=1,
+            group=[object()],
+            samples=[_FakeSample(metadata={})],
+            task_id="t1",
+            attempt=0,
+            submitted_rollout_id=0,
+            policy_version=0,
+            session_count=1,
+        )
+    )
+    worker.output_queue.put(
+        _CompletedGroup(
+            group_id=2,
+            group=[object()],
+            samples=[_FakeSample(metadata={})],
+            task_id="t2",
+            attempt=0,
+            submitted_rollout_id=0,
+            policy_version=0,
+            session_count=1,
+        )
+    )
+
+    first = worker.drain_completed(max_groups=1, rollout_id=0)
+    second = worker.drain_completed(max_groups=1, rollout_id=0)
+
+    assert [item.group_id for item in first] == [1]
+    assert [item.group_id for item in second] == [2]
+
+
+def test_async_worker_requeues_too_stale_completed_group() -> None:
+    from slime_bridge.rollout import AsyncPolarRolloutWorker, _CompletedGroup
+
+    worker = AsyncPolarRolloutWorker(
+        _worker_args(polar_max_off_policy_steps=0, polar_max_task_retries=1),
+        _NoopDataSource(),
+    )
+    group = [object()]
+    worker.output_queue.put(
+        _CompletedGroup(
+            group_id=1,
+            group=group,
+            samples=["stale"],
+            task_id="t1",
+            attempt=0,
+            submitted_rollout_id=0,
+            policy_version=0,
+            session_count=1,
+        )
+    )
+
+    assert worker.drain_completed(max_groups=1, rollout_id=1) == []
+    retry = worker.retry_queue.get_nowait()
+    assert retry.group is group
+    assert retry.attempt == 1

@@ -68,6 +68,7 @@ class TaskRequest(BaseModel):
     builder: StrategySpec = Field(default_factory=_default_builder_spec)
     evaluator: EvaluatorSpec | None = None
     callback_url: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class SessionDispatchRequest(BaseModel):
@@ -85,6 +86,7 @@ class SessionDispatchRequest(BaseModel):
     builder: StrategySpec = Field(default_factory=_default_builder_spec)
     evaluator: EvaluatorSpec | None = None
     callback_url: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class SessionDispatchResponse(BaseModel):
@@ -121,6 +123,7 @@ class SessionResult(BaseModel):
     timing: SessionTiming = Field(default_factory=SessionTiming)
     node_id: str | None = None
     error: str | None = None
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class TaskResult(BaseModel):

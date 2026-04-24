@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Submit the calculator task for a specific harness through the rollout server."""
+"""Submit one calculator rollout through the local Polar services."""
 
 from __future__ import annotations
 
@@ -17,6 +17,9 @@ TEST_FILE = ASSETS_DIR / "test_calculator.py"
 STARTER_FILE = ASSETS_DIR / "calculator.py"
 DEFAULT_TOPOLOGY = EXAMPLE_DIR / "topology.yaml"
 DEFAULT_IMAGE = "polar-localhost-calculator:latest"
+DEFAULT_BACKEND = "docker"
+DEFAULT_NUM_SAMPLES = 1
+DEFAULT_TIMEOUT_SECONDS = 600.0
 SUPPORTED_HARNESSES = (
     "claude_code",
     "codex",
@@ -55,8 +58,7 @@ These checks must pass exactly:
 - `cal(" 8 + 2 * 5 ") == 18`
 """
 
-# Pinned versions — bump intentionally. `@latest` is avoided so upstream
-# regressions don't silently break a calculator run. Overridable via env.
+# Pinned versions keep the quickstart stable. Bump intentionally.
 NODE_HARNESS_PACKAGES: dict[str, str] = {
     "claude_code": "@anthropic-ai/claude-code@2.1.111",
     "codex": "@openai/codex@0.121.0",
@@ -109,9 +111,7 @@ def evaluator_exclude_patterns_for_harness(harness: str) -> list[str]:
     return [*_COMMON_EVAL_EXCLUDES, *_HARNESS_EVAL_EXCLUDES.get(harness, [])]
 
 
-def model_name_for_harness(harness: str, override: str | None) -> str | None:
-    if override:
-        return override
+def model_name_for_harness(harness: str) -> str | None:
     defaults = {
         "codex": "gpt-5.4",
         "claude_code": "claude-opus-4-5",
@@ -123,56 +123,59 @@ def model_name_for_harness(harness: str, override: str | None) -> str | None:
     return defaults.get(harness)
 
 
-def agent_spec_for_harness(harness: str, override_model: str | None) -> dict[str, Any]:
+def agent_spec_for_harness(harness: str) -> dict[str, Any]:
     spec: dict[str, Any] = {"harness": harness}
-    model_name = model_name_for_harness(harness, override_model)
+    model_name = model_name_for_harness(harness)
     if model_name is not None:
         spec["model_name"] = model_name
     return spec
 
 
+def builder_spec_for_harness(harness: str) -> dict[str, Any]:
+    if harness not in SUPPORTED_HARNESSES:
+        raise ValueError(f"Unsupported harness: {harness}")
+    return {"strategy": "prefix_merging"}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--harness", required=True, choices=SUPPORTED_HARNESSES)
-    parser.add_argument("--image", default=DEFAULT_IMAGE, help="Shared calculator runtime image")
     parser.add_argument(
-        "--model-name",
-        help="Optional model name override for the agent harness",
+        "harness",
+        nargs="?",
+        choices=SUPPORTED_HARNESSES,
+        default="claude_code",
+        help="Harness to run. Defaults to claude_code.",
     )
     parser.add_argument(
-        "--topology",
-        default=str(DEFAULT_TOPOLOGY),
-        help="Path to topology.yaml",
-    )
-    parser.add_argument("--num-samples", type=int, default=1)
-    parser.add_argument("--timeout-seconds", type=float, default=300.0)
-    parser.add_argument(
-        "--runtime-backend",
+        "--backend",
         choices=["docker", "apptainer"],
-        default="docker",
-        help="Container runtime backend for the session",
+        default=DEFAULT_BACKEND,
+        help="Runtime backend. Defaults to docker.",
     )
-    parser.add_argument("--output-dir")
     return parser.parse_args()
 
 
-def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
+def build_task_payload(
+    harness: str,
+    batch_id: str,
+    *,
+    backend: str = DEFAULT_BACKEND,
+) -> dict[str, Any]:
     test_file_abs = str(TEST_FILE.resolve())
     starter_file_abs = str(STARTER_FILE.resolve())
-    batch_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    runtime_image = runtime_image_for_backend(args.image, args.runtime_backend)
+    runtime_image = runtime_image_for_backend(DEFAULT_IMAGE, backend)
     return {
-        "task_id": f"calculator-{args.harness}-{batch_id}",
+        "task_id": f"calculator-{harness}-{batch_id}",
         "instruction": BASE_INSTRUCTION,
-        "num_samples": args.num_samples,
-        "timeout_seconds": args.timeout_seconds,
+        "num_samples": DEFAULT_NUM_SAMPLES,
+        "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         "runtime": {
-            "backend": args.runtime_backend,
+            "backend": backend,
             "image": runtime_image,
             "prepare": [
                 {
                     "type": "exec",
-                    "command": prepare_command_for_harness(args.harness),
+                    "command": prepare_command_for_harness(harness),
                 },
                 {
                     "type": "upload_file",
@@ -186,23 +189,32 @@ def build_task_request(args: argparse.Namespace) -> dict[str, Any]:
                 },
                 {
                     "type": "exec",
-                    "command": "cd /polar/session/workspace && git add -A && git commit -qm 'initial'",
+                    "command": (
+                        "cd /polar/session/workspace && "
+                        "git add -A && git commit -qm 'initial'"
+                    ),
                 },
             ],
             "network": "host",
             "workdir": "/polar/session/workspace",
         },
-        "agent": agent_spec_for_harness(args.harness, args.model_name),
-        "builder": {"strategy": "prefix_merging"},
+        "agent": agent_spec_for_harness(harness),
+        "builder": builder_spec_for_harness(harness),
         "evaluator": {
             "strategy": "test_on_output",
             "config": {
                 "repo_dir": "/polar/session/workspace",
-                "patch_command": "cd /polar/session/workspace && git add -A && git diff --cached --binary",
-                "test_command": "cd /polar/session/workspace && python3 test_calculator.py && echo 'PASSED test_calculator'",
+                "patch_command": (
+                    "cd /polar/session/workspace && "
+                    "git add -A && git diff --cached --binary"
+                ),
+                "test_command": (
+                    "cd /polar/session/workspace && "
+                    "python3 test_calculator.py && echo 'PASSED test_calculator'"
+                ),
                 "test_timeout": 60.0,
                 "expected_output_json": {"test_calculator": "PASSED"},
-                "exclude_patterns": evaluator_exclude_patterns_for_harness(args.harness),
+                "exclude_patterns": evaluator_exclude_patterns_for_harness(harness),
             },
             "refresh_runtime": True,
         },
@@ -266,12 +278,9 @@ def print_reward_summary(harness: str, summary: dict[str, Any]) -> None:
 
 def main() -> int:
     args = parse_args()
-    payload = build_task_request(args)
-
     batch_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    output_dir = Path(args.output_dir) if args.output_dir else (
-        EXAMPLE_DIR / args.harness / "batches" / batch_id
-    )
+    payload = build_task_payload(args.harness, batch_id, backend=args.backend)
+    output_dir = EXAMPLE_DIR / "batches" / batch_id / args.harness
     request_path = output_dir / "request.json"
     response_path = output_dir / "response.json"
     write_json(request_path, payload)
@@ -283,10 +292,10 @@ def main() -> int:
         "polar.cli",
         "submit",
         str(request_path),
+        "-c",
+        str(DEFAULT_TOPOLOGY),
         "--json",
     ]
-    if args.topology:
-        command.extend(["-c", args.topology])
 
     completed = subprocess.run(
         command,

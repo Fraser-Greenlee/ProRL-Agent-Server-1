@@ -97,7 +97,9 @@ SLIME_DIR=/path/to/slime MEGATRON_DIR=/path/to/Megatron-LM bash run.sh
 
 ### Off-policy correction (`--use-tis`)
 
-When `--use-rollout-logprobs` is set, the trainer must also set `--use-tis` so samples that straddle a weight update receive truncated importance sampling correction. Without `--use-tis`, those samples train uncorrected — silently degrading signal. `run.sh` sets this flag; keep it when deriving new configs.
+Polar supplies real behavior-policy `rollout_log_probs` on every trainable response token. `run.sh` enables `--use-tis` so samples that straddle a weight update receive truncated importance sampling correction. Do **not** add `--use-rollout-logprobs` here: Slime treats that as a separate mode and asserts it cannot be combined with `--use-tis`.
+
+The Polar bridge bounds async drift with `polar_max_async_level` and `polar_max_off_policy_steps`. Completed groups that exceed the staleness bound are retried before training; failed or empty groups are retried up to `polar_max_task_retries` and then fail loudly instead of disappearing from the batch.
 
 ### Qwen3.5-4B specifics
 
@@ -112,14 +114,17 @@ A few non-obvious requirements follow from that:
 
 ### Concurrency & worker sizing
 
-Two knobs control session fan-out, and they **must** be kept in sync:
+These knobs control session fan-out and async backlog:
 
 | Knob | File | Meaning |
 |---|---|---|
 | `polar_max_concurrency` | `polar_config.yaml` | Slime-side cap: max groups the trainer dispatches in parallel |
+| `polar_max_session_concurrency` | `polar_config.yaml` | Slime-side cap: max Polar sessions in flight across groups |
+| `polar_max_async_level` | `polar_config.yaml` | Max accepted/active rollout batches ahead of training |
+| `polar_max_off_policy_steps` | `polar_config.yaml` | Max rollout/train policy-version gap accepted for training |
 | `max_{init,run,postrun}_workers` | `topology.yaml` | Node-side cap: max sessions actually running in parallel |
 
-If `polar_max_concurrency` > `max_run_workers`, excess sessions queue at the node and eventually time out (`timeout_seconds`), returning as empty placeholders with reward 0. The `reward_post_process` hook zeros their advantages so training continues as a no-op, but the step is wasted.
+Keep `polar_max_session_concurrency` close to the total gateway run capacity (`max_run_workers × active gateway nodes`) unless you intentionally want node-side queuing. Failed, empty, or too-stale groups are retried by the bridge scheduler before training rather than padded into the optimizer step.
 
 This repo ships with **16 / 16 / 16 / 16** — aligned. A prior 32-wide run saturated the
 docker daemon (32 sessions × 2 containers = 64 concurrent containers, each running

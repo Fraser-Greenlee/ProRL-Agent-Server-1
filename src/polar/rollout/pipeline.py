@@ -166,6 +166,7 @@ class Pipeline:
                 agent=session.request.agent,
                 builder=session.request.builder,
                 evaluator=session.request.evaluator,
+                metadata=dict(session.request.metadata),
             )
             try:
                 response = await self._client.post(
@@ -340,6 +341,7 @@ class Pipeline:
                 metadata={
                     "builder": session.request.builder.strategy,
                     "record_count": 0,
+                    "task_metadata": dict(session.request.metadata),
                 },
                 traces=[],
                 error=error,
@@ -347,4 +349,5 @@ class Pipeline:
             timing=session.timer.to_session_timing(),
             node_id=session.node_id,
             error=error,
+            metadata=dict(session.request.metadata),
         )

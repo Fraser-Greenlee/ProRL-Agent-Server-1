@@ -17,7 +17,9 @@ class PerRequestBuilder(BaseTrajectoryBuilder):
                 metadata={
                     "builder": "per_request",
                     "session_id": session.session_id,
+                    "task_metadata": dict(session.metadata),
                     "record_count": 0,
+                    **_top_level_scheduler_metadata(session.metadata),
                 },
                 traces=[],
                 error="no completions",
@@ -33,10 +35,17 @@ class PerRequestBuilder(BaseTrajectoryBuilder):
                 "model_requested": session.model_requested,
                 "model_used": session.model_used,
                 "record_count": len(session.completions),
+                "task_metadata": dict(session.metadata),
                 "trace_count": len(session.completions),
+                **_top_level_scheduler_metadata(session.metadata),
             },
             traces=[
                 build_trace_from_completion(completion)
                 for completion in session.completions
             ],
         )
+
+
+def _top_level_scheduler_metadata(metadata: dict) -> dict:
+    keys = {"attempt_id", "group_id", "policy_version", "rollout_step"}
+    return {key: metadata[key] for key in keys if key in metadata}

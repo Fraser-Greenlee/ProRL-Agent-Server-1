@@ -1,117 +1,46 @@
 #!/usr/bin/env python3
-"""Submit every supported harness (4 samples each) in one shot and print a combined summary."""
+"""Submit one calculator task to every supported harness."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import httpx
 
-# Reuse everything from the single-harness script
 from submit_calculator_task import (
-    BASE_INSTRUCTION,
+    DEFAULT_BACKEND,
+    DEFAULT_NUM_SAMPLES,
+    DEFAULT_TOPOLOGY,
     EXAMPLE_DIR,
     SUPPORTED_HARNESSES,
-    TEST_FILE,
-    STARTER_FILE,
-    agent_spec_for_harness,
-    builder_spec_for_harness,
-    evaluator_exclude_patterns_for_harness,
-    prepare_command_for_harness,
-    runtime_image_for_backend,
+    build_task_payload,
     summarize_result,
     write_json,
 )
 
-DEFAULT_TOPOLOGY = EXAMPLE_DIR / "topology.yaml"
-DEFAULT_IMAGE = "polar-localhost-calculator:latest"
+POLL_INTERVAL_SECONDS = 10.0
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", default=DEFAULT_IMAGE)
-    parser.add_argument("--model-name", help="Override model for all harnesses")
-    parser.add_argument("--topology", default=str(DEFAULT_TOPOLOGY))
-    parser.add_argument("--num-samples", type=int, default=4)
-    parser.add_argument("--timeout-seconds", type=float, default=300.0)
-    parser.add_argument("--runtime-backend", choices=["docker", "apptainer"], default="docker")
-    parser.add_argument("--rollout-url", help="Override rollout server URL")
     parser.add_argument(
-        "--harness",
-        nargs="+",
-        choices=SUPPORTED_HARNESSES,
-        default=list(SUPPORTED_HARNESSES),
-        help="Subset of harnesses to run (default: all supported)",
+        "--backend",
+        choices=["docker", "apptainer"],
+        default=DEFAULT_BACKEND,
+        help="Runtime backend. Defaults to docker.",
     )
-    parser.add_argument("--poll-interval", type=float, default=5.0)
     return parser.parse_args()
 
 
-def resolve_rollout_url(topology_path: str | None, override: str | None) -> str:
-    if override:
-        return override
-    if topology_path:
-        from polar.config import TopologyConfig
-        topo = TopologyConfig.load(topology_path)
-        return topo.rollout.public_url
-    return "http://127.0.0.1:8080"
+def resolve_rollout_url() -> str:
+    from polar.config import TopologyConfig
 
-
-def build_task_payload(
-    harness: str,
-    batch_id: str,
-    *,
-    image: str,
-    backend: str,
-    num_samples: int,
-    timeout_seconds: float,
-    model_name: str | None,
-) -> dict[str, Any]:
-    runtime_image = runtime_image_for_backend(image, backend)
-    return {
-        "task_id": f"calculator-{harness}-{batch_id}",
-        "instruction": BASE_INSTRUCTION,
-        "num_samples": num_samples,
-        "timeout_seconds": timeout_seconds,
-        "runtime": {
-            "backend": backend,
-            "image": runtime_image,
-            "prepare": [
-                {"type": "exec", "command": prepare_command_for_harness(harness)},
-                {"type": "upload_file", "source": str(TEST_FILE.resolve()),
-                 "target": "/polar/session/workspace/test_calculator.py"},
-                {"type": "upload_file", "source": str(STARTER_FILE.resolve()),
-                 "target": "/polar/session/workspace/calculator.py"},
-                {"type": "exec",
-                 "command": "cd /polar/session/workspace && git add -A && git commit -qm 'initial'"},
-            ],
-            "network": "host",
-            "workdir": "/polar/session/workspace",
-        },
-        "agent": agent_spec_for_harness(harness, model_name),
-        "builder": builder_spec_for_harness(harness),
-        "evaluator": {
-            "strategy": "test_on_output",
-            "config": {
-                "repo_dir": "/polar/session/workspace",
-                "patch_command": "cd /polar/session/workspace && git add -A && git diff --cached --binary",
-                "test_command": (
-                    "cd /polar/session/workspace && python3 test_calculator.py "
-                    "&& echo 'PASSED test_calculator'"
-                ),
-                "test_timeout": 240.0,
-                "expected_output_json": {"test_calculator": "PASSED"},
-                "exclude_patterns": evaluator_exclude_patterns_for_harness(harness),
-            },
-            "refresh_runtime": True,
-        },
-    }
+    topo = TopologyConfig.load(DEFAULT_TOPOLOGY)
+    return topo.rollout.public_url
 
 
 def print_combined_summary(
@@ -146,31 +75,26 @@ def print_combined_summary(
 
 def main() -> int:
     args = parse_args()
-    harnesses: list[str] = args.harness
+    harnesses = list(SUPPORTED_HARNESSES)
     batch_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    rollout_url = resolve_rollout_url(args.topology, args.rollout_url)
+    rollout_url = resolve_rollout_url()
     batch_dir = EXAMPLE_DIR / "batches" / batch_id
 
-    n_total = len(harnesses) * args.num_samples
-    print(f"Submitting {len(harnesses)} harnesses x {args.num_samples} samples = {n_total} sessions")
+    n_total = len(harnesses) * DEFAULT_NUM_SAMPLES
+    print(
+        f"Submitting {len(harnesses)} harnesses x {DEFAULT_NUM_SAMPLES} "
+        f"samples = {n_total} sessions"
+    )
     print(f"Rollout URL: {rollout_url}")
+    print(f"Runtime backend: {args.backend}")
 
     # 1. Build and submit all tasks (async endpoint)
     timeout = httpx.Timeout(None, connect=30.0)
     task_ids: dict[str, str] = {}  # harness -> task_id
-    payloads: dict[str, dict[str, Any]] = {}
 
     with httpx.Client(base_url=rollout_url, timeout=timeout) as client:
         for harness in harnesses:
-            payload = build_task_payload(
-                harness, batch_id,
-                image=args.image,
-                backend=args.runtime_backend,
-                num_samples=args.num_samples,
-                timeout_seconds=args.timeout_seconds,
-                model_name=args.model_name,
-            )
-            payloads[harness] = payload
+            payload = build_task_payload(harness, batch_id, backend=args.backend)
             out_dir = batch_dir / harness
             write_json(out_dir / "request.json", payload)
 
@@ -181,12 +105,12 @@ def main() -> int:
             print(f"  {harness:<16} -> {data['task_id']}")
 
         # 2. Poll until all tasks finish
-        print(f"\nPolling every {args.poll_interval:.0f}s ...")
+        print(f"\nPolling every {POLL_INTERVAL_SECONDS:.0f}s ...")
         t0 = time.monotonic()
         finished: dict[str, dict[str, Any]] = {}
 
         while len(finished) < len(harnesses):
-            time.sleep(args.poll_interval)
+            time.sleep(POLL_INTERVAL_SECONDS)
             sessions_done = sum(s["completed_sessions"] for s in finished.values())
             newly_done: list[str] = []
             for harness, tid in task_ids.items():

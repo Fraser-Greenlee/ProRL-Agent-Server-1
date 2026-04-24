@@ -65,4 +65,5 @@ def build_trace_from_completion(completion: CompletionRecord) -> Trace:
         response_messages=[deepcopy(response_message)] if isinstance(response_message, dict) else [],
         finish_reason=str(finish_reason) if finish_reason is not None else None,
         response_logprobs=_extract_response_logprobs(first_choice),
+        metadata=deepcopy(completion.metadata),
     )

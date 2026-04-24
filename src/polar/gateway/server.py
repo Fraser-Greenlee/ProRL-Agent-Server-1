@@ -305,6 +305,15 @@ def _format_stream_events(api_type: APIType, events: list[dict[str, Any]]) -> st
     return _format_openai_sse(events[0]) if events else ""
 
 
+def _completion_metadata(session_info: Any | None) -> dict[str, Any]:
+    metadata = dict(getattr(session_info, "metadata", None) or {})
+    if session_info is not None:
+        metadata.setdefault("session_id", session_info.session_id)
+        if session_info.task_id is not None:
+            metadata.setdefault("task_id", session_info.task_id)
+    return metadata
+
+
 def format_stream_output(
     api_type: APIType,
     transformer: BaseTransformer,
@@ -531,6 +540,7 @@ async def _handle_non_streaming(
         api_type=api_type.value,
         task_id=session_info.task_id if session_info else None,
         created_at=session_info.created_at.isoformat() if session_info else None,
+        metadata=_completion_metadata(session_info),
     )
     transformed = transformer.transform_response(response, original_request)
     return JSONResponse(transformed)
@@ -565,6 +575,7 @@ async def _handle_streaming(
         api_type=api_type.value,
         task_id=session_info.task_id if session_info else None,
         created_at=session_info.created_at.isoformat() if session_info else None,
+        metadata=_completion_metadata(session_info),
     )
 
     synthetic_chunk = _response_to_stream_chunk(response)

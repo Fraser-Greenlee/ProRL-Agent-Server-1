@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class RolloutLogprobError(ValueError):
+    """Raised when a trainable Polar trace lacks aligned rollout logprobs."""
+
+
 def session_result_to_samples(
     result: "SessionResult",
     group_index: int,
@@ -109,27 +113,40 @@ def _build_sample(
     response_messages = deepcopy(trace.response_messages)
     response_text = messages_to_text(response_messages)
 
-    response_log_probs = _extract_rollout_log_probs(trace)
-    if not response_log_probs:
-        response_log_probs = [0.0] * len(response_ids)
-
     status = _sample_status(Sample, result, trace)
     reward_value = _reward_value(trace)
 
-    loss_mask = _loss_mask_from_logprobs(trace, len(response_ids))
+    trainable = status not in (Sample.Status.ABORTED, Sample.Status.FAILED)
+    loss_mask = _loss_mask_from_logprobs(
+        trace,
+        len(response_ids),
+        require_logprobs=trainable,
+        session_id=result.session_id,
+        trace_index=trace_index,
+    )
     if status in (Sample.Status.ABORTED, Sample.Status.FAILED):
         loss_mask = [0] * len(response_ids)
+    response_log_probs = _extract_rollout_log_probs(
+        trace,
+        response_len=len(response_ids),
+        loss_mask=loss_mask,
+        require_trainable_logprobs=trainable,
+        session_id=result.session_id,
+        trace_index=trace_index,
+    )
 
     prompt_value = prompt_messages if prompt_messages else ""
 
     polar_metadata: dict[str, Any] = {
         "node_id": result.node_id,
+        "result_metadata": deepcopy(getattr(result, "metadata", {}) or {}),
         "result_error": result.error,
         "session_id": result.session_id,
         "session_status": result.status,
         "task_id": result.task_id,
         "timing": result.timing.model_dump(mode="python"),
         "trace_index": trace_index,
+        "trace_metadata": deepcopy(getattr(trace, "metadata", {}) or {}),
         "trajectory_error": result.trajectory.error,
         "trajectory_metadata": deepcopy(result.trajectory.metadata),
         "trajectory_status": result.trajectory.status,
@@ -140,6 +157,7 @@ def _build_sample(
             "response_messages": deepcopy(response_messages),
         },
     }
+    polar_metadata.update(_scheduler_metadata(result, trace))
 
     return Sample(
         group_index=group_index,
@@ -164,15 +182,14 @@ def _build_dummy_sample(
     index: int,
     reward_key: str,
 ) -> Any:
-    """Minimal near-zero-gradient placeholder — keeps per-session sample
-    count at 1 so slime's _get_rollout_data doesn't crash on an empty
-    flattened list. ``loss_mask=[1]`` ensures the global mask sum stays
-    non-zero even if every session in a batch fails; distributed_masked_whiten
-    crashes on sum=0. The single-token <pad→pad> prediction contributes a
-    negligible, benign gradient.
+    """Fully masked placeholder for a session with no usable trace.
+
+    The scheduler retries these before training. If one still reaches Slime
+    through a fallback path, it carries no policy, TIS, or KL contribution.
     """
     polar_metadata: dict[str, Any] = {
         "node_id": result.node_id,
+        "result_metadata": deepcopy(getattr(result, "metadata", {}) or {}),
         "result_error": result.error,
         "session_id": result.session_id,
         "session_status": result.status,
@@ -184,6 +201,7 @@ def _build_dummy_sample(
         "trajectory_status": result.trajectory.status,
         "placeholder": True,
     }
+    polar_metadata.update(_scheduler_metadata(result, None))
     return Sample(
         group_index=group_index,
         index=index,
@@ -192,9 +210,10 @@ def _build_dummy_sample(
         response="",
         response_length=1,
         reward={reward_key: 0.0},
-        loss_mask=[1],
+        loss_mask=[0],
         rollout_log_probs=[0.0],
         status=Sample.Status.ABORTED,
+        remove_sample=True,
         metadata={"polar": polar_metadata},
     )
 
@@ -208,6 +227,22 @@ def _reward_value(trace: "Trace") -> float:
     return float(trace.reward) if trace.reward is not None else 0.0
 
 
+def _scheduler_metadata(result: "SessionResult", trace: "Trace | None") -> dict[str, Any]:
+    keys = {"attempt_id", "group_id", "policy_version", "rollout_step"}
+    merged: dict[str, Any] = {}
+    for source in (
+        getattr(result, "metadata", None),
+        getattr(result.trajectory, "metadata", None),
+        getattr(trace, "metadata", None) if trace is not None else None,
+    ):
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            if key in source:
+                merged[key] = source[key]
+    return merged
+
+
 def _sample_status(Sample: Any, result: "SessionResult", trace: "Trace") -> Any:
     trajectory_status = result.trajectory.status
     if trajectory_status == "TIMEOUT" or result.status == "TIMEOUT":
@@ -219,17 +254,57 @@ def _sample_status(Sample: Any, result: "SessionResult", trace: "Trace") -> Any:
     return Sample.Status.COMPLETED
 
 
-def _extract_rollout_log_probs(trace: "Trace") -> list[float]:
-    if not trace.response_logprobs:
-        return []
-    return [
-        float(item.get("logprob", 0.0))
-        for item in trace.response_logprobs
-        if isinstance(item, dict)
-    ]
+def _extract_rollout_log_probs(
+    trace: "Trace",
+    *,
+    response_len: int,
+    loss_mask: list[int],
+    require_trainable_logprobs: bool,
+    session_id: str,
+    trace_index: int,
+) -> list[float]:
+    logprobs = trace.response_logprobs
+    if not logprobs:
+        if require_trainable_logprobs and any(loss_mask):
+            raise RolloutLogprobError(
+                f"Session {session_id} trace {trace_index}: missing rollout_log_probs "
+                "for trainable response tokens"
+            )
+        return [0.0] * response_len
+
+    if len(logprobs) != response_len:
+        raise RolloutLogprobError(
+            f"Session {session_id} trace {trace_index}: rollout_log_probs length "
+            f"{len(logprobs)} != response length {response_len}"
+        )
+
+    values: list[float] = []
+    for pos, (entry, mask_value) in enumerate(zip(logprobs, loss_mask, strict=True)):
+        if not isinstance(entry, dict):
+            if mask_value:
+                raise RolloutLogprobError(
+                    f"Session {session_id} trace {trace_index}: logprob entry {pos} "
+                    "is not a mapping"
+                )
+            values.append(0.0)
+            continue
+        if mask_value and "logprob" not in entry:
+            raise RolloutLogprobError(
+                f"Session {session_id} trace {trace_index}: trainable token {pos} "
+                "is missing logprob"
+            )
+        values.append(float(entry.get("logprob", 0.0)))
+    return values
 
 
-def _loss_mask_from_logprobs(trace: "Trace", response_len: int) -> list[int]:
+def _loss_mask_from_logprobs(
+    trace: "Trace",
+    response_len: int,
+    *,
+    require_logprobs: bool,
+    session_id: str,
+    trace_index: int,
+) -> list[int]:
     """Build a per-token loss mask from the trace's response_logprobs.
 
     Prefix-merging builders produce a mixed token stream: raw assistant
@@ -243,23 +318,24 @@ def _loss_mask_from_logprobs(trace: "Trace", response_len: int) -> list[int]:
     presence — ``logprob == 0.0`` is *not* a safe discriminator because
     legitimate high-confidence tokens can also hit logprob 0.
 
-    Falls back to all-1 when the trace has no logprobs (e.g. dummy
-    placeholders or builders that do not emit logprobs).
+    Trainable traces must carry one logprob entry per response token.
     """
     logprobs = trace.response_logprobs
     if not logprobs:
+        if require_logprobs:
+            raise RolloutLogprobError(
+                f"Session {session_id} trace {trace_index}: missing response_logprobs"
+            )
         return [1] * response_len
+    if len(logprobs) != response_len:
+        raise RolloutLogprobError(
+            f"Session {session_id} trace {trace_index}: response_logprobs length "
+            f"{len(logprobs)} != response length {response_len}"
+        )
     mask = [
         1 if (isinstance(entry, dict) and "token" in entry) else 0
         for entry in logprobs
     ]
-    # If logprob length disagrees with response length, don't mask tokens we
-    # can't reason about — default them to trainable.  Length mismatch
-    # shouldn't happen in normal flow; this is defensive.
-    if len(mask) < response_len:
-        mask.extend([1] * (response_len - len(mask)))
-    elif len(mask) > response_len:
-        mask = mask[:response_len]
     return mask
 
 

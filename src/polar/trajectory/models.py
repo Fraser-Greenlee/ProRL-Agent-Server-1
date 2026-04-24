@@ -56,6 +56,7 @@ class CompletionRecord(BaseModel):
     request: dict[str, Any] = Field(default_factory=dict)
     original_request: dict[str, Any] = Field(default_factory=dict)
     response: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class CompletionSession(BaseModel):
@@ -70,6 +71,7 @@ class CompletionSession(BaseModel):
     model_requested: str | None = None
     model_used: str | None = None
     api_type: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     completions: list[CompletionRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -94,6 +96,7 @@ class Trace(BaseModel):
     finish_reason: str | None = None
     response_logprobs: list[dict[str, Any]] | None = None
     reward: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class Trajectory(BaseModel):

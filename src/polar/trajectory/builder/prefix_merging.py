@@ -159,7 +159,9 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 metadata={
                     "builder": "prefix_merging",
                     "session_id": session.session_id,
+                    "task_metadata": dict(session.metadata),
                     "record_count": 0,
+                    **_top_level_scheduler_metadata(session.metadata),
                 },
                 traces=[],
                 error="no completions",
@@ -206,8 +208,10 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 "model_requested": session.model_requested,
                 "model_used": session.model_used,
                 "record_count": len(session.completions),
+                "task_metadata": dict(session.metadata),
                 "trace_count": len(chains),
                 "reconstruction_stats": stats,
+                **_top_level_scheduler_metadata(session.metadata),
             },
             traces=final_traces,
         )
@@ -319,6 +323,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
             response_messages=response_messages,
             finish_reason=last_kept_trace.finish_reason,
             response_logprobs=response_logprobs,
+            metadata=self._chain_metadata(chain[:kept]),
         )
 
     # ------------------------------------------------------------------
@@ -402,6 +407,13 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         ]
 
     @staticmethod
+    def _chain_metadata(chain: list[CompletionRecord]) -> dict[str, Any]:
+        completion_metadata = [dict(completion.metadata) for completion in chain]
+        merged = dict(completion_metadata[0]) if completion_metadata else {}
+        merged["completion_metadata"] = completion_metadata
+        return merged
+
+    @staticmethod
     def _pop_compatible_chain(
         *,
         prompt_key: str,
@@ -445,3 +457,8 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 waiting_chains.pop(prompt_key, None)
             return chain_idx
         return None
+
+
+def _top_level_scheduler_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    keys = {"attempt_id", "group_id", "policy_version", "rollout_step"}
+    return {key: metadata[key] for key in keys if key in metadata}

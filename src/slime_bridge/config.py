@@ -22,7 +22,13 @@ class PolarSlimeConfig:
     instruction_template: str | None
     reward_key: str
     max_concurrency: int
+    max_session_concurrency: int
+    max_async_level: int
+    max_off_policy_steps: int
+    max_task_retries: int
     request_timeout: float | None
+    callback_host: str
+    scoring_mode: str
     tokenizer_name_or_path: str | None
     add_generation_prompt: bool
     eval_dataset_name: str
@@ -49,11 +55,50 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
     if max_concurrency <= 0:
         raise ValueError("polar_max_concurrency must be greater than 0")
 
+    default_group_size = int(getattr(args, "n_samples_per_prompt", 1) or 1)
+    max_session_concurrency = int(
+        getattr(
+            args,
+            "polar_max_session_concurrency",
+            max_concurrency * max(1, default_group_size),
+        )
+    )
+    if max_session_concurrency <= 0:
+        raise ValueError("polar_max_session_concurrency must be greater than 0")
+
+    max_async_level = int(getattr(args, "polar_max_async_level", 2))
+    if max_async_level <= 0:
+        raise ValueError("polar_max_async_level must be greater than 0")
+
+    max_off_policy_steps = int(
+        getattr(
+            args,
+            "polar_max_off_policy_steps",
+            max(1, int(getattr(args, "update_weights_interval", 1) or 1)),
+        )
+    )
+    if max_off_policy_steps < 0:
+        raise ValueError("polar_max_off_policy_steps must be non-negative")
+
+    max_task_retries = int(getattr(args, "polar_max_task_retries", 2))
+    if max_task_retries < 0:
+        raise ValueError("polar_max_task_retries must be non-negative")
+
     request_timeout = getattr(args, "polar_request_timeout", None)
     if request_timeout is not None:
         request_timeout = float(request_timeout)
         if request_timeout <= 0:
             raise ValueError("polar_request_timeout must be greater than 0")
+
+    callback_host = str(getattr(args, "polar_callback_host", "127.0.0.1")).strip()
+    if not callback_host:
+        raise ValueError("polar_callback_host must be a non-empty host or IP")
+    if callback_host in {"0.0.0.0", "::"}:
+        raise ValueError("polar_callback_host must be reachable by the rollout server, not a wildcard bind address")
+
+    scoring_mode = str(getattr(args, "polar_scoring_mode", "group")).strip().lower()
+    if scoring_mode not in {"group", "individual"}:
+        raise ValueError("polar_scoring_mode must be 'group' or 'individual'")
 
     return PolarSlimeConfig(
         rollout_server_url=str(rollout_server_url).rstrip("/"),
@@ -68,7 +113,13 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
             or "score"
         ),
         max_concurrency=max_concurrency,
+        max_session_concurrency=max_session_concurrency,
+        max_async_level=max_async_level,
+        max_off_policy_steps=max_off_policy_steps,
+        max_task_retries=max_task_retries,
         request_timeout=request_timeout,
+        callback_host=callback_host,
+        scoring_mode=scoring_mode,
         tokenizer_name_or_path=getattr(args, "hf_checkpoint", None),
         add_generation_prompt=bool(getattr(args, "polar_add_generation_prompt", True)),
         eval_dataset_name=str(getattr(args, "polar_eval_dataset_name", "polar_eval")),
