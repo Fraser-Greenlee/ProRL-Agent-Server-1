@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-# Async GRPO training on the SWE-Gym sample via Polar + Slime (Qwen3.5-4B).
+# Async GRPO training on SWE-Gym via Polar + Slime (Qwen3.5-4B).
 #
 # Qwen3.5-4B is a VLM checkpoint (Qwen3_5ForConditionalGeneration) with
 # hybrid attention (1 full + 3 GatedDeltaNet linear per 4 layers). Text-only
 # RL requires the SGLang VLM input_ids patch (see MEMORY.md).
 #
-# GPU layout (8x B200):
-#   GPU 0-3     – SGLang inference (4 engines × TP=1, managed by Slime/Ray)
-#   GPU 4-7     – Megatron GRPO training (TP=2, DP=2)
+# GPU layout (8x B200, default):
+#   GPU 0-3     – Megatron GRPO training (TP=2, DP=2)
+#   GPU 4-7     – SGLang inference (4 engines × TP=1, managed by Slime/Ray)
 #
 # Port layout:
 #   9000        – SGLang router (slime-managed, load-balances engines)
@@ -25,6 +25,32 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+RUN_DIR="${RUN_DIR:-${PROJECT_ROOT}/tmp/swegym_slime_grpo}"
+mkdir -p "${RUN_DIR}" "${PROJECT_ROOT}/logs"
+
+is_path_like() {
+    case "$1" in
+        /*|./*|../*|~*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+detect_host_ip() {
+    python - <<'PY'
+import socket
+
+try:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.connect(("8.8.8.8", 80))
+    print(sock.getsockname()[0])
+    sock.close()
+except Exception:
+    try:
+        print(socket.gethostbyname(socket.gethostname()))
+    except Exception:
+        print("127.0.0.1")
+PY
+}
 
 # ── External deps ──────────────────────────────────────────────────
 SLIME_DIR="${SLIME_DIR:-${PROJECT_ROOT}/slime}"
@@ -33,6 +59,7 @@ if [ ! -f "${SLIME_DIR}/train_async.py" ]; then
     echo "  git clone git@github.com:THUDM/slime.git ${SLIME_DIR}"
     exit 1
 fi
+bash "${PROJECT_ROOT}/scripts/patch/patch_slime.sh" "${SLIME_DIR}"
 
 MEGATRON_DIR="${MEGATRON_DIR:-${PROJECT_ROOT}/Megatron-LM}"
 if [ ! -d "${MEGATRON_DIR}/megatron" ]; then
@@ -44,11 +71,11 @@ fi
 # ── Model ──────────────────────────────────────────────────────────
 # Qwen3.5-4B: VLM checkpoint; we train text-only.  HF weights are loaded
 # through slime_plugins.mbridge.qwen3_5 (text_config-aware) at convert-time.
-HF_CHECKPOINT="${HF_CHECKPOINT:-/home/nfs/binfengx/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a}"
+HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3.5-4B}"
 REF_LOAD="${REF_LOAD:-${PROJECT_ROOT}/tmp/checkpoints/Qwen3.5-4B_torch_dist}"
 SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/tmp/ckpt/swegym_slime_grpo_qwen35_4b}"
 mkdir -p "$SAVE_DIR"
-if [ ! -e "$HF_CHECKPOINT" ]; then
+if is_path_like "$HF_CHECKPOINT" && [ ! -e "$HF_CHECKPOINT" ]; then
     echo "ERROR: HF checkpoint not found at $HF_CHECKPOINT"
     echo "  hf download Qwen/Qwen3.5-4B"
     exit 1
@@ -94,11 +121,50 @@ else
 fi
 
 # ── Data ───────────────────────────────────────────────────────────
-PROMPT_DATA="${SCRIPT_DIR}/swegym_50_tasks.jsonl"
-if [ ! -f "$PROMPT_DATA" ]; then
-    echo "Preparing training data..."
+PROMPT_DATA="${SCRIPT_DIR}/swegym_train_293.jsonl"
+EVAL_DATA="${SCRIPT_DIR}/swegym_eval_23.jsonl"
+if [ ! -f "$PROMPT_DATA" ] || [ ! -f "$EVAL_DATA" ]; then
+    echo "Preparing train/eval data..."
     python "${SCRIPT_DIR}/prepare_data.py"
 fi
+
+# ── Runtime configs ─────────────────────────────────────────────────
+AGENT_CLI_DIR="${AGENT_CLI_DIR:-${PROJECT_ROOT}/tmp/swegym_agent_cli/opt_node}"
+SGLANG_ROUTER_PORT="${SGLANG_ROUTER_PORT:-9000}"
+SGLANG_ROUTER_HOST="${SGLANG_ROUTER_HOST:-$(detect_host_ip)}"
+SGLANG_ROUTER_BASE_URL="${SGLANG_ROUTER_BASE_URL:-http://${SGLANG_ROUTER_HOST}:${SGLANG_ROUTER_PORT}}"
+TOPOLOGY_TEMPLATE="${TOPOLOGY_TEMPLATE:-${SCRIPT_DIR}/topology.yaml}"
+POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.yaml}"
+TOPOLOGY_PATH="${TOPOLOGY_PATH:-${RUN_DIR}/topology.yaml}"
+CUSTOM_CONFIG_PATH="${CUSTOM_CONFIG_PATH:-${RUN_DIR}/polar_config.yaml}"
+
+python - "$TOPOLOGY_TEMPLATE" "$TOPOLOGY_PATH" "$SGLANG_ROUTER_BASE_URL" \
+       "$POLAR_CONFIG_TEMPLATE" "$CUSTOM_CONFIG_PATH" "$AGENT_CLI_DIR" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+topology_template, topology_out, router_url, polar_template, polar_out, agent_cli_dir = sys.argv[1:]
+
+with open(topology_template, encoding="utf-8") as fh:
+    topology = yaml.safe_load(fh) or {}
+for node in topology.get("gateway", {}).get("nodes", []):
+    node.setdefault("sglang", {})["base_url"] = router_url
+Path(topology_out).parent.mkdir(parents=True, exist_ok=True)
+with open(topology_out, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(topology, fh, sort_keys=False)
+
+with open(polar_template, encoding="utf-8") as fh:
+    polar_config = yaml.safe_load(fh) or {}
+polar_config["polar_agent_cli_dir"] = agent_cli_dir
+Path(polar_out).parent.mkdir(parents=True, exist_ok=True)
+with open(polar_out, "w", encoding="utf-8") as fh:
+    yaml.safe_dump(polar_config, fh, sort_keys=False)
+PY
+
+echo "Using topology: ${TOPOLOGY_PATH}"
+echo "Using Polar config: ${CUSTOM_CONFIG_PATH}"
+echo "Using SGLang router URL for Polar gateway: ${SGLANG_ROUTER_BASE_URL}"
 
 # ── Cleanup on exit ────────────────────────────────────────────────
 PIDS=()
@@ -112,12 +178,12 @@ trap cleanup EXIT
 
 # ── Step 1: Polar services (runs on host, CPU only) ───────────────
 echo "=== Starting Polar rollout server (:8080) ==="
-polar serve_rollout -c "${SCRIPT_DIR}/topology.yaml" &
+polar serve_rollout -c "${TOPOLOGY_PATH}" &
 PIDS+=($!)
 sleep 2
 
 echo "=== Starting Polar gateway (:8100) ==="
-polar serve_gateway -c "${SCRIPT_DIR}/topology.yaml" --node-id localhost-node-01 &
+polar serve_gateway -c "${TOPOLOGY_PATH}" --node-id localhost-node-01 &
 PIDS+=($!)
 sleep 2
 
@@ -129,53 +195,69 @@ ray stop --force 2>/dev/null || true
 sleep 1
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 8 --disable-usage-stats
 
-CUDNN_LIB="${PROJECT_ROOT}/.venv/lib/python3.13/site-packages/nvidia/cudnn/lib"
+CUDNN_LIB="${CUDNN_LIB:-${PROJECT_ROOT}/.venv/lib/python3.13/site-packages/nvidia/cudnn/lib}"
+RUNTIME_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+if [ -d "$CUDNN_LIB" ]; then
+    RUNTIME_LD_LIBRARY_PATH="${CUDNN_LIB}:${RUNTIME_LD_LIBRARY_PATH}"
+fi
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"${MEGATRON_DIR}:${PROJECT_ROOT}/src\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"WANDB_API_KEY\": \"${WANDB_API_KEY:-}\",
     \"WANDB_DIR\": \"${PROJECT_ROOT}/logs\",
-    \"LD_LIBRARY_PATH\": \"${CUDNN_LIB}:${LD_LIBRARY_PATH:-}\",
+    \"LD_LIBRARY_PATH\": \"${RUNTIME_LD_LIBRARY_PATH}\",
     \"PYTORCH_CUDA_ALLOC_CONF\": \"max_split_size_mb:2048,expandable_segments:True\",
     \"NVTE_DEBUG\": \"1\",
     \"NVTE_DEBUG_LEVEL\": \"2\"
   }
 }"
 
-# Rollout sizing: 4 prompts × 8 trajectories = 32 trajectories/rollout.
-# With --dynamic-history each trajectory explodes into one sample per
-# trace, so sample count per rollout is variable (~hundreds).
-# --num-steps-per-rollout targets 1 training step per rollout; slime
-# derives global_batch_size from the realized sample count.
+ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-4}"
+ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-4}"
+ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
+ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-8}"
+N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-8}"
+
+# Rollout sizing: 8 prompts × 8 trajectories = 64 trajectories/rollout.
+# This matches the earlier high-util baseline and keeps request groups smaller
+# so long tails do not collapse usable token throughput.
+# With --dynamic-history each trajectory explodes into one sample per trace,
+# so sample count per rollout is variable.
+# The custom data source rounds epoch length up to 37 rollout batches, so all
+# 293 train prompts are consumed once; the final fixed-size batch wraps 3 prompts.
 echo "=== Launching train_async.py ==="
 ray job submit --address="http://127.0.0.1:8265" \
     --runtime-env-json="${RUNTIME_ENV_JSON}" \
     -- python3 "${SLIME_DIR}/train_async.py" \
     --actor-num-nodes 1 \
-    --actor-num-gpus-per-node 4 \
-    --rollout-num-gpus 4 \
-    --rollout-num-gpus-per-engine 1 \
+    --actor-num-gpus-per-node "$ACTOR_NUM_GPUS_PER_NODE" \
+    --rollout-num-gpus "$ROLLOUT_NUM_GPUS" \
+    --rollout-num-gpus-per-engine "$ROLLOUT_NUM_GPUS_PER_ENGINE" \
     "${MODEL_ARGS[@]}" \
     --hf-checkpoint "$HF_CHECKPOINT" \
     --ref-load "$REF_LOAD" \
     --load "$LOAD_DIR" \
     --save "$SAVE_DIR" \
-    --save-interval 5 \
+    --save-interval "${SAVE_INTERVAL:-20}" \
     --update-weights-interval 1 \
     --rollout-function-path slime_bridge.rollout.generate_rollout_polar_async \
     --custom-rm-path slime_bridge.reward.reward_func \
     --custom-reward-post-process-path slime_bridge.reward_post_process.post_process_rewards \
-    --custom-config-path "${SCRIPT_DIR}/polar_config.yaml" \
+    --custom-config-path "${CUSTOM_CONFIG_PATH}" \
+    --data-source-path slime_bridge.data_source.CeilEpochRolloutDataSourceWithBuffer \
     --prompt-data "$PROMPT_DATA" \
+    --eval-prompt-data swegym_eval "$EVAL_DATA" \
+    --eval-interval "$EVAL_INTERVAL" \
     --input-key prompt \
     --label-key label \
     --metadata-key metadata \
     --rollout-shuffle \
     --reward-key score \
-    --num-epoch 2 \
-    --rollout-batch-size 8 \
-    --n-samples-per-prompt 8 \
+    --num-epoch 1 \
+    --rollout-batch-size "$ROLLOUT_BATCH_SIZE" \
+    --n-samples-per-prompt "$N_SAMPLES_PER_PROMPT" \
+    --n-samples-per-eval-prompt 1 \
     --rollout-max-response-len 16000 \
     --rollout-max-prompt-len 32000 \
     --dynamic-history \
@@ -215,7 +297,8 @@ ray job submit --address="http://127.0.0.1:8265" \
     --no-gradient-accumulation-fusion \
     --sglang-mem-fraction-static 0.8 \
     --sglang-tool-call-parser qwen3_coder \
+    --router-policy "${SGLANG_ROUTER_POLICY:-round_robin}" \
     --use-wandb \
     --wandb-project "${WANDB_PROJECT:-polar-swegym-grpo}" \
     --wandb-group "${WANDB_GROUP:-swegym-qwen35-4b-async-grpo}" \
-    --sglang-router-port 9000
+    --sglang-router-port "$SGLANG_ROUTER_PORT"

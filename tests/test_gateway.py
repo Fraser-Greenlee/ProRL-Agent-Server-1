@@ -14,6 +14,7 @@ from polar.gateway.dispatcher import (
     SessionDispatcher,
     SessionStage,
 )
+from polar.gateway.proxy import SGLangClient
 from polar.gateway.session import SessionRegistry
 from polar.rollout.models import (
     SessionDispatchRequest,
@@ -81,6 +82,66 @@ def test_session_registry_clear_result_payload_releases_heavy_payload() -> None:
     assert info.result is None
     assert info.status == SessionStatus.COMPLETED
     assert info.task_id == "t1"
+
+
+def test_sglang_client_pause_waits_for_inflight_and_blocks_new_requests() -> None:
+    async def _run() -> None:
+        class _Response:
+            is_success = True
+
+            def json(self) -> dict[str, object]:
+                return {"ok": True}
+
+            async def aread(self) -> bytes:
+                return b""
+
+            async def aclose(self) -> None:
+                return
+
+        class _HTTPClient:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.is_closed = False
+                self.started = asyncio.Event()
+                self.release = asyncio.Event()
+
+            async def post(self, *_args, **_kwargs) -> _Response:
+                self.calls += 1
+                self.started.set()
+                await self.release.wait()
+                return _Response()
+
+        fake_http = _HTTPClient()
+        client = SGLangClient("http://sglang.test")
+        client._client = fake_http  # type: ignore[assignment]
+
+        first = asyncio.create_task(client.completion({"messages": []}))
+        await asyncio.wait_for(fake_http.started.wait(), timeout=2.0)
+        assert client.generation_status()["inflight"] == 1
+
+        pause = asyncio.create_task(client.pause_generation(timeout_seconds=2.0))
+        await asyncio.sleep(0.05)
+        assert not pause.done()
+
+        second = asyncio.create_task(client.completion({"messages": []}))
+        await asyncio.sleep(0.05)
+        assert fake_http.calls == 1
+
+        fake_http.release.set()
+        await asyncio.wait_for(pause, timeout=2.0)
+        await asyncio.wait_for(first, timeout=2.0)
+        assert client.generation_status() == {
+            "paused": True,
+            "inflight": 0,
+            "base_url": "http://sglang.test",
+        }
+        assert fake_http.calls == 1
+
+        await client.resume_generation()
+        await asyncio.wait_for(second, timeout=2.0)
+        assert fake_http.calls == 2
+
+    asyncio.run(_run())
 
 
 def test_dispatcher_snapshot_counts_stages() -> None:

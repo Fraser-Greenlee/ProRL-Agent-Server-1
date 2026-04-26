@@ -365,6 +365,35 @@ async def health():
     }
 
 
+@app.get("/admin/sglang/status")
+async def sglang_generation_status():
+    return get_state().sglang.generation_status()
+
+
+@app.post("/admin/sglang/pause")
+async def pause_sglang_generation(timeout_seconds: float = 300.0):
+    state = get_state()
+    try:
+        status = await state.sglang.pause_generation(timeout_seconds=timeout_seconds)
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Timed out waiting for SGLang requests to drain after {timeout_seconds}s",
+        ) from exc
+    logger.info(
+        "Paused SGLang generation proxy for weight update; inflight=%s",
+        status["inflight"],
+    )
+    return status
+
+
+@app.post("/admin/sglang/resume")
+async def resume_sglang_generation():
+    status = await get_state().sglang.resume_generation()
+    logger.info("Resumed SGLang generation proxy")
+    return status
+
+
 @app.post("/sessions", response_model=SessionCreateResponse | SessionDispatchResponse)
 async def create_session(request: Request):
     state = get_state()

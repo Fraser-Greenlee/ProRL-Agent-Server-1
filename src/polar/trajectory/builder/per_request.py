@@ -47,5 +47,5 @@ class PerRequestBuilder(BaseTrajectoryBuilder):
 
 
 def _top_level_scheduler_metadata(metadata: dict) -> dict:
-    keys = {"attempt_id", "group_id", "policy_version", "rollout_step"}
+    keys = {"group_id", "policy_version", "rollout_step"}
     return {key: metadata[key] for key in keys if key in metadata}

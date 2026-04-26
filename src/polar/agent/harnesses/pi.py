@@ -44,11 +44,29 @@ class PiHarness(BaseHarness):
         provider, model_id = self.model_name.split("/", 1)
         api_type = str(self.settings.get("api_type", "openai-completions"))
 
+        compat = {
+            "supportsDeveloperRole": False,
+            "supportsReasoningEffort": False,
+            "supportsStore": False,
+            "maxTokensField": "max_tokens",
+        }
+        compat.update(dict(self.settings.get("compat") or {}))
+
         models_config = {
             "providers": {
                 provider: {
                     "baseUrl": "__POLAR_GATEWAY_BASE_URL__",
-                    "models": [{"id": model_id, "api": api_type}],
+                    "compat": compat,
+                    "models": [
+                        {
+                            "id": model_id,
+                            "api": api_type,
+                            "contextWindow": int(
+                                self.settings.get("context_window", 262144)
+                            ),
+                            "maxTokens": int(self.settings.get("max_tokens", 8192)),
+                        }
+                    ],
                 },
             },
         }

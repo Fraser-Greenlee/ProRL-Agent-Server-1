@@ -5,7 +5,7 @@ The wrapper is intentionally generic so the expensive benchmark can stay close
 to the real launch command:
 
     python scripts/benchmarks/run_with_gpu_metrics.py \
-      --tag before --name swegym_smoke --rollout-gpus 0,1,2,3 --train-gpus 4,5,6,7 \
+      --tag before --name swegym_smoke --train-gpus 0,1,2,3 --rollout-gpus 4,5,6,7 \
       -- bash examples/swegym_slime_grpo/run.sh
 
 It writes raw samples to CSV and a compact JSON summary under

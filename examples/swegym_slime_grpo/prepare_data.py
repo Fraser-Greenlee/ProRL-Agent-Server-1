@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the SWE-Gym 50-task sample as a JSONL dataset for Slime training.
+"""Prepare the full SWE-Gym train/eval JSONL datasets for Slime.
 
 Each row contains:
   - prompt:       chat-formatted list [{"role": "user", "content": problem_statement}]
@@ -7,42 +7,75 @@ Each row contains:
                   processor, as Qwen3.5-4B does — slime asserts list prompts
                   under that path. See `slime/slime/utils/data.py:243`.)
   - label:        always "" (reward comes from Polar evaluator, not label matching)
-  - metadata:     instance dict + polar_image tag (used by polar_config.yaml template)
+  - metadata:     instance dict + runtime image refs (used by polar_config.yaml template)
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sample_tasks import (
+    EXPECTED_SPLIT_SIZES,
+    base_image_for_instance_id,
     derived_runtime_image,
-    fetch_sample_instances,
+    fetch_dataset_instances,
 )
 
-OUTPUT = Path(__file__).resolve().parent / "swegym_50_tasks.jsonl"
+OUTPUTS = {
+    "train": Path(__file__).resolve().parent / "swegym_train_293.jsonl",
+    "validation": Path(__file__).resolve().parent / "swegym_eval_23.jsonl",
+}
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--refresh-dataset-cache",
+        action="store_true",
+        help="Refresh cached HuggingFace dataset rows before writing JSONL files.",
+    )
+    return parser.parse_args()
+
+
+def row_for_instance(instance: dict, split: str) -> dict:
+    instance_id = str(instance["instance_id"])
+    base_image = base_image_for_instance_id(instance_id)
+    return {
+        "prompt": [
+            {"role": "user", "content": str(instance["problem_statement"]).strip()}
+        ],
+        "label": "",
+        "metadata": {
+            "instance_id": instance_id,
+            "instance": instance,
+            "base_image": base_image,
+            # Kept for compatibility with older local configs that used
+            # derived images with the agent CLI baked in.
+            "polar_image": derived_runtime_image(instance_id),
+            "split": split,
+        },
+    }
+
+
+def write_split(split: str, output: Path, *, refresh: bool) -> int:
+    instances = fetch_dataset_instances(split, refresh=refresh)
+    rows = [row_for_instance(instance, split) for instance in instances]
+    output.write_text("\n".join(json.dumps(r, ensure_ascii=True) for r in rows) + "\n")
+
+    expected = EXPECTED_SPLIT_SIZES.get(split)
+    if expected is not None and len(rows) != expected:
+        raise RuntimeError(f"Expected {expected} {split} rows, wrote {len(rows)}")
+    print(f"Wrote {len(rows)} {split} tasks to {output}")
+    return len(rows)
 
 
 def main() -> None:
-    instances = fetch_sample_instances()
-    rows: list[dict] = []
-    for instance in instances:
-        instance_id = str(instance["instance_id"])
-        image_tag = derived_runtime_image(instance_id)
-        rows.append({
-            "prompt": [
-                {"role": "user", "content": instance["problem_statement"].strip()}
-            ],
-            "label": "",
-            "metadata": {
-                "instance_id": instance_id,
-                "instance": instance,
-                "polar_image": image_tag,
-            },
-        })
-    OUTPUT.write_text("\n".join(json.dumps(r, ensure_ascii=True) for r in rows) + "\n")
-    print(f"Wrote {len(rows)} tasks to {OUTPUT}")
+    args = parse_args()
+    for split, output in OUTPUTS.items():
+        write_split(split, output, refresh=args.refresh_dataset_cache)
 
 
 if __name__ == "__main__":

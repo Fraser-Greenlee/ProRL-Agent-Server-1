@@ -177,6 +177,10 @@ class Pipeline:
                 response.raise_for_status()
                 return dispatch_request
             except Exception as exc:
+                if await self._accepted_duplicate_dispatch(
+                    exc, node.gateway_url, session, dispatch_request
+                ):
+                    return dispatch_request
                 self.scheduler.release_reservation(node.node_id)
                 self.scheduler.mark_unhealthy(node.node_id)
                 try:
@@ -188,6 +192,59 @@ class Pipeline:
                 await asyncio.sleep(min(self.dispatch_poll_interval_seconds, remaining_timeout))
                 session.node_id = None
                 session.gateway_url = None
+
+    async def _accepted_duplicate_dispatch(
+        self,
+        exc: Exception,
+        gateway_url: str,
+        session: SessionContext,
+        dispatch_request: SessionDispatchRequest,
+    ) -> bool:
+        """Treat dispatch errors after gateway accept as successful dispatch.
+
+        A gateway can accept a session and still have the rollout server's POST
+        fail before the acknowledgement arrives. A later retry of the same
+        single-use session id usually returns 409. If the gateway reports that
+        the session belongs to this task, the rollout server should continue to
+        wait for its result instead of retrying forever.
+        """
+        if self._client is None:
+            return False
+
+        try:
+            response = await self._client.get(
+                f"{gateway_url}/sessions/{session.session_id}",
+                timeout=5.0,
+            )
+            response.raise_for_status()
+        except Exception:
+            log = logger.debug
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 409:
+                log = logger.warning
+            log(
+                "Failed to confirm duplicate dispatch for session %s",
+                session.session_id,
+                exc_info=True,
+            )
+            return False
+
+        payload = response.json()
+        if payload.get("task_id") != dispatch_request.task_id:
+            logger.warning(
+                "Duplicate session id %s exists on %s for task %s, expected %s",
+                session.session_id,
+                gateway_url,
+                payload.get("task_id"),
+                dispatch_request.task_id,
+            )
+            return False
+
+        logger.info(
+            "Confirmed duplicate dispatch for session %s on %s; continuing to wait for result",
+            session.session_id,
+            gateway_url,
+        )
+        return True
 
     async def _wait_for_result(
         self,
@@ -220,9 +277,11 @@ class Pipeline:
                 pass
             try:
                 result = await self._poll_session_result(session, timeout=30.0)
-            except Exception:
-                logger.exception(
-                    "poll_session_result failed for session %s", session.session_id
+            except Exception as exc:
+                logger.debug(
+                    "poll_session_result failed for session %s: %s",
+                    session.session_id,
+                    exc,
                 )
                 result = None
             if result is not None:

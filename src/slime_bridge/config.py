@@ -25,7 +25,6 @@ class PolarSlimeConfig:
     max_session_concurrency: int
     max_async_level: int
     max_off_policy_steps: int
-    max_task_retries: int
     request_timeout: float | None
     callback_host: str
     scoring_mode: str
@@ -74,15 +73,11 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
         getattr(
             args,
             "polar_max_off_policy_steps",
-            max(1, int(getattr(args, "update_weights_interval", 1) or 1)),
+            max_async_level + int(getattr(args, "update_weights_interval", 1) or 1),
         )
     )
     if max_off_policy_steps < 0:
         raise ValueError("polar_max_off_policy_steps must be non-negative")
-
-    max_task_retries = int(getattr(args, "polar_max_task_retries", 2))
-    if max_task_retries < 0:
-        raise ValueError("polar_max_task_retries must be non-negative")
 
     request_timeout = getattr(args, "polar_request_timeout", None)
     if request_timeout is not None:
@@ -116,7 +111,6 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
         max_session_concurrency=max_session_concurrency,
         max_async_level=max_async_level,
         max_off_policy_steps=max_off_policy_steps,
-        max_task_retries=max_task_retries,
         request_timeout=request_timeout,
         callback_host=callback_host,
         scoring_mode=scoring_mode,

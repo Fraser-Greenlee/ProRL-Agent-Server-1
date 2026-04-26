@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -61,6 +62,9 @@ class SGLangClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
         self._client: httpx.AsyncClient | None = None
+        self._generation_paused = False
+        self._inflight_generations = 0
+        self._generation_condition = asyncio.Condition()
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -100,6 +104,7 @@ class SGLangClient:
 
     async def completion(self, request: dict[str, Any]) -> dict[str, Any]:
         """Non-streaming chat completion. Returns the full JSON response."""
+        await self._acquire_generation_slot()
         client = await self._get_client()
         request_copy = request.copy()
         request_copy.pop("stream", None)
@@ -113,9 +118,45 @@ class SGLangClient:
             )
         except httpx.RequestError as exc:
             raise self._translate_transport_error(exc) from exc
+        finally:
+            await self._release_generation_slot()
 
         await self._raise_for_status(resp)
         return resp.json()
+
+    async def _acquire_generation_slot(self) -> None:
+        async with self._generation_condition:
+            await self._generation_condition.wait_for(lambda: not self._generation_paused)
+            self._inflight_generations += 1
+
+    async def _release_generation_slot(self) -> None:
+        async with self._generation_condition:
+            self._inflight_generations -= 1
+            self._generation_condition.notify_all()
+
+    async def pause_generation(self, *, timeout_seconds: float = 300.0) -> dict[str, Any]:
+        """Block new generation requests and wait for current SGLang calls to drain."""
+        async with self._generation_condition:
+            self._generation_paused = True
+            self._generation_condition.notify_all()
+            await asyncio.wait_for(
+                self._generation_condition.wait_for(lambda: self._inflight_generations == 0),
+                timeout=timeout_seconds,
+            )
+            return self.generation_status()
+
+    async def resume_generation(self) -> dict[str, Any]:
+        async with self._generation_condition:
+            self._generation_paused = False
+            self._generation_condition.notify_all()
+            return self.generation_status()
+
+    def generation_status(self) -> dict[str, Any]:
+        return {
+            "paused": self._generation_paused,
+            "inflight": self._inflight_generations,
+            "base_url": self.base_url,
+        }
 
     async def list_models(self) -> dict[str, Any]:
         """Passthrough GET /v1/models."""

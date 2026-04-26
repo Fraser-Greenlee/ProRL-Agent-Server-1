@@ -11,11 +11,10 @@ gateway:
       host: 127.0.0.1
       port: 8100
       public_url: http://127.0.0.1:8100
-      max_init_workers: 16
-      max_run_workers: 16
-      max_postrun_workers: 16
+      max_init_workers: 32
+      max_run_workers: 32
+      max_postrun_workers: 32
       model_served: Qwen/Qwen3.5-4B
       sglang:
-        # Slime's sglang-router binds to the node's external IP (not 0.0.0.0),
-        # so 127.0.0.1 doesn't reach it. Hardcode the host IP.
-        base_url: http://10.34.1.129:9000
+        # run.sh/launch_e2e.sh render this to the host-reachable router URL.
+        base_url: http://127.0.0.1:9000

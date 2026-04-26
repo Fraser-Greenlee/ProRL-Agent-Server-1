@@ -4,8 +4,9 @@ Every trace in ``Trajectory.traces`` becomes one Slime ``Sample``.  All
 samples produced from the same session share the same ``Sample.index``
 (the trajectory's position within the group) so the reward post-processor
 can treat them as one trajectory.  Builders own trace curation — the
-adapter does not filter; traces that lack training tokens are dropped so
-callers never smuggle placeholder tokens into the training batch.
+adapter does not filter; traces that lack training tokens are dropped and
+represented as fully masked samples so callers can keep the rest of the
+group trainable.
 """
 
 from __future__ import annotations
@@ -45,7 +46,8 @@ def session_result_to_samples(
 
     Traces with empty tokens or exceeding ``max_tokens`` are dropped
     (logged). If *all* traces are dropped we emit a single zero-gradient
-    placeholder so Slime's flattener doesn't crash on an empty list.
+    placeholder so Slime's flattener doesn't crash on an empty list and
+    the rest of the group can still train.
     """
     Sample = _load_sample_type()
     traces = result.trajectory.traces
@@ -184,8 +186,9 @@ def _build_dummy_sample(
 ) -> Any:
     """Fully masked placeholder for a session with no usable trace.
 
-    The scheduler retries these before training. If one still reaches Slime
-    through a fallback path, it carries no policy, TIS, or KL contribution.
+    This carries no policy, TIS, or KL contribution. It lets the scheduler
+    accept a partially usable group while still surfacing empty sessions in
+    Polar metrics.
     """
     polar_metadata: dict[str, Any] = {
         "node_id": result.node_id,
@@ -228,7 +231,7 @@ def _reward_value(trace: "Trace") -> float:
 
 
 def _scheduler_metadata(result: "SessionResult", trace: "Trace | None") -> dict[str, Any]:
-    keys = {"attempt_id", "group_id", "policy_version", "rollout_step"}
+    keys = {"group_id", "policy_version", "rollout_step"}
     merged: dict[str, Any] = {}
     for source in (
         getattr(result, "metadata", None),

@@ -57,14 +57,12 @@ def test_build_trace_preserves_scheduler_metadata() -> None:
         request={"messages": [{"role": "user", "content": "hi"}]},
         response={"choices": [{"message": {"role": "assistant", "content": "hello"}}]},
         metadata={
-            "attempt_id": 2,
             "group_id": 7,
             "policy_version": 3,
             "rollout_step": 4,
         },
     )
     trace = build_trace_from_completion(record)
-    assert trace.metadata["attempt_id"] == 2
     assert trace.metadata["group_id"] == 7
     assert trace.metadata["policy_version"] == 3
     assert trace.metadata["rollout_step"] == 4

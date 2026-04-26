@@ -2,9 +2,9 @@ ARG BASE_IMAGE=python:3.12-slim
 ARG POLAR_SWEGYM_IMAGE_VERSION=4
 
 # ── Stage 1: shared CLI layer ─────────────────────────────────────────
-# Downloaded + npm-installed once on a tiny base; COPYed into all 50
+# Downloaded + npm-installed once on a tiny base; COPYed into all
 # derived per-instance images. BuildKit / classic-cache keeps the stage
-# reusable across builds so we don't repeat node+npm work 50×.
+# reusable across builds so we don't repeat node+npm work for every task.
 FROM debian:12-slim AS cli-layer
 ENV PATH=/opt/node/bin:${PATH}
 RUN apt-get update \
@@ -30,12 +30,6 @@ LABEL io.polar.swegym-image-version=${POLAR_SWEGYM_IMAGE_VERSION}
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH=/opt/miniconda3/envs/testbed/bin:/opt/node/bin:${PATH}
-
-RUN if command -v apt-get >/dev/null 2>&1; then \
-        apt-get update \
-        && apt-get install -y --no-install-recommends ca-certificates \
-        && rm -rf /var/lib/apt/lists/*; \
-    fi
 
 COPY --from=cli-layer /opt/node /opt/node
 

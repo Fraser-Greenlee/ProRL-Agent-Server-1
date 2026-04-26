@@ -85,7 +85,7 @@ class DockerRuntime(BaseRuntime):
                 timeout=self._STOP_TIMEOUT,
             )
 
-    _START_TIMEOUT = 60.0  # seconds for docker create / start
+    _START_TIMEOUT = 600.0  # seconds for docker create / start under high rollout load
     _STOP_TIMEOUT = 30.0  # seconds per cleanup command
 
     async def stop(self) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import copy
 import json
 import logging
 import queue
@@ -26,6 +27,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 
+from polar.config import TopologyConfig
 from polar.rollout.models import TaskResult, TaskStatus
 from slime_bridge._messages import prompt_to_instruction_text
 from slime_bridge.adapter import RolloutLogprobError, session_result_to_samples
@@ -48,17 +50,14 @@ class PolarRolloutSchedulerError(RuntimeError):
 
 
 @dataclass(slots=True)
-class _RetryGroup:
+class _DeferredGroup:
     group: list[Any]
-    attempt: int
-    reason: str
 
 
 @dataclass(slots=True)
 class _PendingGroup:
     group_id: int
     group: list[Any]
-    attempt: int
     submitted_rollout_id: int
     policy_version: int
     session_cost: int
@@ -70,7 +69,6 @@ class _CompletedGroup:
     group: list[Any]
     samples: list[Any]
     task_id: str
-    attempt: int
     submitted_rollout_id: int
     policy_version: int
     session_count: int
@@ -107,6 +105,84 @@ def update_policy_version(args: Any, policy_version: int) -> None:
     with _worker_lock:
         if _global_async_worker is not None:
             _global_async_worker.update_policy_version(policy_version)
+
+
+def prepare_policy_update(args: Any, policy_version: int) -> None:
+    """Optional hook called by Slime before overlapping SGLang weight sync."""
+    logger.info("Preparing Polar bridge for policy_version=%s weight update", policy_version)
+    with _worker_lock:
+        worker = _global_async_worker
+        if worker is not None:
+            worker.pause_admission()
+
+    try:
+        _pause_gateway_generation(args)
+    except Exception:
+        try:
+            _resume_gateway_generation(args)
+        except Exception:
+            logger.warning("Failed to resume Polar gateway after prepare_policy_update error", exc_info=True)
+        with _worker_lock:
+            worker = _global_async_worker
+            if worker is not None:
+                worker.resume_admission()
+        raise
+
+
+def finish_policy_update(args: Any, policy_version: int) -> None:
+    """Optional hook called by Slime after overlapping SGLang weight sync."""
+    try:
+        _resume_gateway_generation(args)
+    finally:
+        with _worker_lock:
+            worker = _global_async_worker
+            if worker is not None:
+                worker.resume_admission()
+    logger.info("Finished Polar bridge policy_version=%s weight update", policy_version)
+
+
+def _resolve_gateway_url(args: Any) -> str | None:
+    gateway_url = getattr(args, "polar_gateway_url", None)
+    if gateway_url:
+        return str(gateway_url).rstrip("/")
+
+    topology_path = getattr(args, "polar_topology_path", None)
+    if topology_path:
+        topology = TopologyConfig.load(topology_path)
+        if topology.gateway.nodes:
+            return topology.gateway.nodes[0].public_url.rstrip("/")
+    return None
+
+
+def _pause_gateway_generation(args: Any) -> None:
+    gateway_url = _resolve_gateway_url(args)
+    if not gateway_url:
+        raise PolarRolloutSchedulerError(
+            "polar_gateway_url or polar_topology_path is required when "
+            "polar_allow_weight_update_overlap is enabled"
+        )
+
+    timeout_seconds = float(getattr(args, "polar_weight_update_pause_timeout", 300.0))
+    request_timeout = max(timeout_seconds + 5.0, 10.0)
+    with httpx.Client(timeout=request_timeout) as client:
+        response = client.post(
+            f"{gateway_url}/admin/sglang/pause",
+            params={"timeout_seconds": timeout_seconds},
+        )
+        response.raise_for_status()
+        logger.info("Paused Polar gateway generation for SGLang weight update: %s", response.json())
+
+
+def _resume_gateway_generation(args: Any) -> None:
+    gateway_url = _resolve_gateway_url(args)
+    if not gateway_url:
+        return
+
+    request_timeout = float(getattr(args, "polar_gateway_control_timeout", 30.0))
+    with httpx.Client(timeout=max(request_timeout, 5.0)) as client:
+        response = client.post(f"{gateway_url}/admin/sglang/resume")
+        response.raise_for_status()
+        logger.info("Resumed Polar gateway generation after SGLang weight update: %s", response.json())
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +222,6 @@ def _attach_scheduler_metadata(
     payload: dict[str, Any],
     *,
     group_id: int,
-    attempt_id: int,
     policy_version: int,
     rollout_step: int,
 ) -> None:
@@ -158,7 +233,6 @@ def _attach_scheduler_metadata(
     payload["metadata"] = {
         **metadata,
         "group_id": group_id,
-        "attempt_id": attempt_id,
         "policy_version": policy_version,
         "rollout_step": rollout_step,
     }
@@ -182,8 +256,16 @@ async def _submit_and_wait_for_task(
 
     while True:
         await asyncio.sleep(poll_interval)
-        status_resp = await client.get(f"{base_url}/rollout/task/{task_id}")
-        status_resp.raise_for_status()
+        try:
+            status_resp = await client.get(f"{base_url}/rollout/task/{task_id}")
+            status_resp.raise_for_status()
+        except (
+            httpx.HTTPStatusError,
+            httpx.TimeoutException,
+            httpx.TransportError,
+        ) as exc:
+            logger.warning("Polling Polar task %s failed; continuing: %s", task_id, exc)
+            continue
         status = TaskStatus.model_validate(status_resp.json())
         if status.status in ("completed", "failed"):
             break
@@ -242,12 +324,21 @@ def _convert_task_result_to_samples(
     return group_samples
 
 
-def _is_placeholder_sample(sample: Any) -> bool:
-    metadata = getattr(sample, "metadata", None)
-    if not isinstance(metadata, dict):
-        return False
-    polar_meta = metadata.get("polar")
-    return isinstance(polar_meta, dict) and bool(polar_meta.get("placeholder"))
+def _trainable_token_count(sample: Any) -> int:
+    if bool(getattr(sample, "remove_sample", False)):
+        return 0
+    loss_mask = getattr(sample, "loss_mask", None)
+    if loss_mask is None:
+        return int(getattr(sample, "response_length", 0) or 0)
+    return sum(1 for value in loss_mask if int(value) != 0)
+
+
+def _has_trainable_tokens(samples: list[Any]) -> bool:
+    return any(_trainable_token_count(sample) > 0 for sample in samples)
+
+
+def _is_zero_trainable_error(exc: BaseException) -> bool:
+    return "zero trainable tokens" in str(exc)
 
 
 def _annotate_accepted_samples(
@@ -256,7 +347,6 @@ def _annotate_accepted_samples(
     accepted_rollout_id: int,
     staleness: int,
     policy_version: int,
-    attempt_id: int,
     scheduler_group_id: int,
 ) -> None:
     for sample in samples:
@@ -271,7 +361,6 @@ def _annotate_accepted_samples(
         polar_meta.update(
             {
                 "accepted_rollout_id": int(accepted_rollout_id),
-                "attempt_id": int(attempt_id),
                 "policy_staleness": int(staleness),
                 "policy_version": int(policy_version),
                 "scheduler_group_id": int(scheduler_group_id),
@@ -311,7 +400,7 @@ class AsyncPolarRolloutWorker:
         # `_completed_buffer`, which is drained in bounded chunks by training.
         queue_maxsize = max(32, batch_size * self.config.max_async_level * 2)
         self.output_queue: queue.Queue[_CompletedGroup] = queue.Queue(maxsize=queue_maxsize)
-        self.retry_queue: queue.Queue[_RetryGroup] = queue.Queue()
+        self.deferred_queue: queue.Queue[_DeferredGroup] = queue.Queue()
         self._completed_buffer: deque[_CompletedGroup] = deque()
         self._running = True
         self._thread: threading.Thread | None = None
@@ -325,6 +414,7 @@ class AsyncPolarRolloutWorker:
         self._active_groups = 0
         self._active_sessions = 0
         self._completed_buffer_size = 0
+        self._admission_paused = False
         # Per-task callback plumbing: event fires when the rollout server POSTs
         # the terminal TaskResult to our local listener.
         self._task_events: dict[str, asyncio.Event] = {}
@@ -354,6 +444,17 @@ class AsyncPolarRolloutWorker:
     def update_policy_version(self, policy_version: int) -> None:
         with self._state_lock:
             self._policy_version = max(self._policy_version, int(policy_version))
+
+    def pause_admission(self) -> None:
+        with self._state_lock:
+            self._admission_paused = True
+            self._metrics["polar/scheduler/admission_pauses"] = (
+                self._metrics.get("polar/scheduler/admission_pauses", 0.0) + 1.0
+            )
+
+    def resume_admission(self) -> None:
+        with self._state_lock:
+            self._admission_paused = False
 
     def raise_if_failed(self) -> None:
         if self._fatal_error is not None:
@@ -385,20 +486,14 @@ class AsyncPolarRolloutWorker:
                     f"staleness {staleness} exceeded max_off_policy_steps="
                     f"{self.config.max_off_policy_steps}"
                 )
-                if completed.attempt >= self.config.max_task_retries:
-                    self._set_fatal(
-                        PolarRolloutSchedulerError(
-                            f"Task {completed.task_id} exceeded staleness bound "
-                            f"after {completed.attempt + 1} attempts: {reason}"
-                        )
-                    )
-                    self.raise_if_failed()
-                self.retry_queue.put(
-                    _RetryGroup(
-                        group=completed.group,
-                        attempt=completed.attempt + 1,
-                        reason=reason,
-                    )
+                self._inc_metric("polar/dropped_groups")
+                self._inc_metric("polar/dropped_stale_groups")
+                self._inc_metric("polar/dropped_sessions", completed.session_count)
+                logger.warning(
+                    "Dropping stale Polar group %s task=%s: %s",
+                    completed.group_id,
+                    completed.task_id,
+                    reason,
                 )
                 continue
 
@@ -407,7 +502,6 @@ class AsyncPolarRolloutWorker:
                 accepted_rollout_id=rollout_id,
                 staleness=staleness,
                 policy_version=completed.policy_version,
-                attempt_id=completed.attempt,
                 scheduler_group_id=completed.group_id,
             )
             accepted.append(completed)
@@ -421,7 +515,7 @@ class AsyncPolarRolloutWorker:
             return (
                 self.output_queue.qsize()
                 + self._completed_buffer_size
-                + self.retry_queue.qsize()
+                + self.deferred_queue.qsize()
             )
 
     def snapshot_metrics(self) -> dict[str, float]:
@@ -431,8 +525,9 @@ class AsyncPolarRolloutWorker:
             out["polar/scheduler/active_sessions"] = float(self._active_sessions)
             out["polar/scheduler/completed_buffer"] = float(self._completed_buffer_size)
             out["polar/scheduler/output_queue"] = float(self.output_queue.qsize())
-            out["polar/scheduler/retry_queue"] = float(self.retry_queue.qsize())
+            out["polar/scheduler/deferred_queue"] = float(self.deferred_queue.qsize())
             out["polar/scheduler/policy_version"] = float(self._policy_version)
+            out["polar/scheduler/admission_paused"] = float(self._admission_paused)
             return out
 
     # -- internal --------------------------------------------------------------
@@ -484,7 +579,7 @@ class AsyncPolarRolloutWorker:
                             self._running = False
                             break
                         if active_session_cost + session_cost > self.config.max_session_concurrency:
-                            self.retry_queue.put(next_group)
+                            self.deferred_queue.put(next_group)
                             break
 
                         gid = self._group_counter
@@ -493,7 +588,6 @@ class AsyncPolarRolloutWorker:
                         pending = _PendingGroup(
                             group_id=gid,
                             group=next_group.group,
-                            attempt=next_group.attempt,
                             submitted_rollout_id=submitted_rollout_id,
                             policy_version=policy_version,
                             session_cost=session_cost,
@@ -562,45 +656,39 @@ class AsyncPolarRolloutWorker:
     async def _submit_and_collect(
         self, client: httpx.AsyncClient, pending: _PendingGroup
     ) -> None:
-        attempt = pending.attempt
-        max_attempt = self.config.max_task_retries
         last_error: BaseException | None = None
 
-        while attempt <= max_attempt and self._running:
-            submitted_rollout_id, policy_version = self._rollout_context()
-            attempted = pending if attempt == pending.attempt else _PendingGroup(
-                group_id=pending.group_id,
-                group=pending.group,
-                attempt=attempt,
-                submitted_rollout_id=submitted_rollout_id,
-                policy_version=policy_version,
-                session_cost=pending.session_cost,
-            )
+        if self._running:
             try:
-                completed = await self._submit_attempt(client, attempted)
+                completed = await self._submit_attempt(client, pending)
                 await self._emit_completed(completed)
                 return
-            except RolloutLogprobError:
-                raise
             except Exception as exc:
                 last_error = exc
-                if attempt >= max_attempt:
-                    break
-                attempt += 1
-                self._inc_metric("polar/retry_groups")
-                logger.warning(
-                    "Retrying Polar group %s attempt=%d/%d after error: %s",
-                    pending.group_id,
-                    attempt + 1,
-                    max_attempt + 1,
-                    exc,
-                )
-                await asyncio.sleep(min(5.0, 0.25 * (2 ** (attempt - pending.attempt))))
 
-        raise PolarRolloutSchedulerError(
-            f"Polar group {pending.group_id} failed after "
-            f"{max_attempt + 1} attempts: {last_error}"
+        if last_error is None:
+            return
+
+        if _is_zero_trainable_error(last_error):
+            category_metric = "polar/dropped_zero_trainable_groups"
+            reason = "zero trainable tokens"
+        elif isinstance(last_error, RolloutLogprobError):
+            category_metric = "polar/dropped_logprob_error_groups"
+            reason = "rollout logprob error"
+        else:
+            category_metric = "polar/dropped_failed_groups"
+            reason = "task failure"
+
+        self._inc_metric("polar/dropped_groups")
+        self._inc_metric(category_metric)
+        self._inc_metric("polar/dropped_sessions", pending.session_cost)
+        logger.warning(
+            "Dropping Polar group %s because of %s: %s",
+            pending.group_id,
+            reason,
+            last_error,
         )
+        return
 
     async def _submit_attempt(
         self,
@@ -611,19 +699,19 @@ class AsyncPolarRolloutWorker:
             args=self.args, config=self.config, group=pending.group,
             rollout_id=pending.group_id, task_position=0,
         )
+        payload["task_id"] = str(payload["task_id"])
         _attach_scheduler_metadata(
             payload,
             group_id=pending.group_id,
-            attempt_id=pending.attempt,
             policy_version=pending.policy_version,
             rollout_step=pending.submitted_rollout_id,
         )
         task_result = await self._submit_with_callback(client, payload)
 
-        retry_reason = self._task_retry_reason(task_result, pending.group)
-        if retry_reason is not None:
+        rejection_reason = self._task_rejection_reason(task_result, pending.group)
+        if rejection_reason is not None:
             raise PolarRolloutSchedulerError(
-                f"Task {task_result.task_id} cannot be accepted: {retry_reason}"
+                f"Task {task_result.task_id} cannot be accepted: {rejection_reason}"
             )
 
         group_samples = _convert_task_result_to_samples(
@@ -632,9 +720,9 @@ class AsyncPolarRolloutWorker:
         )
         if not group_samples:
             raise PolarRolloutSchedulerError(f"Task {task_result.task_id} converted to zero samples")
-        if any(_is_placeholder_sample(sample) for sample in group_samples):
+        if not _has_trainable_tokens(group_samples):
             raise PolarRolloutSchedulerError(
-                f"Task {task_result.task_id} produced placeholder samples"
+                f"Task {task_result.task_id} produced zero trainable tokens"
             )
 
         return _CompletedGroup(
@@ -642,7 +730,6 @@ class AsyncPolarRolloutWorker:
             group=pending.group,
             samples=group_samples,
             task_id=task_result.task_id,
-            attempt=pending.attempt,
             submitted_rollout_id=pending.submitted_rollout_id,
             policy_version=pending.policy_version,
             session_count=len(task_result.results),
@@ -658,11 +745,11 @@ class AsyncPolarRolloutWorker:
                 self._inc_metric("polar/output_queue_full_waits")
                 await asyncio.sleep(0.1)
 
-    def _next_group_for_submission(self) -> _RetryGroup | None:
+    def _next_group_for_submission(self) -> _DeferredGroup | None:
         try:
-            retry = self.retry_queue.get_nowait()
-            self._inc_metric("polar/retry_queue_dequeues")
-            return retry
+            deferred = self.deferred_queue.get_nowait()
+            self._inc_metric("polar/deferred_queue_dequeues")
+            return deferred
         except queue.Empty:
             pass
 
@@ -672,13 +759,16 @@ class AsyncPolarRolloutWorker:
         group = groups[0]
         if not group:
             raise PolarRolloutSchedulerError("Slime data source returned an empty sample group")
-        return _RetryGroup(group=group, attempt=0, reason="new")
+        return _DeferredGroup(group=group)
 
     def _can_admit_group(
         self,
         active: dict[asyncio.Task[None], _PendingGroup],
         active_session_cost: int,
     ) -> bool:
+        with self._state_lock:
+            if self._admission_paused:
+                return False
         if len(active) >= self.config.max_concurrency:
             return False
         if active_session_cost >= self.config.max_session_concurrency:
@@ -690,21 +780,13 @@ class AsyncPolarRolloutWorker:
         )
         return owned_groups < (self._batch_size * self.config.max_async_level)
 
-    def _task_retry_reason(self, task_result: TaskResult, group: list[Any]) -> str | None:
+    def _task_rejection_reason(self, task_result: TaskResult, group: list[Any]) -> str | None:
         if task_result.status != "completed":
             return f"task status={task_result.status}"
         if not task_result.results:
             return "empty task results"
         if len(task_result.results) != len(group):
             return f"session count {len(task_result.results)} != expected {len(group)}"
-        for result in task_result.results:
-            session_status = getattr(result.status, "value", result.status)
-            trajectory_status = result.trajectory.status
-            if session_status != "COMPLETED" or trajectory_status != "COMPLETED":
-                return (
-                    f"session {result.session_id} status={session_status} "
-                    f"trajectory_status={trajectory_status}"
-                )
         return None
 
     def _rollout_context(self) -> tuple[int, int]:
@@ -798,7 +880,71 @@ async def _run_eval_rollout(
     data_source: Any,
 ) -> Any:
     config = resolve_polar_slime_config(args)
+    eval_datasets = list(getattr(args, "eval_datasets", []) or [])
+    if eval_datasets:
+        data: dict[str, dict[str, Any]] = {}
+        metrics: dict[str, Any] = {}
+        for dataset_cfg in eval_datasets:
+            dataset_name, dataset_data, dataset_metrics = await _run_eval_dataset(
+                args=args,
+                config=config,
+                rollout_id=rollout_id,
+                dataset_cfg=dataset_cfg,
+            )
+            data[dataset_name] = dataset_data
+            metrics.update(_prefix_eval_metrics(dataset_name, dataset_metrics))
+
+        RolloutFnEvalOutput = _load_rollout_eval_output_type()
+        return RolloutFnEvalOutput(data=data, metrics=metrics)
+
+    logger.warning(
+        "Polar eval called without args.eval_datasets; falling back to the training data source. "
+        "Pass --eval-prompt-data to evaluate validation prompts."
+    )
     sample_groups = _pull_sample_groups(data_source, args.rollout_batch_size)
+    dataset_data, metrics = await _submit_eval_groups(
+        args=args,
+        config=config,
+        dataset_name=config.eval_dataset_name,
+        rollout_id=rollout_id,
+        sample_groups=sample_groups,
+    )
+    RolloutFnEvalOutput = _load_rollout_eval_output_type()
+    return RolloutFnEvalOutput(
+        data={config.eval_dataset_name: dataset_data},
+        metrics=metrics,
+    )
+
+
+async def _run_eval_dataset(
+    *,
+    args: Any,
+    config: PolarSlimeConfig,
+    rollout_id: int,
+    dataset_cfg: Any,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    dataset_name = str(getattr(dataset_cfg, "name", "") or config.eval_dataset_name)
+    sample_groups = _load_eval_sample_groups(args, dataset_cfg)
+    dataset_data, metrics = await _submit_eval_groups(
+        args=args,
+        config=config,
+        dataset_name=dataset_name,
+        rollout_id=rollout_id,
+        sample_groups=sample_groups,
+    )
+    return dataset_name, dataset_data, metrics
+
+
+async def _submit_eval_groups(
+    *,
+    args: Any,
+    config: PolarSlimeConfig,
+    dataset_name: str,
+    rollout_id: int,
+    sample_groups: list[list[Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not sample_groups:
+        raise ValueError("Polar eval dataset produced no sample groups")
 
     timeout = None if config.request_timeout is None else httpx.Timeout(config.request_timeout)
     semaphore = asyncio.Semaphore(config.max_concurrency)
@@ -809,10 +955,15 @@ async def _run_eval_rollout(
                 args=args, config=config, group=group,
                 rollout_id=rollout_id, task_position=position,
             )
+            payload["task_id"] = _eval_task_id(
+                payload["task_id"],
+                dataset_name=dataset_name,
+                rollout_id=rollout_id,
+                position=position,
+            )
             _attach_scheduler_metadata(
                 payload,
-                group_id=rollout_id,
-                attempt_id=0,
+                group_id=position,
                 policy_version=rollout_id,
                 rollout_step=rollout_id,
             )
@@ -833,20 +984,133 @@ async def _run_eval_rollout(
             )
         )
 
-    metrics = _build_metrics(config, task_results, output_groups)
-    flat_samples = [sample for group in output_groups for sample in group]
-
-    RolloutFnEvalOutput = _load_rollout_eval_output_type()
-    return RolloutFnEvalOutput(
-        data={
-            config.eval_dataset_name: {
-                "rewards": [_extract_sample_reward(s, config.reward_key) for s in flat_samples],
-                "truncated": [_is_truncated(s) for s in flat_samples],
-                "samples": flat_samples,
-            }
-        },
-        metrics=metrics,
+    metrics = _build_metrics(
+        config,
+        task_results,
+        output_groups,
+        reward_filter="completed",
     )
+    flat_samples = [sample for group in output_groups for sample in group]
+    reward_samples = _completed_session_samples(flat_samples)
+
+    return {
+        "rewards": [_extract_sample_reward(s, config.reward_key) for s in reward_samples],
+        "all_rewards": [_extract_sample_reward(s, config.reward_key) for s in flat_samples],
+        "truncated": [_is_truncated(s) for s in reward_samples],
+        "all_truncated": [_is_truncated(s) for s in flat_samples],
+        "samples": flat_samples,
+    }, metrics
+
+
+def _eval_task_id(base_task_id: Any, *, dataset_name: str, rollout_id: int, position: int) -> str:
+    """Namespace eval task ids away from train task ids.
+
+    Training ids commonly use ``{rollout_id}-{sample.group_index}``; eval uses
+    ``position`` as group index, so eval 11 / item 11 would collide with train
+    group 11. A suffix keeps task polling and persisted result dirs separate.
+    """
+    safe_dataset = "".join(
+        ch if ch.isalnum() or ch in "._-" else "_" for ch in dataset_name
+    )
+    return f"{base_task_id}-eval-{safe_dataset}-{rollout_id}-{position}"
+
+
+def _completed_session_samples(samples: list[Any]) -> list[Any]:
+    return [
+        sample for sample in samples
+        if _sample_session_status(sample) == "COMPLETED"
+        and not bool(
+            (getattr(sample, "metadata", {}) or {})
+            .get("polar", {})
+            .get("placeholder")
+        )
+    ]
+
+
+def _sample_session_status(sample: Any) -> str | None:
+    polar_meta = (getattr(sample, "metadata", {}) or {}).get("polar", {})
+    status = polar_meta.get("session_status")
+    return getattr(status, "value", status)
+
+
+def _load_eval_sample_groups(args: Any, dataset_cfg: Any) -> list[list[Any]]:
+    Sample = _load_sample_type()
+    path = str(getattr(dataset_cfg, "path"))
+    input_key = getattr(dataset_cfg, "input_key", None) or getattr(args, "input_key", "prompt")
+    label_key = getattr(dataset_cfg, "label_key", None) or getattr(args, "label_key", None)
+    metadata_key = getattr(dataset_cfg, "metadata_key", None) or getattr(args, "metadata_key", "metadata")
+    tool_key = getattr(dataset_cfg, "tool_key", None) or getattr(args, "tool_key", None)
+    group_size = int(
+        getattr(dataset_cfg, "n_samples_per_eval_prompt", None)
+        or getattr(args, "n_samples_per_eval_prompt", None)
+        or 1
+    )
+    if group_size <= 0:
+        raise ValueError("n_samples_per_eval_prompt must be positive")
+
+    groups: list[list[Any]] = []
+    sample_index = 0
+    for prompt_index, row in enumerate(_read_jsonl_rows(path)):
+        if input_key not in row:
+            raise KeyError(f"Eval row {prompt_index} in {path} missing input key {input_key!r}")
+
+        metadata = _inject_eval_metadata(dataset_cfg, row.get(metadata_key))
+        if tool_key and tool_key in row:
+            tools = row[tool_key]
+            if isinstance(tools, str):
+                tools = json.loads(tools)
+            metadata["tools"] = tools
+
+        group: list[Any] = []
+        for _ in range(group_size):
+            sample = Sample(
+                prompt=copy.deepcopy(row[input_key]),
+                label=row.get(label_key) if label_key else None,
+                metadata=copy.deepcopy(metadata),
+                group_index=prompt_index,
+                index=sample_index,
+            )
+            sample.generate_function_path = getattr(dataset_cfg, "custom_generate_function_path", None)
+            group.append(sample)
+            sample_index += 1
+        groups.append(group)
+
+    return groups
+
+
+def _read_jsonl_rows(path: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with open(path, encoding="utf-8") as f:
+        for line_number, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(f"Eval row {line_number} in {path} is not a JSON object")
+            rows.append(row)
+    return rows
+
+
+def _inject_eval_metadata(dataset_cfg: Any, sample_metadata: Any) -> dict[str, Any]:
+    inject = getattr(dataset_cfg, "inject_metadata", None)
+    if callable(inject):
+        metadata = inject(sample_metadata)
+    elif isinstance(sample_metadata, dict):
+        metadata = dict(sample_metadata)
+    else:
+        metadata = {}
+    return metadata
+
+
+def _prefix_eval_metrics(dataset_name: str, metrics: dict[str, Any]) -> dict[str, Any]:
+    prefixed: dict[str, Any] = {}
+    for key, value in metrics.items():
+        if key.startswith("polar/"):
+            prefixed[f"polar/eval/{dataset_name}/{key.removeprefix('polar/')}"] = value
+        else:
+            prefixed[f"polar/eval/{dataset_name}/{key}"] = value
+    return prefixed
 
 
 def _pull_sample_groups(data_source: Any, batch_size: int) -> list[list[Any]]:
@@ -869,13 +1133,25 @@ def _build_metrics(
     config: PolarSlimeConfig,
     task_results: list[TaskResult],
     output_groups: list[list[Any]],
+    *,
+    reward_filter: str = "all",
 ) -> dict[str, Any]:
     flat_samples = [sample for group in output_groups for sample in group]
     session_results = [result for task_result in task_results for result in task_result.results]
     completed_sessions = sum(1 for r in session_results if r.status == "COMPLETED")
     failed_sessions = sum(1 for r in session_results if r.status == "ERROR")
     timed_out_sessions = sum(1 for r in session_results if r.status == "TIMEOUT")
-    rewards = [_extract_sample_reward(s, config.reward_key) for s in flat_samples]
+    all_rewards = [_extract_sample_reward(s, config.reward_key) for s in flat_samples]
+    completed_rewards = [
+        _extract_sample_reward(s, config.reward_key)
+        for s in _completed_session_samples(flat_samples)
+    ]
+    if reward_filter == "all":
+        rewards = all_rewards
+    elif reward_filter == "completed":
+        rewards = completed_rewards
+    else:
+        raise ValueError("reward_filter must be 'all' or 'completed'")
     metrics: dict[str, Any] = {
         "polar/completed_sessions": completed_sessions,
         "polar/failed_sessions": failed_sessions,
@@ -884,6 +1160,13 @@ def _build_metrics(
         "polar/task_count": len(task_results),
         "polar/timed_out_sessions": timed_out_sessions,
     }
+    if all_rewards:
+        metrics["polar/reward_all_mean"] = sum(all_rewards) / len(all_rewards)
+    if completed_rewards:
+        metrics["polar/reward_completed_mean"] = (
+            sum(completed_rewards) / len(completed_rewards)
+        )
+    metrics["polar/reward_count"] = len(rewards)
     if rewards:
         metrics["polar/reward_mean"] = sum(rewards) / len(rewards)
     metrics.update(_polar_extra_metrics(flat_samples, rewards))
@@ -910,7 +1193,6 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
 
     data: list[list[Any]] = []
     staleness_values: list[int] = []
-    attempt_values: list[int] = []
     start = time.monotonic()
     last_progress = start
 
@@ -925,7 +1207,6 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
             staleness_values.append(
                 max(0, int(rollout_id) - completed.policy_version)
             )
-            attempt_values.append(completed.attempt)
             made_progress = True
 
         now = time.monotonic()
@@ -956,9 +1237,6 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
     if staleness_values:
         metrics["polar/staleness/mean"] = sum(staleness_values) / len(staleness_values)
         metrics["polar/staleness/max"] = max(staleness_values)
-    if attempt_values:
-        metrics["polar/retry_attempt/mean"] = sum(attempt_values) / len(attempt_values)
-        metrics["polar/retry_attempt/max"] = max(attempt_values)
     if rewards:
         metrics["polar/reward_mean"] = sum(rewards) / len(rewards)
     metrics.update(async_worker.snapshot_metrics())
@@ -1180,6 +1458,16 @@ def _load_rollout_eval_output_type() -> Any:
             "Slime is required to run Polar evaluation rollouts from a Slime trainer."
         ) from exc
     return RolloutFnEvalOutput
+
+
+def _load_sample_type() -> Any:
+    try:
+        from slime.utils.types import Sample
+    except ImportError as exc:
+        raise ImportError(
+            "Slime is required to build Polar evaluation samples from eval datasets."
+        ) from exc
+    return Sample
 
 
 atexit.register(stop_global_worker)
