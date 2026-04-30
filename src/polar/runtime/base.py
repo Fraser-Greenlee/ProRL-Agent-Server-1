@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Final
@@ -153,39 +154,49 @@ class BaseRuntime(ABC):
     ) -> tuple[int, str | None, str | None]:
         """Run a local subprocess, optionally capturing stdout/stderr."""
         process_env = None if env is None else {**os.environ, **env}
-        if capture:
-            stdout_target = asyncio.subprocess.PIPE
-            stderr_target = asyncio.subprocess.PIPE
-        else:
-            stdout_target = asyncio.subprocess.DEVNULL
-            stderr_target = asyncio.subprocess.DEVNULL
-
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            env=process_env,
-            stdout=stdout_target,
-            stderr=stderr_target,
-        )
-        self._active_process = process
+        stdout_file = tempfile.TemporaryFile() if capture else None
+        stderr_file = tempfile.TemporaryFile() if capture else None
         try:
-            if timeout is None:
-                stdout_bytes, stderr_bytes = await process.communicate()
-            else:
-                try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                        process.communicate(), timeout=timeout
-                    )
-                except asyncio.TimeoutError:
-                    process.kill()
+            process = await asyncio.create_subprocess_exec(
+                *args,
+                env=process_env,
+                stdout=stdout_file or asyncio.subprocess.DEVNULL,
+                stderr=stderr_file or asyncio.subprocess.DEVNULL,
+            )
+            self._active_process = process
+            try:
+                if timeout is None:
+                    await process.wait()
+                else:
                     try:
-                        await process.wait()
-                    except ProcessLookupError:
-                        pass
-                    return -1, None, None
-        finally:
-            self._active_process = None
+                        await asyncio.wait_for(process.wait(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        process.kill()
+                        try:
+                            await process.wait()
+                        except ProcessLookupError:
+                            pass
+                        return (
+                            -1,
+                            self._read_capture(stdout_file),
+                            self._read_capture(stderr_file),
+                        )
+            finally:
+                self._active_process = None
 
-        rc = process.returncode or 0
-        stdout_str = stdout_bytes.decode(errors="replace") if stdout_bytes else None
-        stderr_str = stderr_bytes.decode(errors="replace") if stderr_bytes else None
-        return rc, stdout_str, stderr_str
+            rc = process.returncode or 0
+            return rc, self._read_capture(stdout_file), self._read_capture(stderr_file)
+        finally:
+            if stdout_file is not None:
+                stdout_file.close()
+            if stderr_file is not None:
+                stderr_file.close()
+
+    @staticmethod
+    def _read_capture(file_obj) -> str | None:
+        if file_obj is None:
+            return None
+        file_obj.flush()
+        file_obj.seek(0)
+        data = file_obj.read()
+        return data.decode(errors="replace") if data else None

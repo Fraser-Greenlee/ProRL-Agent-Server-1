@@ -78,7 +78,8 @@ class CodexHarness(BaseHarness):
             "-c 'model_provider=\"harness_proxy\"'",
             "-c 'model_providers.harness_proxy.name=\"Harness Proxy\"'",
             '-c "model_providers.harness_proxy.base_url=\\"$OPENAI_BASE_URL\\""',
-            "-c 'model_providers.harness_proxy.env_key=\"OPENAI_API_KEY\"'",
+            "-c 'model_providers.harness_proxy.env_key=\"SESSION_ID\"'",
+            "-c 'model_providers.harness_proxy.env_http_headers={\"x-session-id\"=\"SESSION_ID\"}'",
             "-c 'model_providers.harness_proxy.wire_api=\"responses\"'",
         ]
         model = _cli_model_name(self.model_name)
@@ -94,11 +95,12 @@ class CodexHarness(BaseHarness):
 
         flags_str = " ".join(flags)
         return [
-            # Write synthetic auth.json so codex picks up OPENAI_API_KEY
+            # Write synthetic auth.json for Codex login checks. The custom
+            # provider itself reads SESSION_ID, which avoids host API-key bleed.
             ExecInput(
                 command=(
                     f"mkdir -p {self._codex_home} && "
-                    f'printf \'{{"OPENAI_API_KEY": "%s"}}\' "$OPENAI_API_KEY" '
+                    f'printf \'{{"OPENAI_API_KEY": "%s"}}\' "$SESSION_ID" '
                     f"> {self._codex_home}/auth.json"
                 ),
                 env=env,

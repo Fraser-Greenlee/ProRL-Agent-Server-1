@@ -392,7 +392,12 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         logprobs = trace.response_logprobs or []
         for pos in range(len(response_ids)):
             entry = logprobs[pos] if pos < len(logprobs) else None
-            response_slots.append(deepcopy(entry) if isinstance(entry, dict) else None)
+            if isinstance(entry, dict):
+                slot = deepcopy(entry)
+                slot.setdefault("_polar_trainable", True)
+                response_slots.append(slot)
+            else:
+                response_slots.append(None)
 
     @staticmethod
     def _finalize_logprobs(

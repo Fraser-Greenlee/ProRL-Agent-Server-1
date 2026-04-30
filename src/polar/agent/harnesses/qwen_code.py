@@ -49,16 +49,25 @@ class QwenCodeHarness(BaseHarness):
     def run_steps(self, instruction: str) -> list[ExecInput]:
         escaped = shlex.quote(instruction)
         env: dict[str, str] = {**self.env}
-        # qwen-code reads the model from OPENAI_MODEL; passing both an env var
-        # and a --model CLI flag created conflicts on proxied backends, so only
-        # the env var form is used
+        # qwen-code can load persisted OpenAI credentials from the user config.
+        # Pin the proxy credentials on the command line so every completion is
+        # recorded under the Polar session rather than a host API key.
+        model_flag = ""
         if self.model_name:
             env["OPENAI_MODEL"] = self.model_name
+            model_flag = f"--model {shlex.quote(self.model_name)} "
 
         return [
             ExecInput(
                 command=(
-                    f"qwen --yolo --prompt={escaped} "
+                    'OPENAI_API_KEY="$SESSION_ID" '
+                    'OPENAI_BASE_URL="$OPENAI_BASE_URL" '
+                    "QWEN_DEFAULT_AUTH_TYPE=openai "
+                    "qwen --auth-type openai "
+                    '--openai-api-key "$SESSION_ID" '
+                    '--openai-base-url "$OPENAI_BASE_URL" '
+                    '--max-session-turns "${QWEN_CODE_MAX_SESSION_TURNS:-40}" '
+                    f"{model_flag}--yolo --prompt={escaped} "
                     f"2>&1 | tee {RUNTIME_AGENT_LOG_DIR}/qwen-code.txt"
                 ),
                 env=env,

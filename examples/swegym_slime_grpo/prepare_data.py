@@ -18,10 +18,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sample_tasks import (
+    DEFAULT_SIF_DIR,
     EXPECTED_SPLIT_SIZES,
     base_image_for_instance_id,
     derived_runtime_image,
     fetch_dataset_instances,
+    sif_image_for_instance_id,
 )
 
 OUTPUTS = {
@@ -42,7 +44,10 @@ def parse_args() -> argparse.Namespace:
 
 def row_for_instance(instance: dict, split: str) -> dict:
     instance_id = str(instance["instance_id"])
-    base_image = base_image_for_instance_id(instance_id)
+    if DEFAULT_SIF_DIR:
+        base_image = sif_image_for_instance_id(instance_id)
+    else:
+        base_image = base_image_for_instance_id(instance_id)
     return {
         "prompt": [
             {"role": "user", "content": str(instance["problem_statement"]).strip()}

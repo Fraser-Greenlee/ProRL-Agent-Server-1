@@ -319,6 +319,8 @@ def _convert_task_result_to_samples(
                 trajectory_index=traj_idx,
                 reward_key=config.reward_key,
                 max_tokens=max_tokens,
+                tokenizer_name_or_path=config.tokenizer_name_or_path,
+                add_generation_prompt=config.add_generation_prompt,
             )
         )
     return group_samples

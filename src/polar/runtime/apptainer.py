@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 class ApptainerRuntime(BaseRuntime):
     """Apptainer instance used across rollout stages."""
 
+    _INSTANCE_COMMAND_LOCK = asyncio.Lock()
+    _START_ATTEMPTS = 4
+
     def __init__(self, spec: RuntimeSpec, session_id: str, session_dir: Path) -> None:
         super().__init__(spec, session_id, session_dir)
         # Use a hash suffix to guarantee uniqueness even when session IDs
@@ -26,6 +30,13 @@ class ApptainerRuntime(BaseRuntime):
         safe_name = session_id.replace("/", "-")[:30]
         self._instance_name = f"polar-{safe_name}-{short_hash}"
         self._binary = self._resolve_binary()
+        self._overlay_dir: Path | None = None
+        self._use_instance = os.environ.get("POLAR_APPTAINER_NO_INSTANCE", "").lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     @property
     def runtime_id(self) -> str:
@@ -46,24 +57,67 @@ class ApptainerRuntime(BaseRuntime):
         # (default tmpfs overlay is only 64 MB, too small for most workloads).
         self._overlay_dir = self.session_dir / "overlay"
         self._overlay_dir.mkdir(parents=True, exist_ok=True)
-        args = [self._binary, "instance", "start",
-                "--overlay", str(self._overlay_dir)]
-        if self.spec.gpus > 0:
-            args.append("--nv")
-        network_name: str | None
-        if not self.spec.allow_internet:
-            network_name = "none"
-        else:
-            network_name = self.spec.network
-        if network_name and network_name != "host":
-            args.extend(["--net", "--network", network_name])
-        args.extend(["--bind", f"{self.session_dir}:{self.runtime_session_dir}"])
-        args.extend([self.spec.image, self._instance_name])
-        rc, _, _ = await self._run_local_command(*args)
-        if rc != 0:
-            raise RuntimeError(
-                f"{self._binary} instance start failed with exit code {rc}"
+        runtime_options = self._runtime_options()
+        if not self._use_instance:
+            logger.info(
+                "Using direct apptainer exec runtime for %s",
+                self._instance_name,
             )
+            rc, _, stderr = await self._run_local_command(
+                self._binary,
+                "exec",
+                *runtime_options,
+                self.spec.image,
+                "true",
+                capture=True,
+            )
+            if rc != 0:
+                message = f"{self._binary} direct exec validation failed with exit code {rc}"
+                if stderr:
+                    message = f"{message}: {stderr.strip()}"
+                raise RuntimeError(message)
+            return
+
+        args = [
+            self._binary,
+            "instance",
+            "start",
+            *runtime_options,
+            self.spec.image,
+            self._instance_name,
+        ]
+        last_rc = 0
+        last_stderr: str | None = None
+        for attempt in range(1, self._START_ATTEMPTS + 1):
+            logger.info(
+                "Starting apptainer instance %s (attempt %d/%d)",
+                self._instance_name,
+                attempt,
+                self._START_ATTEMPTS,
+            )
+            async with self._INSTANCE_COMMAND_LOCK:
+                last_rc, _, last_stderr = await self._run_local_command(
+                    *args, capture=True
+                )
+            if last_rc == 0:
+                logger.info("Started apptainer instance %s", self._instance_name)
+                return
+            if attempt < self._START_ATTEMPTS:
+                logger.warning(
+                    "%s instance start failed for %s (attempt %d/%d, rc=%s): %s",
+                    self._binary,
+                    self._instance_name,
+                    attempt,
+                    self._START_ATTEMPTS,
+                    last_rc,
+                    (last_stderr or "").strip(),
+                )
+                await asyncio.sleep(min(2.0 * attempt, 8.0))
+
+        message = f"{self._binary} instance start failed with exit code {last_rc}"
+        if last_stderr:
+            message = f"{message}: {last_stderr.strip()}"
+        raise RuntimeError(message)
 
     _STOP_TIMEOUT = 30.0
 
@@ -71,10 +125,13 @@ class ApptainerRuntime(BaseRuntime):
         if self._destroyed:
             return
         self._destroyed = True
-        rc, _, stderr = await self._run_local_command(
-            self._binary, "instance", "stop", self._instance_name,
-            timeout=self._STOP_TIMEOUT, capture=True,
-        )
+        if not self._use_instance:
+            return
+        async with self._INSTANCE_COMMAND_LOCK:
+            rc, _, stderr = await self._run_local_command(
+                self._binary, "instance", "stop", self._instance_name,
+                timeout=self._STOP_TIMEOUT, capture=True,
+            )
         if rc != 0:
             logger.warning(
                 "%s instance stop failed for %s (rc=%s): %s",
@@ -93,7 +150,7 @@ class ApptainerRuntime(BaseRuntime):
         wrapped_command = command
         if effective_workdir:
             wrapped_command = f"cd {shlex.quote(effective_workdir)} && {command}"
-        args = [self._binary, "exec", f"instance://{self._instance_name}"]
+        args = self._exec_base_args()
         if env:
             args.append("env")
             args.extend(f"{key}={value}" for key, value in env.items())
@@ -116,7 +173,7 @@ class ApptainerRuntime(BaseRuntime):
             "bash",
             "-c",
             f"tar -cf - -C {shlex.quote(source_dir)} {shlex.quote(filename)} | "
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{self._shell_join(self._exec_base_args())} "
             f"tar -xf - -C {shlex.quote(parent)}",
             capture=False,
         )
@@ -135,7 +192,7 @@ class ApptainerRuntime(BaseRuntime):
             "bash",
             "-c",
             f"tar -cf - -C {shlex.quote(local_path)} . | "
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{self._shell_join(self._exec_base_args())} "
             f"tar -xf - -C {shlex.quote(remote_path)}",
             capture=False,
         )
@@ -152,7 +209,7 @@ class ApptainerRuntime(BaseRuntime):
         rc, _, _ = await self._run_local_command(
             "bash",
             "-c",
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{self._shell_join(self._exec_base_args())} "
             f"tar -cf - -C {shlex.quote(parent)} {shlex.quote(filename)} | "
             f"tar -xf - -C {shlex.quote(local_dir)}",
             capture=False,
@@ -169,7 +226,7 @@ class ApptainerRuntime(BaseRuntime):
         rc, _, _ = await self._run_local_command(
             "bash",
             "-c",
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{self._shell_join(self._exec_base_args())} "
             f"tar -cf - -C {shlex.quote(remote_path)} . | "
             f"tar -xf - -C {shlex.quote(local_path)}",
             capture=False,
@@ -178,6 +235,31 @@ class ApptainerRuntime(BaseRuntime):
             raise RuntimeError(
                 f"apptainer download_dir failed with exit code {rc}"
             )
+
+    def _runtime_options(self) -> list[str]:
+        if self._overlay_dir is None:
+            raise RuntimeError("apptainer runtime overlay was not initialized")
+        args = ["--overlay", str(self._overlay_dir)]
+        if self.spec.gpus > 0:
+            args.append("--nv")
+        network_name = "none" if not self.spec.allow_internet else self.spec.network
+        if network_name and network_name != "host":
+            args.extend(["--net", "--network", network_name])
+        args.extend(["--bind", f"{self.session_dir}:{self.runtime_session_dir}"])
+        # Additional bind mounts from kwargs (mirrors Docker's volumes support).
+        for vol in self.spec.kwargs.get("volumes", []):
+            # Accept Docker-style "host:container[:ro]" strings.
+            args.extend(["--bind", vol])
+        return args
+
+    def _exec_base_args(self) -> list[str]:
+        if self._use_instance:
+            return [self._binary, "exec", f"instance://{self._instance_name}"]
+        return [self._binary, "exec", *self._runtime_options(), self.spec.image]
+
+    @staticmethod
+    def _shell_join(args: list[str]) -> str:
+        return " ".join(shlex.quote(arg) for arg in args)
 
     @staticmethod
     def _resolve_binary() -> str:

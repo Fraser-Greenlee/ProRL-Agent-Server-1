@@ -1,14 +1,14 @@
 # Polar bridge configuration for Slime's --custom-config-path.
 # These become attributes on the `args` namespace passed to the rollout function.
 
-polar_rollout_url: "http://127.0.0.1:8080"
-polar_gateway_url: "http://127.0.0.1:8100"
+polar_rollout_url: "http://127.0.0.1:18080"
+polar_gateway_url: "http://127.0.0.1:18100"
 polar_reward_key: "score"
-polar_max_concurrency: 16
-polar_max_session_concurrency: 128
-polar_max_async_level: 2
-polar_max_off_policy_steps: 3
-polar_request_timeout: 1200
+polar_max_concurrency: 4
+polar_max_session_concurrency: 8
+polar_max_async_level: 4
+polar_max_off_policy_steps: 4
+polar_request_timeout: 900
 polar_callback_host: "127.0.0.1"
 polar_allow_weight_update_overlap: false
 polar_weight_update_pause_timeout: 300
@@ -23,12 +23,10 @@ polar_instruction_template: |
 # Task template rendered per sample group.  Placeholders are filled
 # from the context: {instruction}, {num_samples}, {sample.*}, {args.*}.
 polar_task_template:
-  timeout_seconds: 1200
+  timeout_seconds: 900
   runtime:
-    backend: "docker"
-    # Use the official SWE-Gym base image directly and mount one shared
-    # Node/agent CLI directory from /raid. Baking the CLI into 316 derived
-    # images costs hundreds of GB on this host's Docker root filesystem.
+    backend: "apptainer"
+    # Use pre-converted SIF images from POLAR_SIF_DIR.
     image: "{sample.metadata.base_image}"
     network: "host"
     workdir: "/polar/session/workspace"
@@ -53,7 +51,7 @@ polar_task_template:
           done &&
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python" &&
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
-          git config --global core.pager '' &&
+          git config --global core.pager cat &&
           cd /polar/session/workspace &&
           (git reset --hard || true)
     # Eval runtime applies the patch + runs swebench tests; no agent CLI work is needed.
@@ -71,10 +69,10 @@ polar_task_template:
           done &&
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python" &&
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
-          git config --global core.pager ''
+          git config --global core.pager cat
   agent:
-    harness: "codex"
-    model_name: "gpt-5.4"
+    harness: "qwen_code"
+    model_name: "Qwen/Qwen3.5-4B"
   builder:
     strategy: "prefix_merging"
   evaluator:

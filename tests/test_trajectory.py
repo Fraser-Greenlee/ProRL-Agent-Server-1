@@ -310,6 +310,27 @@ def test_prefix_merging_merges_raw_response_and_canonical_interstitial() -> None
     assert trace.response_ids == asst1_raw + expected_interstitial + asst2_raw
 
 
+def test_prefix_merging_marks_raw_response_tokens_trainable() -> None:
+    sys_user = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "u"},
+    ]
+    record = _make_record(
+        "c1",
+        list(_SYS_PROMPT) + list(_USER_PROMPT) + list(_GEN_PROMPT),
+        sys_user,
+        [200, _EOT],
+        {"role": "assistant", "content": "a1"},
+    )
+    content = record.response["choices"][0]["logprobs"]["content"]
+    for entry in content:
+        entry.pop("token", None)
+
+    traj = _run_builder(PrefixMergingBuilder(end_of_turn_token_id=_EOT), [record])
+    trace = traj.traces[0]
+    assert [entry.get("_polar_trainable") for entry in trace.response_logprobs] == [True, True]
+
+
 def test_prefix_merging_survives_bpe_drift_inside_assistant_body() -> None:
     """BPE drift: canonical and raw diverge at position 1 but bytes agree.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 
 import pytest
@@ -14,15 +15,19 @@ from polar.gateway.dispatcher import (
     SessionDispatcher,
     SessionStage,
 )
+from polar.gateway.node import GatewayNodeManager
 from polar.gateway.proxy import SGLangClient
 from polar.gateway.session import SessionRegistry
+from polar.gateway.storage import SessionStore
 from polar.rollout.models import (
     SessionDispatchRequest,
     SessionResult,
     SessionStatus,
 )
 from polar.rollout.timer import StageTimer
+from polar.runtime.models import RuntimeSpec
 from polar.agent.models import AgentSpec
+from polar.trajectory.registry import default_builder_registry, default_evaluator_registry
 from polar.trajectory.models import Trajectory
 
 
@@ -82,6 +87,35 @@ def test_session_registry_clear_result_payload_releases_heavy_payload() -> None:
     assert info.result is None
     assert info.status == SessionStatus.COMPLETED
     assert info.task_id == "t1"
+
+
+def test_runtime_env_defaults_home_to_session_dir(tmp_path) -> None:
+    node = GatewayNodeManager(
+        node_id="n1",
+        gateway_url="http://gateway",
+        max_init_workers=1,
+        max_run_workers=1,
+        max_postrun_workers=1,
+        storage=SessionStore(),
+        session_registry=SessionRegistry(),
+        builders=default_builder_registry(),
+        evaluators=default_evaluator_registry(),
+    )
+    managed = _make_managed("s1", tmp_path)
+    managed.runtime = SimpleNamespace(
+        runtime_session_dir="/polar/session",
+        runtime_artifacts_dir="/polar/session/artifacts",
+        runtime_logs_dir="/polar/session/logs",
+        runtime_agent_log_dir="/polar/session/logs/agent",
+        spec=RuntimeSpec(backend="apptainer", image="image"),
+    )  # type: ignore[assignment]
+
+    env = node._runtime_env(managed.request, managed)
+
+    assert env["HOME"] == "/polar/session/home"
+    assert env["XDG_CACHE_HOME"] == "/polar/session/home/.cache"
+    assert env["XDG_CONFIG_HOME"] == "/polar/session/home/.config"
+    asyncio.run(node.close())
 
 
 def test_sglang_client_pause_waits_for_inflight_and_blocks_new_requests() -> None:

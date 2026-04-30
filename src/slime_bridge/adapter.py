@@ -12,10 +12,12 @@ group trainable.
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 import logging
+from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from slime_bridge._messages import messages_to_text
+from slime_bridge._messages import flatten_content, messages_to_text
 
 if TYPE_CHECKING:
     from polar.rollout.models import SessionResult
@@ -35,6 +37,8 @@ def session_result_to_samples(
     trajectory_index: int,
     reward_key: str = "score",
     max_tokens: int | None = None,
+    tokenizer_name_or_path: str | None = None,
+    add_generation_prompt: bool = True,
 ) -> list[Any]:
     """Convert one Polar session result into Slime samples — one per trace.
 
@@ -62,6 +66,8 @@ def session_result_to_samples(
             index=trajectory_index,
             reward_key=reward_key,
             max_tokens=max_tokens,
+            tokenizer_name_or_path=tokenizer_name_or_path,
+            add_generation_prompt=add_generation_prompt,
         )
         if sample is not None:
             samples.append(sample)
@@ -92,8 +98,16 @@ def _build_sample(
     index: int,
     reward_key: str,
     max_tokens: int | None = None,
+    tokenizer_name_or_path: str | None = None,
+    add_generation_prompt: bool = True,
 ) -> Any | None:
-    prompt_ids = list(trace.prompt_ids)
+    prompt_ids = _resolve_prompt_ids(
+        trace,
+        tokenizer_name_or_path=tokenizer_name_or_path,
+        add_generation_prompt=add_generation_prompt,
+        session_id=result.session_id,
+        trace_index=trace_index,
+    )
     response_ids = list(trace.response_ids) or _response_ids_from_logprobs(trace)
 
     if not prompt_ids or not response_ids:
@@ -315,11 +329,11 @@ def _loss_mask_from_logprobs(
     chat-template glue).  Only the former should contribute to training.
 
     The builder marks them distinctly in ``response_logprobs``: real
-    server-returned entries include a ``"token"`` (string) field;
-    interstitial slots are synthesized as ``{"token_id": ..., "logprob":
-    0.0}`` with no ``"token"`` field.  We key the mask off that field's
-    presence — ``logprob == 0.0`` is *not* a safe discriminator because
-    legitimate high-confidence tokens can also hit logprob 0.
+    server-returned entries either carry the internal ``"_polar_trainable"``
+    marker or include a ``"token"`` (string) field; interstitial slots are
+    synthesized as ``{"token_id": ..., "logprob": 0.0}`` with neither
+    marker.  We do not key this off ``logprob == 0.0`` because legitimate
+    high-confidence tokens can also hit logprob 0.
 
     Trainable traces must carry one logprob entry per response token.
     """
@@ -335,11 +349,16 @@ def _loss_mask_from_logprobs(
             f"Session {session_id} trace {trace_index}: response_logprobs length "
             f"{len(logprobs)} != response length {response_len}"
         )
-    mask = [
-        1 if (isinstance(entry, dict) and "token" in entry) else 0
-        for entry in logprobs
-    ]
+    mask = [1 if _is_trainable_logprob_entry(entry) else 0 for entry in logprobs]
     return mask
+
+
+def _is_trainable_logprob_entry(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if bool(entry.get("_polar_trainable")):
+        return True
+    return "token" in entry
 
 
 def _response_ids_from_logprobs(trace: "Trace") -> list[int]:
@@ -350,6 +369,127 @@ def _response_ids_from_logprobs(trace: "Trace") -> list[int]:
         for item in trace.response_logprobs
         if isinstance(item, dict) and item.get("token_id") is not None
     ]
+
+
+def _resolve_prompt_ids(
+    trace: "Trace",
+    *,
+    tokenizer_name_or_path: str | None,
+    add_generation_prompt: bool,
+    session_id: str,
+    trace_index: int,
+) -> list[int]:
+    if trace.prompt_ids:
+        return list(trace.prompt_ids)
+    if not tokenizer_name_or_path or not trace.prompt_messages:
+        return []
+
+    try:
+        tokenizer = _load_tokenizer(tokenizer_name_or_path)
+        encoded = tokenizer.apply_chat_template(
+            _normalize_chat_template_messages(trace.prompt_messages),
+            tokenize=True,
+            add_generation_prompt=add_generation_prompt,
+            enable_thinking=False,
+        )
+        token_ids = _coerce_token_ids(encoded)
+        if token_ids:
+            return token_ids
+    except Exception as exc:
+        logger.warning(
+            "Session %s trace %d: failed to tokenize prompt_messages via chat template: %s",
+            session_id, trace_index, exc,
+        )
+
+    try:
+        tokenizer = _load_tokenizer(tokenizer_name_or_path)
+        rendered_prompt = messages_to_text(trace.prompt_messages)
+        return _coerce_token_ids(
+            tokenizer.encode(rendered_prompt, add_special_tokens=False)
+        )
+    except Exception as exc:
+        logger.warning(
+            "Session %s trace %d: failed to tokenize fallback prompt text: %s",
+            session_id, trace_index, exc,
+        )
+        return []
+
+
+def _normalize_chat_template_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "user")
+        content = flatten_content(message.get("content"))
+        if role == "tool":
+            tool_name = str(message.get("name") or message.get("tool_call_id") or "tool")
+            content = f"[tool result: {tool_name}]\n{content}".strip()
+            role = "user"
+        elif role not in {"system", "user", "assistant"}:
+            role = "user"
+
+        tool_calls = _tool_calls_to_text(message.get("tool_calls"))
+        if tool_calls:
+            content = f"{content}\n{tool_calls}".strip()
+
+        normalized.append({"role": role, "content": content})
+    return normalized
+
+
+def _tool_calls_to_text(tool_calls: Any) -> str:
+    if not isinstance(tool_calls, list):
+        return ""
+    parts: list[str] = []
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if isinstance(function, dict):
+            name = function.get("name") or call.get("name") or call.get("id") or "tool"
+            arguments = function.get("arguments")
+        else:
+            name = call.get("name") or call.get("id") or "tool"
+            arguments = call.get("arguments")
+        text = f"[tool call: {name}]"
+        if arguments not in (None, ""):
+            text = f"{text} {arguments}"
+        parts.append(text)
+    return "\n".join(parts)
+
+
+def _coerce_token_ids(encoded: Any) -> list[int]:
+    if isinstance(encoded, dict):
+        encoded = encoded.get("input_ids", [])
+    elif hasattr(encoded, "data") and isinstance(getattr(encoded, "data"), dict):
+        encoded = encoded.data.get("input_ids", [])
+    elif hasattr(encoded, "input_ids"):
+        encoded = encoded.input_ids
+
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+
+    if isinstance(encoded, tuple):
+        encoded = list(encoded)
+    if (
+        isinstance(encoded, list)
+        and encoded
+        and isinstance(encoded[0], (list, tuple))
+    ):
+        encoded = list(encoded[0])
+    if not isinstance(encoded, list):
+        return []
+    return [int(token_id) for token_id in encoded if isinstance(token_id, int)]
+
+
+@lru_cache(maxsize=4)
+def _load_tokenizer(name_or_path: str) -> Any:
+    from transformers import AutoTokenizer
+
+    kwargs: dict[str, Any] = {"trust_remote_code": True}
+    if Path(name_or_path).exists():
+        kwargs["local_files_only"] = True
+    return AutoTokenizer.from_pretrained(name_or_path, **kwargs)
 
 
 def _load_sample_type() -> Any:

@@ -233,9 +233,21 @@ class GatewayNodeManager:
             runtime_spec = self._resolve_runtime_spec(request)
             runtime = create_runtime(runtime_spec, request.session_id, managed.session_dir)
             managed.runtime = runtime
+            logger.info(
+                "Initializing session %s runtime %s in %s",
+                request.session_id,
+                runtime.runtime_id,
+                managed.session_dir,
+            )
             await self._await_with_budget(runtime.start(), managed)
+            logger.info(
+                "Runtime started for session %s: %s",
+                request.session_id,
+                runtime.runtime_id,
+            )
             # Run ordered prepare actions
             await self._run_runtime_prepare(runtime, runtime_spec, request, managed)
+            logger.info("Prepare finished for session %s", request.session_id)
         except GatewayExecutionTimeout as exc:
             managed.final_result = self._timeout_result(request, managed.timer, str(exc))
         except Exception as exc:
@@ -283,11 +295,24 @@ class GatewayNodeManager:
             elif action.type == "exec":
                 merged_env = {**base_env, **(action.env or {})}
                 effective_cwd = action.cwd or runtime.runtime_session_dir
+                logger.info(
+                    "Running %s action %d for session %s",
+                    log_prefix,
+                    i,
+                    request.session_id,
+                )
                 result = await runtime.exec(
                     action.command,
                     cwd=effective_cwd,
                     env=merged_env,
                     timeout_sec=self._remaining_budget(managed),
+                )
+                logger.info(
+                    "Finished %s action %d for session %s with rc=%s",
+                    log_prefix,
+                    i,
+                    request.session_id,
+                    result.return_code,
                 )
                 log_dir = managed.session_dir / "logs"
                 log_dir.mkdir(parents=True, exist_ok=True)
@@ -765,6 +790,10 @@ class GatewayNodeManager:
             logs_dir = runtime.runtime_logs_dir
             agent_log_dir = runtime.runtime_agent_log_dir
             runtime_env = dict(runtime.spec.env)
+        home_dir = f"{session_dir}/home"
+        runtime_env.setdefault("HOME", home_dir)
+        runtime_env.setdefault("XDG_CACHE_HOME", f"{home_dir}/.cache")
+        runtime_env.setdefault("XDG_CONFIG_HOME", f"{home_dir}/.config")
         agent_env = dict(request.agent.env) if include_agent_env else {}
         return {
             "ANTHROPIC_BASE_URL": self.gateway_url,

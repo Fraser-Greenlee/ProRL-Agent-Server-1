@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ DATASET_SPLITS = ("train", "validation")
 EXPECTED_SPLIT_SIZES = {"train": 293, "validation": 23}
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "polar"
 RUNTIME_IMAGE_PREFIX = "polar-swegym-runtime"
+DEFAULT_SIF_DIR = os.environ.get("POLAR_SIF_DIR", "")
 LEGACY_SWEBENCH_IMAGE_REPOS = {
     "marshmallow-code/marshmallow",
     "pydicom/pydicom",
@@ -41,6 +43,22 @@ def base_image_for_instance_id(instance_id: str) -> str:
 
 def derived_runtime_image(instance_id: str) -> str:
     return f"{RUNTIME_IMAGE_PREFIX}:{sanitize_instance_id(instance_id)}"
+
+
+def sif_image_for_instance_id(instance_id: str, sif_dir: str | None = None) -> str:
+    """Return the absolute path to the SIF file for *instance_id*.
+
+    SIF files are named ``xingyaoww_sweb.eval.x86_64.<suffix>.sif`` where
+    *suffix* is ``instance_id`` with ``__`` replaced by ``_s_`` (lowercased).
+    """
+    sif_dir = sif_dir or DEFAULT_SIF_DIR
+    if not sif_dir:
+        raise ValueError(
+            "POLAR_SIF_DIR environment variable must be set to use SIF images"
+        )
+    suffix = instance_id.replace("__", "_s_").lower()
+    name = f"xingyaoww_sweb.eval.x86_64.{suffix}.sif"
+    return str(Path(sif_dir) / name)
 
 
 def _cache_path_for_split(split: str) -> Path:

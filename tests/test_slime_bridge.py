@@ -273,6 +273,177 @@ def test_session_result_to_samples_drops_empty_token_traces(monkeypatch) -> None
     assert sample.index == 7
 
 
+def test_session_result_to_samples_tokenizes_prompt_messages_when_prompt_ids_missing(monkeypatch) -> None:
+    from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
+    from polar.trajectory.models import Trace, Trajectory
+    from slime_bridge import adapter
+
+    class _FakeTokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            assert kwargs["tokenize"] is True
+            assert kwargs["add_generation_prompt"] is True
+            assert kwargs["enable_thinking"] is False
+            assert messages == [{"role": "user", "content": "hi"}]
+            return {"input_ids": [101, 102]}
+
+    monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
+    monkeypatch.setattr(adapter, "_load_tokenizer", lambda _: _FakeTokenizer())
+
+    result = SessionResult(
+        session_id="s1",
+        task_id="t1",
+        status=SessionStatus.COMPLETED,
+        trajectory=Trajectory(
+            status="COMPLETED",
+            traces=[
+                Trace(
+                    prompt_ids=[],
+                    prompt_messages=[{"role": "user", "content": "hi"}],
+                    response_ids=[201],
+                    response_logprobs=[
+                        {"token": "ok", "token_id": 201, "logprob": -0.1},
+                    ],
+                    finish_reason="stop",
+                )
+            ],
+        ),
+        timing=SessionTiming(),
+    )
+
+    samples = adapter.session_result_to_samples(
+        result,
+        group_index=0,
+        trajectory_index=0,
+        tokenizer_name_or_path="/tmp/tokenizer",
+    )
+
+    assert len(samples) == 1
+    assert samples[0].tokens == [101, 102, 201]
+    assert samples[0].response_length == 1
+    assert samples[0].loss_mask == [1]
+
+
+def test_session_result_to_samples_flattens_openai_text_parts_for_chat_template(monkeypatch) -> None:
+    from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
+    from polar.trajectory.models import Trace, Trajectory
+    from slime_bridge import adapter
+
+    class _FakeTokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            assert messages == [
+                {"role": "user", "content": "hello\nworld"},
+                {"role": "assistant", "content": ""},
+            ]
+            return [11, 12]
+
+    monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
+    monkeypatch.setattr(adapter, "_load_tokenizer", lambda _: _FakeTokenizer())
+
+    result = SessionResult(
+        session_id="s1",
+        task_id="t1",
+        status=SessionStatus.COMPLETED,
+        trajectory=Trajectory(
+            status="COMPLETED",
+            traces=[
+                Trace(
+                    prompt_ids=[],
+                    prompt_messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "hello"},
+                                {"type": "text", "text": "\nworld"},
+                            ],
+                        },
+                        {"role": "assistant", "content": None},
+                    ],
+                    response_ids=[13],
+                    response_logprobs=[
+                        {"token": "!", "token_id": 13, "logprob": -0.1},
+                    ],
+                    finish_reason="stop",
+                )
+            ],
+        ),
+        timing=SessionTiming(),
+    )
+
+    samples = adapter.session_result_to_samples(
+        result,
+        group_index=0,
+        trajectory_index=0,
+        tokenizer_name_or_path="/tmp/tokenizer",
+    )
+
+    assert len(samples) == 1
+    assert samples[0].tokens == [11, 12, 13]
+
+
+def test_session_result_to_samples_normalizes_tool_messages_for_chat_template(monkeypatch) -> None:
+    from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
+    from polar.trajectory.models import Trace, Trajectory
+    from slime_bridge import adapter
+
+    class _FakeTokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            assert messages == [
+                {"role": "assistant", "content": "checking\n[tool call: rg] files"},
+                {"role": "user", "content": "[tool result: call_1]\nfound"},
+            ]
+            return [21, 22]
+
+    monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
+    monkeypatch.setattr(adapter, "_load_tokenizer", lambda _: _FakeTokenizer())
+
+    result = SessionResult(
+        session_id="s1",
+        task_id="t1",
+        status=SessionStatus.COMPLETED,
+        trajectory=Trajectory(
+            status="COMPLETED",
+            traces=[
+                Trace(
+                    prompt_ids=[],
+                    prompt_messages=[
+                        {
+                            "role": "assistant",
+                            "content": "checking",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "function": {"name": "rg", "arguments": "files"},
+                                }
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": "call_1",
+                            "content": [{"type": "text", "text": "found"}],
+                        },
+                    ],
+                    response_ids=[23],
+                    response_logprobs=[
+                        {"token": "done", "token_id": 23, "logprob": -0.1},
+                    ],
+                    finish_reason="stop",
+                )
+            ],
+        ),
+        timing=SessionTiming(),
+    )
+
+    samples = adapter.session_result_to_samples(
+        result,
+        group_index=0,
+        trajectory_index=0,
+        tokenizer_name_or_path="/tmp/tokenizer",
+    )
+
+    assert len(samples) == 1
+    assert samples[0].tokens == [21, 22, 23]
+
+
 # ---------------------------------------------------------------------------
 # Adapter — loss_mask masks canonical interstitials but keeps real assistant
 # tokens even when their logprob is exactly 0 (high-confidence predictions).
@@ -321,6 +492,36 @@ def test_session_result_to_samples_masks_canonical_interstitial(monkeypatch) -> 
     assert sample.loss_mask == [1, 1, 0, 0, 1]
     # Rollout logprobs still span every position (trainer needs them aligned).
     assert sample.rollout_log_probs == [-0.5, 0.0, 0.0, 0.0, -0.2]
+
+
+def test_session_result_to_samples_accepts_internal_trainable_marker(monkeypatch) -> None:
+    from polar.rollout.models import SessionResult, SessionStatus, SessionTiming
+    from polar.trajectory.models import Trace, Trajectory
+    from slime_bridge import adapter
+
+    monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
+
+    trace = Trace(
+        prompt_ids=[1, 2],
+        response_ids=[10, 11, 12],
+        response_logprobs=[
+            {"token_id": 10, "logprob": -0.5, "_polar_trainable": True},
+            {"token_id": 11, "logprob": 0.0},
+            {"token_id": 12, "logprob": -0.2, "_polar_trainable": True},
+        ],
+        finish_reason="stop",
+    )
+    result = SessionResult(
+        session_id="s1",
+        task_id="t1",
+        status=SessionStatus.COMPLETED,
+        trajectory=Trajectory(status="COMPLETED", traces=[trace]),
+        timing=SessionTiming(),
+    )
+
+    samples = adapter.session_result_to_samples(result, group_index=0, trajectory_index=0)
+    assert samples[0].loss_mask == [1, 0, 1]
+    assert samples[0].rollout_log_probs == [-0.5, 0.0, -0.2]
 
 
 def test_session_result_to_samples_requires_logprobs_for_trainable_trace(monkeypatch) -> None:

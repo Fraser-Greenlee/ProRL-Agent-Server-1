@@ -1,7 +1,7 @@
 rollout:
   host: 127.0.0.1
-  port: 8080
-  public_url: http://127.0.0.1:8080
+  port: 18080
+  public_url: http://127.0.0.1:18080
   save_dir: ./rollout_results
 
 gateway:
@@ -9,11 +9,11 @@ gateway:
   nodes:
     - id: localhost-node-01
       host: 127.0.0.1
-      port: 8100
-      public_url: http://127.0.0.1:8100
-      max_init_workers: 32
-      max_run_workers: 32
-      max_postrun_workers: 32
+      port: 18100
+      public_url: http://127.0.0.1:18100
+      max_init_workers: 4
+      max_run_workers: 4
+      max_postrun_workers: 4
       model_served: Qwen/Qwen3.5-4B
       sglang:
         # run.sh/launch_e2e.sh render this to the host-reachable router URL.
