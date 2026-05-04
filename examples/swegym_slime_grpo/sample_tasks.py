@@ -1,4 +1,4 @@
-"""Helpers for the full SWE-Gym SkyRL train/validation dataset."""
+"""Helpers for the full SWE-Gym SkyRL train dataset."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 DATASET_NAME = "NovaSky-AI/SkyRL-v0-293-data"
-DATASET_SPLITS = ("train", "validation")
-EXPECTED_SPLIT_SIZES = {"train": 293, "validation": 23}
+DATASET_SPLITS = ("train",)
+EXPECTED_SPLIT_SIZES = {"train": 293}
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "polar"
 RUNTIME_IMAGE_PREFIX = "polar-swegym-runtime"
 LEGACY_SWEBENCH_IMAGE_REPOS = {

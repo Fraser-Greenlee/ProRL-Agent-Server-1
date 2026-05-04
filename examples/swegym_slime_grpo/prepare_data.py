@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare the full SWE-Gym train/eval JSONL datasets for Slime.
+"""Prepare the full SWE-Gym train JSONL dataset for Slime.
 
 Each row contains:
   - prompt:       chat-formatted list [{"role": "user", "content": problem_statement}]
@@ -24,10 +24,8 @@ from sample_tasks import (
     fetch_dataset_instances,
 )
 
-OUTPUTS = {
-    "train": Path(__file__).resolve().parent / "swegym_train_293.jsonl",
-    "validation": Path(__file__).resolve().parent / "swegym_eval_23.jsonl",
-}
+SPLIT = "train"
+OUTPUT = Path(__file__).resolve().parent / "swegym_train_293.jsonl"
 
 
 def parse_args() -> argparse.Namespace:
@@ -74,8 +72,7 @@ def write_split(split: str, output: Path, *, refresh: bool) -> int:
 
 def main() -> None:
     args = parse_args()
-    for split, output in OUTPUTS.items():
-        write_split(split, output, refresh=args.refresh_dataset_cache)
+    write_split(SPLIT, OUTPUT, refresh=args.refresh_dataset_cache)
 
 
 if __name__ == "__main__":

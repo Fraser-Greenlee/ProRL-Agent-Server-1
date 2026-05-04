@@ -8,11 +8,10 @@ polar_max_concurrency: 16
 polar_max_session_concurrency: 128
 polar_max_async_level: 2
 polar_max_off_policy_steps: 3
-polar_request_timeout: 1200
+polar_request_timeout: 900
 polar_callback_host: "127.0.0.1"
 polar_allow_weight_update_overlap: false
 polar_weight_update_pause_timeout: 300
-polar_eval_dataset_name: "swegym_eval"
 # run.sh/launch_e2e.sh render this to an absolute host path before launch.
 polar_agent_cli_dir: "tmp/swegym_agent_cli/opt_node"
 polar_instruction_template: |
@@ -23,11 +22,11 @@ polar_instruction_template: |
 # Task template rendered per sample group.  Placeholders are filled
 # from the context: {instruction}, {num_samples}, {sample.*}, {args.*}.
 polar_task_template:
-  timeout_seconds: 1200
+  timeout_seconds: 900
   runtime:
     backend: "docker"
     # Use the official SWE-Gym base image directly and mount one shared
-    # Node/agent CLI directory from /raid. Baking the CLI into 316 derived
+    # Node/agent CLI directory from /raid. Baking the CLI into 293 derived
     # images costs hundreds of GB on this host's Docker root filesystem.
     image: "{sample.metadata.base_image}"
     network: "host"
@@ -56,7 +55,7 @@ polar_task_template:
           git config --global core.pager '' &&
           cd /polar/session/workspace &&
           (git reset --hard || true)
-    # Eval runtime applies the patch + runs swebench tests; no agent CLI work is needed.
+    # Fresh reward-test runtime applies the patch and runs swebench tests.
     eval_prepare:
       - type: exec
         command: >-
@@ -73,7 +72,7 @@ polar_task_template:
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
           git config --global core.pager ''
   agent:
-    harness: "codex"
+    harness: "qwen_code"
     model_name: "gpt-5.4"
   builder:
     strategy: "prefix_merging"

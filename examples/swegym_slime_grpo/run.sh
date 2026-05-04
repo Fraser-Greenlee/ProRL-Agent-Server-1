@@ -122,9 +122,8 @@ fi
 
 # ── Data ───────────────────────────────────────────────────────────
 PROMPT_DATA="${SCRIPT_DIR}/swegym_train_293.jsonl"
-EVAL_DATA="${SCRIPT_DIR}/swegym_eval_23.jsonl"
-if [ ! -f "$PROMPT_DATA" ] || [ ! -f "$EVAL_DATA" ]; then
-    echo "Preparing train/eval data..."
+if [ ! -f "$PROMPT_DATA" ]; then
+    echo "Preparing train data..."
     python "${SCRIPT_DIR}/prepare_data.py"
 fi
 
@@ -217,7 +216,6 @@ ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-4}"
 ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-8}"
 N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
-EVAL_INTERVAL="${EVAL_INTERVAL:-8}"
 
 # Rollout sizing: 8 prompts × 8 trajectories = 64 trajectories/rollout.
 # This matches the earlier high-util baseline and keeps request groups smaller
@@ -247,8 +245,6 @@ ray job submit --address="http://127.0.0.1:8265" \
     --custom-config-path "${CUSTOM_CONFIG_PATH}" \
     --data-source-path slime_bridge.data_source.CeilEpochRolloutDataSourceWithBuffer \
     --prompt-data "$PROMPT_DATA" \
-    --eval-prompt-data swegym_eval "$EVAL_DATA" \
-    --eval-interval "$EVAL_INTERVAL" \
     --input-key prompt \
     --label-key label \
     --metadata-key metadata \
@@ -257,7 +253,6 @@ ray job submit --address="http://127.0.0.1:8265" \
     --num-epoch 1 \
     --rollout-batch-size "$ROLLOUT_BATCH_SIZE" \
     --n-samples-per-prompt "$N_SAMPLES_PER_PROMPT" \
-    --n-samples-per-eval-prompt 1 \
     --rollout-max-response-len 16000 \
     --rollout-max-prompt-len 32000 \
     --dynamic-history \
@@ -273,7 +268,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --recompute-num-layers 1 \
     --use-dynamic-batch-size \
     --max-tokens-per-gpu 80000 \
-    --log-probs-chunk-size 512 \
+    --log-probs-chunk-size 256 \
     --advantage-estimator grpo \
     --normalize-advantages \
     --use-tis \

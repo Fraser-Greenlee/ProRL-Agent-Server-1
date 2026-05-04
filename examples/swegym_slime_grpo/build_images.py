@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare Docker runtime assets for the full SWE-Gym dataset.
+"""Prepare Docker runtime assets for the full SWE-Gym train dataset.
 
 The rollout runtime uses the official SWE-Gym base images directly. Agent CLIs
 live in one host directory mounted into every container, avoiding a duplicated

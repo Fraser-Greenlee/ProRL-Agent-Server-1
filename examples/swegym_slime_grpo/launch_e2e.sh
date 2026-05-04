@@ -3,7 +3,7 @@
 #
 # This script bootstraps the pieces that are safe to automate on a cluster:
 # external checkouts, local editable installs, Slime/SGLang patches, SWE-Gym
-# JSONL data, shared agent CLI assets, base runtime images, Megatron weight
+# train JSONL data, shared agent CLI assets, base runtime images, Megatron weight
 # conversion, and finally the Polar + Slime training run.
 set -euo pipefail
 
