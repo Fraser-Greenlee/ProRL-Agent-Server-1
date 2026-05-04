@@ -7,7 +7,7 @@ Each row contains:
                   processor, as Qwen3.5-4B does — slime asserts list prompts
                   under that path. See `slime/slime/utils/data.py:243`.)
   - label:        always "" (reward comes from Polar evaluator, not label matching)
-  - metadata:     instance dict + runtime image refs (used by polar_config.yaml template)
+  - metadata:     instance ID, instance dict, and split
 """
 from __future__ import annotations
 
@@ -19,8 +19,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sample_tasks import (
     EXPECTED_SPLIT_SIZES,
-    base_image_for_instance_id,
-    derived_runtime_image,
     fetch_dataset_instances,
 )
 
@@ -40,7 +38,6 @@ def parse_args() -> argparse.Namespace:
 
 def row_for_instance(instance: dict, split: str) -> dict:
     instance_id = str(instance["instance_id"])
-    base_image = base_image_for_instance_id(instance_id)
     return {
         "prompt": [
             {"role": "user", "content": str(instance["problem_statement"]).strip()}
@@ -49,10 +46,6 @@ def row_for_instance(instance: dict, split: str) -> dict:
         "metadata": {
             "instance_id": instance_id,
             "instance": instance,
-            "base_image": base_image,
-            # Kept for compatibility with older local configs that used
-            # derived images with the agent CLI baked in.
-            "polar_image": derived_runtime_image(instance_id),
             "split": split,
         },
     }

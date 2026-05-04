@@ -58,6 +58,11 @@ class ApptainerRuntime(BaseRuntime):
         if network_name and network_name != "host":
             args.extend(["--net", "--network", network_name])
         args.extend(["--bind", f"{self.session_dir}:{self.runtime_session_dir}"])
+        # Match DockerRuntime's kwargs.volumes contract. Apptainer accepts the
+        # same src[:dst[:opts]] bind syntax for the read-only CLI mount used by
+        # SWE-Gym.
+        for volume in self.spec.kwargs.get("volumes", []):
+            args.extend(["--bind", str(volume)])
         args.extend([self.spec.image, self._instance_name])
         rc, _, _ = await self._run_local_command(*args)
         if rc != 0:
@@ -89,14 +94,21 @@ class ApptainerRuntime(BaseRuntime):
         env: dict[str, str] | None = None,
         timeout_sec: float | None = None,
     ) -> ExecResult:
+        effective_env = {**self.spec.env, **(env or {})}
         effective_workdir = cwd or self.spec.workdir or self.runtime_session_dir
         wrapped_command = command
         if effective_workdir:
             wrapped_command = f"cd {shlex.quote(effective_workdir)} && {command}"
+        shell_exports = []
+        for key in ("HOME", "PATH"):
+            if key in effective_env:
+                shell_exports.append(f"export {key}={shlex.quote(str(effective_env[key]))};")
+        if shell_exports:
+            wrapped_command = " ".join(shell_exports + [wrapped_command])
         args = [self._binary, "exec", f"instance://{self._instance_name}"]
-        if env:
+        if effective_env:
             args.append("env")
-            args.extend(f"{key}={value}" for key, value in env.items())
+            args.extend(f"{key}={value}" for key, value in effective_env.items())
         args.extend(["bash", "-lc", wrapped_command])
         rc, stdout, stderr = await self._run_local_command(
             *args, timeout=timeout_sec, capture=True

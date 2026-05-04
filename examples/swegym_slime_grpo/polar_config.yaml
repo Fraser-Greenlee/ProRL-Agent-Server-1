@@ -4,16 +4,14 @@
 polar_rollout_url: "http://127.0.0.1:8080"
 polar_gateway_url: "http://127.0.0.1:8100"
 polar_reward_key: "score"
-polar_max_concurrency: 16
-polar_max_session_concurrency: 128
-polar_max_async_level: 2
-polar_max_off_policy_steps: 3
+polar_max_async_level: 3
 polar_request_timeout: 2400
 polar_callback_host: "127.0.0.1"
 polar_allow_weight_update_overlap: false
 polar_weight_update_pause_timeout: 300
 # run.sh/launch_e2e.sh render this to an absolute host path before launch.
 polar_agent_cli_dir: "tmp/swegym_agent_cli/opt_node"
+polar_apptainer_image_dir: "tmp/swegym_apptainer_images"
 polar_instruction_template: |
   Fix the following issue in the repository at /polar/session/workspace.
 
@@ -24,32 +22,26 @@ polar_instruction_template: |
 polar_task_template:
   timeout_seconds: 2400
   runtime:
-    backend: "docker"
-    # Use the official SWE-Gym base image directly and mount one shared
-    # Node/agent CLI directory from /raid. Baking the CLI into 293 derived
-    # images costs hundreds of GB on this host's Docker root filesystem.
-    image: "{sample.metadata.base_image}"
+    backend: "apptainer"
+    # Use project-local SIF files prepared from the official SWE-Gym registry
+    # images.
+    image: "{args.polar_apptainer_image_dir}/{sample.metadata.instance_id}.sif"
     network: "host"
     workdir: "/polar/session/workspace"
+    env:
+      HOME: "/polar/session/home"
+      PATH: "/polar/session/home/.venv/bin:/opt/node/bin:/opt/miniconda3/envs/testbed/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     kwargs:
       volumes:
         - "{args.polar_agent_cli_dir}:/opt/node:ro"
     # Node 22 + agent CLIs are mounted from polar_agent_cli_dir — no npm install
-    # at session start, which removes the main docker-daemon stressor.
+    # at session start.
     prepare:
       - type: exec
         command: >-
           rm -rf /polar/session/workspace &&
           mkdir -p /polar/session/logs/agent /polar/session/workspace "$HOME/.venv/bin" &&
           cp -a /testbed/. /polar/session/workspace/ &&
-          ln -sf /opt/node/bin/node /usr/local/bin/node &&
-          ln -sf /opt/node/bin/npm /usr/local/bin/npm &&
-          ln -sf /opt/node/bin/npx /usr/local/bin/npx &&
-          for cli in codex claude qwen opencode pi; do
-            if [ -e /opt/node/bin/$cli ]; then
-              ln -sf /opt/node/bin/$cli /usr/local/bin/$cli;
-            fi;
-          done &&
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python" &&
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
           git config --global core.pager '' &&
@@ -60,14 +52,6 @@ polar_task_template:
       - type: exec
         command: >-
           mkdir -p /polar/session/logs/agent "$HOME/.venv/bin" &&
-          ln -sf /opt/node/bin/node /usr/local/bin/node &&
-          ln -sf /opt/node/bin/npm /usr/local/bin/npm &&
-          ln -sf /opt/node/bin/npx /usr/local/bin/npx &&
-          for cli in codex claude qwen opencode pi; do
-            if [ -e /opt/node/bin/$cli ]; then
-              ln -sf /opt/node/bin/$cli /usr/local/bin/$cli;
-            fi;
-          done &&
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python" &&
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
           git config --global core.pager ''

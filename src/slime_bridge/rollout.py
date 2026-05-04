@@ -572,7 +572,7 @@ class AsyncPolarRolloutWorker:
                             self._set_fatal(
                                 PolarRolloutSchedulerError(
                                     f"Prompt group needs {session_cost} sessions but "
-                                    f"polar_max_session_concurrency is "
+                                    f"derived max_session_concurrency is "
                                     f"{self.config.max_session_concurrency}"
                                 )
                             )

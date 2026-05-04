@@ -313,7 +313,16 @@ def _parse_group_id(task_id: str) -> int:
         return -1
 
 
-def _make_args(server: FakePolarServer, *, batch_size: int, max_concurrency: int) -> SimpleNamespace:
+def _make_args(
+    server: FakePolarServer,
+    *,
+    batch_size: int,
+    samples_per_group: int,
+    max_concurrency: int,
+) -> SimpleNamespace:
+    if max_concurrency % batch_size != 0:
+        raise ValueError("benchmark max_concurrency must be divisible by batch_size")
+    max_async_level = max_concurrency // batch_size
     return SimpleNamespace(
         context_parallel_size=1,
         hf_checkpoint=None,
@@ -321,7 +330,7 @@ def _make_args(server: FakePolarServer, *, batch_size: int, max_concurrency: int
         polar_add_generation_prompt=True,
         polar_eval_dataset_name="polar_eval",
         polar_instruction_template=None,
-        polar_max_concurrency=max_concurrency,
+        polar_max_async_level=max_async_level,
         polar_request_timeout=10.0,
         polar_reward_key="score",
         polar_rollout_url=server.base_url,
@@ -331,6 +340,7 @@ def _make_args(server: FakePolarServer, *, batch_size: int, max_concurrency: int
             "metadata": {"group_id": "{sample.metadata.group_id}"},
             "timeout_seconds": 30.0,
         },
+        n_samples_per_prompt=samples_per_group,
         reward_key="score",
         rollout_batch_size=batch_size,
         sglang_router_ip=None,
@@ -368,7 +378,12 @@ def _run_rollout_cycles(
 
     try:
         server.start()
-        args = _make_args(server, batch_size=batch_size, max_concurrency=max_concurrency)
+        args = _make_args(
+            server,
+            batch_size=batch_size,
+            samples_per_group=samples_per_group,
+            max_concurrency=max_concurrency,
+        )
         for rollout_id in range(cycles):
             cycle_start = time.monotonic()
             output = generate_rollout_polar_async(args, rollout_id, data_source, evaluation=False)

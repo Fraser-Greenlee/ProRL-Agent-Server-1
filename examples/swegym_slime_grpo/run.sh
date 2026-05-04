@@ -27,6 +27,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 RUN_DIR="${RUN_DIR:-${PROJECT_ROOT}/tmp/swegym_slime_grpo}"
 mkdir -p "${RUN_DIR}" "${PROJECT_ROOT}/logs"
+PYTHON_BIN="${PYTHON_BIN:-${PROJECT_ROOT}/.venv/bin/python3}"
+if [ ! -x "${PYTHON_BIN}" ]; then
+    PYTHON_BIN="$(command -v python3 || command -v python)"
+fi
+PYTHON_BIN_DIR="$(cd -- "$(dirname -- "${PYTHON_BIN}")" &>/dev/null && pwd)"
 
 is_path_like() {
     case "$1" in
@@ -36,7 +41,7 @@ is_path_like() {
 }
 
 detect_host_ip() {
-    python - <<'PY'
+    "${PYTHON_BIN}" - <<'PY'
 import socket
 
 try:
@@ -124,11 +129,14 @@ fi
 PROMPT_DATA="${SCRIPT_DIR}/swegym_train_293.jsonl"
 if [ ! -f "$PROMPT_DATA" ]; then
     echo "Preparing train data..."
-    python "${SCRIPT_DIR}/prepare_data.py"
+    "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_data.py"
 fi
 
 # ── Runtime configs ─────────────────────────────────────────────────
 AGENT_CLI_DIR="${AGENT_CLI_DIR:-${PROJECT_ROOT}/tmp/swegym_agent_cli/opt_node}"
+APPTAINER_IMAGE_DIR="${APPTAINER_IMAGE_DIR:-${PROJECT_ROOT}/tmp/swegym_apptainer_images}"
+POLAR_APPTAINER_BIN="${POLAR_APPTAINER_BIN:-/usr/bin/apptainer}"
+export POLAR_APPTAINER_BIN
 SGLANG_ROUTER_PORT="${SGLANG_ROUTER_PORT:-9000}"
 SGLANG_ROUTER_HOST="${SGLANG_ROUTER_HOST:-$(detect_host_ip)}"
 SGLANG_ROUTER_BASE_URL="${SGLANG_ROUTER_BASE_URL:-http://${SGLANG_ROUTER_HOST}:${SGLANG_ROUTER_PORT}}"
@@ -137,13 +145,22 @@ POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.yaml}
 TOPOLOGY_PATH="${TOPOLOGY_PATH:-${RUN_DIR}/topology.yaml}"
 CUSTOM_CONFIG_PATH="${CUSTOM_CONFIG_PATH:-${RUN_DIR}/polar_config.yaml}"
 
-python - "$TOPOLOGY_TEMPLATE" "$TOPOLOGY_PATH" "$SGLANG_ROUTER_BASE_URL" \
-       "$POLAR_CONFIG_TEMPLATE" "$CUSTOM_CONFIG_PATH" "$AGENT_CLI_DIR" <<'PY'
+"${PYTHON_BIN}" - "$TOPOLOGY_TEMPLATE" "$TOPOLOGY_PATH" "$SGLANG_ROUTER_BASE_URL" \
+       "$POLAR_CONFIG_TEMPLATE" "$CUSTOM_CONFIG_PATH" "$AGENT_CLI_DIR" \
+       "$APPTAINER_IMAGE_DIR" <<'PY'
 from pathlib import Path
 import sys
 import yaml
 
-topology_template, topology_out, router_url, polar_template, polar_out, agent_cli_dir = sys.argv[1:]
+(
+    topology_template,
+    topology_out,
+    router_url,
+    polar_template,
+    polar_out,
+    agent_cli_dir,
+    apptainer_image_dir,
+) = sys.argv[1:]
 
 with open(topology_template, encoding="utf-8") as fh:
     topology = yaml.safe_load(fh) or {}
@@ -156,6 +173,7 @@ with open(topology_out, "w", encoding="utf-8") as fh:
 with open(polar_template, encoding="utf-8") as fh:
     polar_config = yaml.safe_load(fh) or {}
 polar_config["polar_agent_cli_dir"] = agent_cli_dir
+polar_config["polar_apptainer_image_dir"] = apptainer_image_dir
 Path(polar_out).parent.mkdir(parents=True, exist_ok=True)
 with open(polar_out, "w", encoding="utf-8") as fh:
     yaml.safe_dump(polar_config, fh, sort_keys=False)
@@ -163,6 +181,8 @@ PY
 
 echo "Using topology: ${TOPOLOGY_PATH}"
 echo "Using Polar config: ${CUSTOM_CONFIG_PATH}"
+echo "Using Apptainer image dir: ${APPTAINER_IMAGE_DIR}"
+echo "Using save dir: ${SAVE_DIR}"
 echo "Using SGLang router URL for Polar gateway: ${SGLANG_ROUTER_BASE_URL}"
 
 # ── Cleanup on exit ────────────────────────────────────────────────
@@ -202,6 +222,8 @@ fi
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"${MEGATRON_DIR}:${PROJECT_ROOT}/src\",
+    \"PATH\": \"${PYTHON_BIN_DIR}:${PATH}\",
+    \"VIRTUAL_ENV\": \"${PROJECT_ROOT}/.venv\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"WANDB_DIR\": \"${PROJECT_ROOT}/logs\",
     \"LD_LIBRARY_PATH\": \"${RUNTIME_LD_LIBRARY_PATH}\",
@@ -227,7 +249,7 @@ N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
 echo "=== Launching train_async.py ==="
 ray job submit --address="http://127.0.0.1:8265" \
     --runtime-env-json="${RUNTIME_ENV_JSON}" \
-    -- python3 "${SLIME_DIR}/train_async.py" \
+    -- "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
     --actor-num-nodes 1 \
     --actor-num-gpus-per-node "$ACTOR_NUM_GPUS_PER_NODE" \
     --rollout-num-gpus "$ROLLOUT_NUM_GPUS" \

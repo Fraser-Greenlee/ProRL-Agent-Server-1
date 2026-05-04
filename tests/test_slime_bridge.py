@@ -392,8 +392,15 @@ def test_config_defaults_off_policy_bound_to_async_level_plus_update_interval() 
     from slime_bridge.config import resolve_polar_slime_config
 
     config = resolve_polar_slime_config(
-        _worker_args(polar_max_async_level=3, update_weights_interval=1)
+        _worker_args(
+            rollout_batch_size=4,
+            n_samples_per_prompt=16,
+            polar_max_async_level=3,
+            update_weights_interval=1,
+        )
     )
+    assert config.max_concurrency == 12
+    assert config.max_session_concurrency == 192
     assert config.max_off_policy_steps == 4
 
 
@@ -448,7 +455,7 @@ def test_async_worker_drops_stale_completed_group(caplog: pytest.LogCaptureFixtu
     from slime_bridge.rollout import AsyncPolarRolloutWorker, _CompletedGroup
 
     worker = AsyncPolarRolloutWorker(
-        _worker_args(polar_max_off_policy_steps=0),
+        _worker_args(polar_max_async_level=1, update_weights_interval=1),
         _NoopDataSource(),
     )
     worker.output_queue.put(
@@ -464,7 +471,7 @@ def test_async_worker_drops_stale_completed_group(caplog: pytest.LogCaptureFixtu
     )
 
     caplog.set_level("WARNING", logger="slime_bridge.rollout")
-    assert worker.drain_completed(max_groups=1, rollout_id=1) == []
+    assert worker.drain_completed(max_groups=1, rollout_id=3) == []
     assert worker.deferred_queue.empty()
     metrics = worker.snapshot_metrics()
     assert metrics["polar/dropped_groups"] == 1.0

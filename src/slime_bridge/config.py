@@ -50,34 +50,25 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
     if "agent" not in task_template:
         raise ValueError("polar_task_template must include an agent spec")
 
-    max_concurrency = int(getattr(args, "polar_max_concurrency", getattr(args, "rollout_batch_size", 1)))
-    if max_concurrency <= 0:
-        raise ValueError("polar_max_concurrency must be greater than 0")
-
-    default_group_size = int(getattr(args, "n_samples_per_prompt", 1) or 1)
-    max_session_concurrency = int(
-        getattr(
-            args,
-            "polar_max_session_concurrency",
-            max_concurrency * max(1, default_group_size),
-        )
-    )
-    if max_session_concurrency <= 0:
-        raise ValueError("polar_max_session_concurrency must be greater than 0")
-
     max_async_level = int(getattr(args, "polar_max_async_level", 2))
     if max_async_level <= 0:
         raise ValueError("polar_max_async_level must be greater than 0")
 
-    max_off_policy_steps = int(
-        getattr(
-            args,
-            "polar_max_off_policy_steps",
-            max_async_level + int(getattr(args, "update_weights_interval", 1) or 1),
-        )
-    )
-    if max_off_policy_steps < 0:
-        raise ValueError("polar_max_off_policy_steps must be non-negative")
+    rollout_batch_size = int(getattr(args, "rollout_batch_size", 1) or 1)
+    if rollout_batch_size <= 0:
+        raise ValueError("rollout_batch_size must be greater than 0")
+
+    group_size = int(getattr(args, "n_samples_per_prompt", 1) or 1)
+    if group_size <= 0:
+        raise ValueError("n_samples_per_prompt must be greater than 0")
+
+    update_weights_interval = int(getattr(args, "update_weights_interval", 1) or 1)
+    if update_weights_interval <= 0:
+        raise ValueError("update_weights_interval must be greater than 0")
+
+    max_concurrency = rollout_batch_size * max_async_level
+    max_session_concurrency = max_concurrency * group_size
+    max_off_policy_steps = max_async_level + update_weights_interval
 
     request_timeout = getattr(args, "polar_request_timeout", None)
     if request_timeout is not None:

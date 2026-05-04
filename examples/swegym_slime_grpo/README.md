@@ -27,6 +27,5 @@ machine.
 | `polar_config.yaml` | Polar rollout task template and harness configuration |
 | `topology.yaml` | Polar cluster and gateway topology |
 | `prepare_data.py` | Builds the SWE-Gym JSONL data used by Slime |
-| `build_images.py` | Prepares Docker runtime assets for SWE-Gym tasks |
+| `prepare_apptainer_images.py` | Prepares local Apptainer SIF images and shared agent CLI assets |
 | `convert_weights.sh` | Converts model weights into the format used by Slime |
-| `Dockerfile` | Builds reusable CLI/runtime layers used by image preparation |

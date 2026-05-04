@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +10,6 @@ DATASET_NAME = "NovaSky-AI/SkyRL-v0-293-data"
 DATASET_SPLITS = ("train",)
 EXPECTED_SPLIT_SIZES = {"train": 293}
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "polar"
-RUNTIME_IMAGE_PREFIX = "polar-swegym-runtime"
 LEGACY_SWEBENCH_IMAGE_REPOS = {
     "marshmallow-code/marshmallow",
     "pydicom/pydicom",
@@ -22,25 +20,14 @@ LEGACY_SWEBENCH_IMAGE_REPOS = {
 }
 
 
-def sanitize_instance_id(instance_id: str) -> str:
-    normalized = instance_id.strip().lower()
-    normalized = re.sub(r"[^a-z0-9_.-]+", "-", normalized.replace("__", "--"))
-    normalized = re.sub(r"-{2,}", "-", normalized)
-    return normalized.strip("-")
-
-
-def base_image_for_instance_id(instance_id: str) -> str:
+def registry_image_for_instance_id(instance_id: str) -> str:
     owner, repo_with_issue = instance_id.split("__", 1)
     repo, issue_id = repo_with_issue.rsplit("-", 1)
     if f"{owner}/{repo}" in LEGACY_SWEBENCH_IMAGE_REPOS:
-        return f"docker.io/swebench/sweb.eval.x86_64.{owner}_1776_{repo}-{issue_id}:latest"
+        return f"swebench/sweb.eval.x86_64.{owner}_1776_{repo}-{issue_id}:latest"
 
     suffix = instance_id.replace("__", "_s_").lower()
-    return f"docker.io/xingyaoww/sweb.eval.x86_64.{suffix}:latest"
-
-
-def derived_runtime_image(instance_id: str) -> str:
-    return f"{RUNTIME_IMAGE_PREFIX}:{sanitize_instance_id(instance_id)}"
+    return f"xingyaoww/sweb.eval.x86_64.{suffix}:latest"
 
 
 def _cache_path_for_split(split: str) -> Path:
