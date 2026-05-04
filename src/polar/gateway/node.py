@@ -189,10 +189,6 @@ class GatewayNodeManager:
                     timer=timer,
                     session_dir=session_dir,
                     artifacts_dir=artifacts_dir,
-                    execution_deadline=(
-                        asyncio.get_running_loop().time()
-                        + request.remaining_timeout_seconds
-                    ),
                 )
             )
         except Exception:
@@ -228,6 +224,7 @@ class GatewayNodeManager:
 
     async def _handle_init(self, managed: ManagedSession) -> None:
         request = managed.request
+        self._start_execution_deadline(managed)
         managed.timer.mark("init", "started")
         try:
             runtime_spec = self._resolve_runtime_spec(request)
@@ -904,6 +901,15 @@ class GatewayNodeManager:
             )
         except asyncio.TimeoutError as exc:
             raise GatewayExecutionTimeout("session execution timeout") from exc
+
+    @staticmethod
+    def _start_execution_deadline(managed: ManagedSession) -> None:
+        if managed.execution_deadline is not None:
+            return
+        managed.execution_deadline = (
+            asyncio.get_running_loop().time()
+            + managed.request.remaining_timeout_seconds
+        )
 
     async def _run_postrun_steps(self, managed: ManagedSession) -> None:
         if not managed.postrun_steps or managed.runtime is None:

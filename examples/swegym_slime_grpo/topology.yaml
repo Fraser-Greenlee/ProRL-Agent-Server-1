@@ -11,9 +11,9 @@ gateway:
       host: 127.0.0.1
       port: 8100
       public_url: http://127.0.0.1:8100
-      max_init_workers: 32
-      max_run_workers: 64
-      max_postrun_workers: 32
+      max_init_workers: 24
+      max_run_workers: 32
+      max_postrun_workers: 24
       model_served: Qwen/Qwen3.5-4B
       sglang:
         # run.sh/launch_e2e.sh render this to the host-reachable router URL.

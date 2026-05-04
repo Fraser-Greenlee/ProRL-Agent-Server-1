@@ -155,12 +155,12 @@ class Pipeline:
 
             session.node_id = node.node_id
             session.gateway_url = node.gateway_url
-            remaining_timeout = self._remaining_timeout_seconds(session)
+            dispatch_timeout = self._remaining_timeout_seconds(session)
             dispatch_request = SessionDispatchRequest(
                 session_id=session.session_id,
                 task_id=session.task_id,
                 instruction=session.request.instruction,
-                remaining_timeout_seconds=remaining_timeout,
+                remaining_timeout_seconds=session.request.timeout_seconds,
                 callback_url=self.callback_url,
                 runtime=session.request.runtime,
                 agent=session.request.agent,
@@ -172,7 +172,7 @@ class Pipeline:
                 response = await self._client.post(
                     f"{node.gateway_url}/sessions",
                     json=dispatch_request.model_dump(mode="json"),
-                    timeout=min(30.0, remaining_timeout),
+                    timeout=min(30.0, dispatch_timeout),
                 )
                 response.raise_for_status()
                 return dispatch_request
@@ -261,45 +261,65 @@ class Pipeline:
         #   2. Gateway flips status→terminal a tick before serializing the
         #      result payload — we re-poll next iteration instead of
         #      synthesizing a failure.
-        callback_deadline = self._callback_deadline_monotonic(session)
-        poll_interval = max(self.dispatch_poll_interval_seconds, 5.0)
+        # REGISTERED is gateway queue time before INIT. Keep measuring it in
+        # session timing, but do not spend the execution timeout until INIT starts.
+        execution_timeout_started = False
+        callback_deadline: float | None = None
+        pre_init_poll_interval = self.dispatch_poll_interval_seconds
+        result_poll_interval = max(self.dispatch_poll_interval_seconds, 5.0)
 
         while True:
-            remaining = callback_deadline - time.monotonic()
-            if remaining <= 0:
-                break
+            if execution_timeout_started:
+                assert callback_deadline is not None
+                remaining = callback_deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                wait_timeout = min(result_poll_interval, remaining)
+            else:
+                wait_timeout = pre_init_poll_interval
             try:
                 return await asyncio.wait_for(
                     asyncio.shield(future),
-                    timeout=min(poll_interval, remaining),
+                    timeout=wait_timeout,
                 )
             except asyncio.TimeoutError:
                 pass
             try:
-                result = await self._poll_session_result(session, timeout=30.0)
+                status, result = await self._poll_session_state(session, timeout=30.0)
             except Exception as exc:
                 logger.debug(
                     "poll_session_result failed for session %s: %s",
                     session.session_id,
                     exc,
                 )
+                status = None
                 result = None
             if result is not None:
                 if not future.done():
                     future.set_result(result)
                 return result
+            if (
+                not execution_timeout_started
+                and status is not None
+                and status != SessionStatus.REGISTERED
+            ):
+                session.deadline_monotonic = (
+                    time.monotonic() + session.request.timeout_seconds
+                )
+                callback_deadline = self._callback_deadline_monotonic(session)
+                execution_timeout_started = True
 
         raise TimeoutError(
             f"session {dispatch_request.session_id} did not return a terminal result "
             "before the callback deadline"
         )
 
-    async def _poll_session_result(
+    async def _poll_session_state(
         self,
         session: SessionContext,
         *,
         timeout: float,
-    ) -> SessionResult | None:
+    ) -> tuple[str | None, SessionResult | None]:
         if self._client is None:
             raise RuntimeError("pipeline has not been started")
         if session.gateway_url is None:
@@ -311,16 +331,27 @@ class Pipeline:
         )
         response.raise_for_status()
         payload = response.json()
+        status = payload.get("status")
         result_payload = payload.get("result")
+        status_value = str(status) if status is not None else None
         if isinstance(result_payload, dict):
-            return SessionResult.model_validate(result_payload)
+            return status_value, SessionResult.model_validate(result_payload)
         # Gateway may flip status→terminal before the result payload is
         # serialized into the GET response. Returning None here keeps the
         # outer loop polling until either the payload lands or the callback
         # deadline expires — preventing synthesized empty-trace "failures"
         # that poisoned GRPO batches (see feedback_sglang_tool_parser.md
         # et al).
-        return None
+        return status_value, None
+
+    async def _poll_session_result(
+        self,
+        session: SessionContext,
+        *,
+        timeout: float,
+    ) -> SessionResult | None:
+        _, result = await self._poll_session_state(session, timeout=timeout)
+        return result
 
     def _remaining_timeout_seconds(self, session: SessionContext) -> float:
         remaining = session.deadline_monotonic - time.monotonic()

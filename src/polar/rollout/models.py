@@ -74,7 +74,9 @@ class TaskRequest(BaseModel):
 class SessionDispatchRequest(BaseModel):
     """Session lifecycle request sent from the rollout server to a gateway node.
 
-    `remaining_timeout_seconds` is the live session budget left at dispatch time.
+    `remaining_timeout_seconds` is the execution budget the gateway starts
+    counting when the session enters INIT. The field name is kept for wire
+    compatibility with existing clients.
     """
 
     session_id: str
