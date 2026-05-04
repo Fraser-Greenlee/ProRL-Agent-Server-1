@@ -3,10 +3,10 @@
 Every trace in ``Trajectory.traces`` becomes one Slime ``Sample``.  All
 samples produced from the same session share the same ``Sample.index``
 (the trajectory's position within the group) so the reward post-processor
-can treat them as one trajectory.  Builders own trace curation — the
-adapter does not filter; traces that lack training tokens are dropped and
-represented as fully masked samples so callers can keep the rest of the
-group trainable.
+can treat them as one trajectory.  Builders own trace curation and per-token
+loss masks — the adapter does not infer trainable positions from bridge
+details. Traces that lack training tokens are dropped and represented as fully
+masked samples so callers can keep the rest of the group trainable.
 """
 
 from __future__ import annotations
@@ -119,10 +119,10 @@ def _build_sample(
     reward_value = _reward_value(trace)
 
     trainable = status not in (Sample.Status.ABORTED, Sample.Status.FAILED)
-    loss_mask = _loss_mask_from_logprobs(
+    loss_mask = _loss_mask_from_trace(
         trace,
         len(response_ids),
-        require_logprobs=trainable,
+        require_loss_mask=trainable,
         session_id=result.session_id,
         trace_index=trace_index,
     )
@@ -300,46 +300,28 @@ def _extract_rollout_log_probs(
     return values
 
 
-def _loss_mask_from_logprobs(
+def _loss_mask_from_trace(
     trace: "Trace",
     response_len: int,
     *,
-    require_logprobs: bool,
+    require_loss_mask: bool,
     session_id: str,
     trace_index: int,
 ) -> list[int]:
-    """Build a per-token loss mask from the trace's response_logprobs.
-
-    Prefix-merging builders produce a mixed token stream: raw assistant
-    tokens interleaved with canonical interstitials (tool responses,
-    chat-template glue).  Only the former should contribute to training.
-
-    The builder marks them distinctly in ``response_logprobs``: real
-    server-returned entries include a ``"token"`` (string) field;
-    interstitial slots are synthesized as ``{"token_id": ..., "logprob":
-    0.0}`` with no ``"token"`` field.  We key the mask off that field's
-    presence — ``logprob == 0.0`` is *not* a safe discriminator because
-    legitimate high-confidence tokens can also hit logprob 0.
-
-    Trainable traces must carry one logprob entry per response token.
-    """
-    logprobs = trace.response_logprobs
-    if not logprobs:
-        if require_logprobs:
+    """Read and validate the builder-assigned per-response-token loss mask."""
+    mask = list(trace.loss_mask)
+    if not mask:
+        if require_loss_mask:
             raise RolloutLogprobError(
-                f"Session {session_id} trace {trace_index}: missing response_logprobs"
+                f"Session {session_id} trace {trace_index}: missing loss_mask"
             )
-        return [1] * response_len
-    if len(logprobs) != response_len:
+        return [0] * response_len
+    if len(mask) != response_len:
         raise RolloutLogprobError(
-            f"Session {session_id} trace {trace_index}: response_logprobs length "
-            f"{len(logprobs)} != response length {response_len}"
+            f"Session {session_id} trace {trace_index}: loss_mask length "
+            f"{len(mask)} != response length {response_len}"
         )
-    mask = [
-        1 if (isinstance(entry, dict) and "token" in entry) else 0
-        for entry in logprobs
-    ]
-    return mask
+    return [1 if int(value) else 0 for value in mask]
 
 
 def _response_ids_from_logprobs(trace: "Trace") -> list[int]:

@@ -20,20 +20,22 @@ from polar.trajectory.registry import default_evaluator_registry
 
 
 # ---------------------------------------------------------------------------
-# Trace.tools removal
+# Trace request context
 # ---------------------------------------------------------------------------
 
 
-def test_trace_has_no_tools_field() -> None:
-    assert "tools" not in Trace.model_fields
+def test_trace_has_tool_context_fields() -> None:
+    assert "tools" in Trace.model_fields
+    assert "original_tools" not in Trace.model_fields
 
 
-def test_build_trace_from_completion_ignores_tools_in_request() -> None:
+def test_build_trace_from_completion_preserves_tools_outside_prompt_messages() -> None:
+    transformed_tools = [{"type": "function", "function": {"name": "noop"}}]
     record = CompletionRecord(
         completion_id="c1",
         request={
             "messages": [{"role": "user", "content": "hi"}],
-            "tools": [{"type": "function", "function": {"name": "noop"}}],
+            "tools": transformed_tools,
         },
         response={
             "choices": [
@@ -45,8 +47,8 @@ def test_build_trace_from_completion_ignores_tools_in_request() -> None:
         },
     )
     trace = build_trace_from_completion(record)
-    # The tools entry in the request must not leak onto the trace.
-    assert not hasattr(trace, "tools")
+    # Tools are request context for debugging, not chat messages for training.
+    assert trace.tools == transformed_tools
     assert trace.prompt_messages == [{"role": "user", "content": "hi"}]
     assert trace.response_messages == [{"role": "assistant", "content": "hello"}]
 
@@ -66,6 +68,29 @@ def test_build_trace_preserves_scheduler_metadata() -> None:
     assert trace.metadata["group_id"] == 7
     assert trace.metadata["policy_version"] == 3
     assert trace.metadata["rollout_step"] == 4
+
+
+def test_build_trace_marks_response_tokens_trainable() -> None:
+    record = CompletionRecord(
+        completion_id="c1",
+        request={"messages": [{"role": "user", "content": "hi"}]},
+        response={
+            "choices": [
+                {
+                    "token_ids": [10, 11],
+                    "message": {"role": "assistant", "content": "hello"},
+                }
+            ]
+        },
+    )
+    trace = build_trace_from_completion(record)
+    assert trace.response_ids == [10, 11]
+    assert trace.loss_mask == [1, 1]
+
+
+def test_trace_rejects_misaligned_loss_mask() -> None:
+    with pytest.raises(ValueError, match="loss_mask length"):
+        Trace(response_ids=[10], loss_mask=[1, 1])
 
 
 # ---------------------------------------------------------------------------
@@ -558,7 +583,7 @@ def test_prefix_merging_merges_even_when_first_prompt_has_preamble() -> None:
 
 
 def test_prefix_merging_logprobs_layout_real_then_interstitial_then_real() -> None:
-    """Interstitial positions get logprob=0.0 (masked); raw positions keep real."""
+    """Interstitial positions get loss_mask=0; raw positions keep real logprobs."""
     sys_user = [
         {"role": "system", "content": "sys"},
         {"role": "user", "content": "u"},
@@ -583,13 +608,17 @@ def test_prefix_merging_logprobs_layout_real_then_interstitial_then_real() -> No
     trace = traj.traces[0]
     assert trace.response_logprobs is not None
     assert len(trace.response_logprobs) == len(trace.response_ids)
+    assert len(trace.loss_mask) == len(trace.response_ids)
     # raw_1 slots have real (-0.1) logprobs.
     for pos in range(len(asst1_raw)):
         assert trace.response_logprobs[pos]["logprob"] == -0.1
+        assert trace.loss_mask[pos] == 1
     # raw_2 slots also real.
     raw2_start = len(trace.response_ids) - len(asst2_raw)
     for pos in range(raw2_start, len(trace.response_ids)):
         assert trace.response_logprobs[pos]["logprob"] == -0.1
+        assert trace.loss_mask[pos] == 1
     # Interstitial slots between them have zero logprob.
     for pos in range(len(asst1_raw), raw2_start):
         assert trace.response_logprobs[pos]["logprob"] == 0.0
+        assert trace.loss_mask[pos] == 0

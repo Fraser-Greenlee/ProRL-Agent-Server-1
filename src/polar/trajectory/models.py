@@ -91,12 +91,31 @@ class Trace(BaseModel):
 
     prompt_ids: list[int] = Field(default_factory=list)
     response_ids: list[int] = Field(default_factory=list)
+    loss_mask: list[int] = Field(default_factory=list)
     prompt_messages: list[dict[str, Any]] = Field(default_factory=list)
     response_messages: list[dict[str, Any]] = Field(default_factory=list)
+    tools: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
     response_logprobs: list[dict[str, Any]] | None = None
     reward: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("loss_mask")
+    @classmethod
+    def _validate_loss_mask_values(cls, value: list[int]) -> list[int]:
+        normalized: list[int] = []
+        for item in value:
+            mask_value = int(item)
+            if mask_value not in (0, 1):
+                raise ValueError("loss_mask values must be 0 or 1")
+            normalized.append(mask_value)
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_loss_mask_length(self) -> "Trace":
+        if self.loss_mask and len(self.loss_mask) != len(self.response_ids):
+            raise ValueError("loss_mask length must match response_ids length")
+        return self
 
 
 class Trajectory(BaseModel):

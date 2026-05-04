@@ -502,9 +502,10 @@ class OpenAIResponsesTransformer(BaseTransformer):
 
             parameters = tool.get("parameters")
             if parameters is None:
-                input_schema = tool.get("inputSchema")
+                input_schema = tool.get("inputSchema") or tool.get("input_schema")
                 if isinstance(input_schema, dict):
-                    parameters = input_schema.get("jsonSchema", {})
+                    json_schema = input_schema.get("jsonSchema")
+                    parameters = json_schema if isinstance(json_schema, dict) else input_schema
                 else:
                     parameters = {}
 

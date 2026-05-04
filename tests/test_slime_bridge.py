@@ -245,6 +245,7 @@ def test_session_result_to_samples_drops_empty_token_traces(monkeypatch) -> None
             Trace(
                 prompt_ids=[1, 2],
                 response_ids=[3, 4],
+                loss_mask=[1, 1],
                 response_logprobs=[
                     {"token": "a", "token_id": 3, "logprob": -0.3},
                     {"token": "b", "token_id": 4, "logprob": -0.4},
@@ -274,8 +275,8 @@ def test_session_result_to_samples_drops_empty_token_traces(monkeypatch) -> None
 
 
 # ---------------------------------------------------------------------------
-# Adapter — loss_mask masks canonical interstitials but keeps real assistant
-# tokens even when their logprob is exactly 0 (high-confidence predictions).
+# Adapter — consumes builder-assigned loss_mask instead of deriving it from
+# response_logprobs.
 # ---------------------------------------------------------------------------
 
 
@@ -286,19 +287,20 @@ def test_session_result_to_samples_masks_canonical_interstitial(monkeypatch) -> 
 
     monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
 
-    # Mixed response: real assistant (real logprob), real assistant (logprob=0
-    # but still the model's own sample), canonical interstitial (no "token"
-    # field), real assistant again.
+    # Mixed response: real assistant, canonical interstitial, real assistant
+    # again. Every logprob entry has a token field here; the adapter should
+    # still trust the builder-supplied loss_mask.
     response_logprobs = [
         {"token": "<a>", "token_id": 10, "logprob": -0.5},
-        {"token": "<b>", "token_id": 11, "logprob": 0.0},       # legit p=1 sample
-        {"token_id": 12, "logprob": 0.0},                        # interstitial
-        {"token_id": 13, "logprob": 0.0},                        # interstitial
+        {"token": "<b>", "token_id": 11, "logprob": 0.0},
+        {"token": "<i1>", "token_id": 12, "logprob": 0.0},
+        {"token": "<i2>", "token_id": 13, "logprob": 0.0},
         {"token": "<c>", "token_id": 14, "logprob": -0.2},
     ]
     trace = Trace(
         prompt_ids=[1, 2],
         response_ids=[10, 11, 12, 13, 14],
+        loss_mask=[1, 1, 0, 0, 1],
         response_logprobs=response_logprobs,
         finish_reason="stop",
     )
@@ -330,7 +332,12 @@ def test_session_result_to_samples_requires_logprobs_for_trainable_trace(monkeyp
 
     monkeypatch.setattr(adapter, "_load_sample_type", lambda: _FakeSample)
 
-    trace = Trace(prompt_ids=[1], response_ids=[10, 11, 12], finish_reason="stop")
+    trace = Trace(
+        prompt_ids=[1],
+        response_ids=[10, 11, 12],
+        loss_mask=[1, 1, 1],
+        finish_reason="stop",
+    )
     trajectory = Trajectory(status="COMPLETED", traces=[trace])
     result = SessionResult(
         session_id="s1",

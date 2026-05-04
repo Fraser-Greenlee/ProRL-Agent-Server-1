@@ -25,8 +25,8 @@ Design in two stages:
      tokenization.  The boundary between "canonical copy of the previous
      assistant body" and the actual interstitial is the first end-of-turn
      token (``<|im_end|>`` on Qwen / ChatML; auto-detected or configurable).
-   - Interstitial slots get synthesized logprobs with no ``token`` field,
-     which the downstream adapter uses to zero their loss mask.
+   - Interstitial slots get synthesized logprobs and a zero ``loss_mask``;
+     sampled assistant slots keep their real logprobs and a one ``loss_mask``.
 
 See ``docs/prefix_merging_algorithm.md`` for a full walkthrough with
 examples, invariants, and edge cases.
@@ -237,6 +237,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         prompt_ids = list(first_trace.prompt_ids)
         stream_ids: list[int] = list(prompt_ids)
         response_slots: list[dict[str, Any] | None] = []
+        loss_mask: list[int] = []
         response_messages: list[dict[str, Any]] = []
 
         # Track the canonical prompt_ids of the most recently merged
@@ -247,7 +248,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         # Running count of messages consumed = prompt_messages + all response_messages emitted.
         msg_acc = len(first_trace.prompt_messages)
 
-        self._append_response_tokens(first_trace, stream_ids, response_slots)
+        self._append_response_tokens(first_trace, stream_ids, response_slots, loss_mask)
         response_messages.extend(deepcopy(m) for m in first_trace.response_messages)
         msg_acc += len(first_trace.response_messages)
         kept = 1
@@ -291,6 +292,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
             if interstitial:
                 stream_ids.extend(interstitial)
                 response_slots.extend([None] * len(interstitial))
+                loss_mask.extend([0] * len(interstitial))
 
             # Message-level interstitial bookkeeping.
             if len(Ci_trace.prompt_messages) > msg_acc:
@@ -298,7 +300,7 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
                 response_messages.extend(deepcopy(m) for m in interstitial_msgs)
                 msg_acc += len(interstitial_msgs)
 
-            self._append_response_tokens(Ci_trace, stream_ids, response_slots)
+            self._append_response_tokens(Ci_trace, stream_ids, response_slots, loss_mask)
             response_messages.extend(deepcopy(m) for m in Ci_trace.response_messages)
             msg_acc += len(Ci_trace.response_messages)
 
@@ -319,8 +321,10 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         return Trace(
             prompt_ids=prompt_ids,
             response_ids=response_ids,
+            loss_mask=loss_mask,
             prompt_messages=[deepcopy(m) for m in first_trace.prompt_messages],
             response_messages=response_messages,
+            tools=deepcopy(first_trace.tools),
             finish_reason=last_kept_trace.finish_reason,
             response_logprobs=response_logprobs,
             metadata=self._chain_metadata(chain[:kept]),
@@ -385,10 +389,15 @@ class PrefixMergingBuilder(BaseTrajectoryBuilder):
         trace: Trace,
         stream_ids: list[int],
         response_slots: list[dict[str, Any] | None],
+        loss_mask: list[int],
     ) -> None:
         """Append a completion's response_ids and parallel logprob slots."""
         response_ids = list(trace.response_ids)
         stream_ids.extend(response_ids)
+        trace_loss_mask = list(trace.loss_mask) or [1] * len(response_ids)
+        if len(trace_loss_mask) != len(response_ids):
+            raise ValueError("trace loss_mask length must match response_ids length")
+        loss_mask.extend(trace_loss_mask)
         logprobs = trace.response_logprobs or []
         for pos in range(len(response_ids)):
             entry = logprobs[pos] if pos < len(logprobs) else None
