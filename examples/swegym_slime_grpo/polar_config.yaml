@@ -8,7 +8,7 @@ polar_max_concurrency: 16
 polar_max_session_concurrency: 128
 polar_max_async_level: 2
 polar_max_off_policy_steps: 3
-polar_request_timeout: 900
+polar_request_timeout: 2400
 polar_callback_host: "127.0.0.1"
 polar_allow_weight_update_overlap: false
 polar_weight_update_pause_timeout: 300
@@ -22,7 +22,7 @@ polar_instruction_template: |
 # Task template rendered per sample group.  Placeholders are filled
 # from the context: {instruction}, {num_samples}, {sample.*}, {args.*}.
 polar_task_template:
-  timeout_seconds: 900
+  timeout_seconds: 2400
   runtime:
     backend: "docker"
     # Use the official SWE-Gym base image directly and mount one shared

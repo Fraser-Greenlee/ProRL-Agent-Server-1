@@ -16,8 +16,13 @@ from polar.rollout.timer import StageTimer
 from polar.trajectory.models import Trajectory
 
 
-def test_session_timing_has_three_phases() -> None:
-    assert set(SessionTiming.model_fields) == {"init_ms", "run_ms", "postrun_ms"}
+def test_session_timing_has_public_fields() -> None:
+    assert set(SessionTiming.model_fields) == {
+        "register_to_init_queue_ms",
+        "init_ms",
+        "run_ms",
+        "postrun_ms",
+    }
 
 
 def test_session_timing_accepts_only_the_three_phases() -> None:
@@ -27,6 +32,7 @@ def test_session_timing_accepts_only_the_three_phases() -> None:
 
 def test_stage_timer_rolls_build_eval_teardown_into_postrun() -> None:
     timer = StageTimer()
+    timer.mark("dispatch", "started")
     timer.mark("init", "started")
     timer.mark("init", "finished")
     timer.mark("run", "started")
@@ -41,6 +47,7 @@ def test_stage_timer_rolls_build_eval_teardown_into_postrun() -> None:
     timer.mark("postrun", "finished")
 
     timing = timer.to_session_timing()
+    assert timing.register_to_init_queue_ms >= 0
     assert timing.init_ms >= 0
     assert timing.run_ms >= 0
     # postrun spans the outer postrun start/finish, so it covers build/eval/teardown.
@@ -62,7 +69,12 @@ def test_session_status_strenum_serializes_as_string() -> None:
     )
     payload = json.loads(result.model_dump_json())
     assert payload["status"] == "COMPLETED"
-    assert payload["timing"] == {"init_ms": 0.0, "run_ms": 0.0, "postrun_ms": 0.0}
+    assert payload["timing"] == {
+        "register_to_init_queue_ms": 0.0,
+        "init_ms": 0.0,
+        "run_ms": 0.0,
+        "postrun_ms": 0.0,
+    }
 
 
 def test_session_status_terminal_and_active_partition() -> None:

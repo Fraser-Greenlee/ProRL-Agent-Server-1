@@ -101,13 +101,15 @@ class SessionDispatchResponse(BaseModel):
 class SessionTiming(BaseModel):
     """Per-session durations in milliseconds.
 
-    Three phases only: runtime startup + prepare (`init_ms`), agent harness
-    execution (`run_ms`), and everything after the agent stops — build, eval,
-    teardown — rolled into (`postrun_ms`). Total wall-clock is the sum.
+    Public session timing used for rollout metrics. `register_to_init_queue_ms`
+    captures gateway-side waiting before INIT starts; the other three fields
+    cover runtime startup + prepare, agent harness execution, and post-run work
+    (build/eval/teardown).
     """
 
     model_config = ConfigDict(extra="forbid")
 
+    register_to_init_queue_ms: float = 0.0
     init_ms: float = 0.0
     run_ms: float = 0.0
     postrun_ms: float = 0.0

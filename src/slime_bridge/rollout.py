@@ -1137,10 +1137,6 @@ def _build_metrics(
     reward_filter: str = "all",
 ) -> dict[str, Any]:
     flat_samples = [sample for group in output_groups for sample in group]
-    session_results = [result for task_result in task_results for result in task_result.results]
-    completed_sessions = sum(1 for r in session_results if r.status == "COMPLETED")
-    failed_sessions = sum(1 for r in session_results if r.status == "ERROR")
-    timed_out_sessions = sum(1 for r in session_results if r.status == "TIMEOUT")
     all_rewards = [_extract_sample_reward(s, config.reward_key) for s in flat_samples]
     completed_rewards = [
         _extract_sample_reward(s, config.reward_key)
@@ -1152,23 +1148,7 @@ def _build_metrics(
         rewards = completed_rewards
     else:
         raise ValueError("reward_filter must be 'all' or 'completed'")
-    metrics: dict[str, Any] = {
-        "polar/completed_sessions": completed_sessions,
-        "polar/failed_sessions": failed_sessions,
-        "polar/group_count": len(output_groups),
-        "polar/sample_count": len(flat_samples),
-        "polar/task_count": len(task_results),
-        "polar/timed_out_sessions": timed_out_sessions,
-    }
-    if all_rewards:
-        metrics["polar/reward_all_mean"] = sum(all_rewards) / len(all_rewards)
-    if completed_rewards:
-        metrics["polar/reward_completed_mean"] = (
-            sum(completed_rewards) / len(completed_rewards)
-        )
-    metrics["polar/reward_count"] = len(rewards)
-    if rewards:
-        metrics["polar/reward_mean"] = sum(rewards) / len(rewards)
+    metrics: dict[str, Any] = {}
     metrics.update(_polar_extra_metrics(flat_samples, rewards))
     return metrics
 
@@ -1192,7 +1172,6 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
     target = getattr(args, "rollout_batch_size", 1)
 
     data: list[list[Any]] = []
-    staleness_values: list[int] = []
     start = time.monotonic()
     last_progress = start
 
@@ -1204,9 +1183,6 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
         )
         for completed in completed_groups:
             data.append(completed.samples)
-            staleness_values.append(
-                max(0, int(rollout_id) - completed.policy_version)
-            )
             made_progress = True
 
         now = time.monotonic()
@@ -1230,16 +1206,7 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
     RolloutFnTrainOutput = _load_rollout_train_output_type()
     flat = [s for g in data for s in g]
     rewards = [_extract_sample_reward(s, async_worker.config.reward_key) for s in flat]
-    metrics: dict[str, Any] = {
-        "polar/sample_count": len(flat),
-        "polar/group_count": len(data),
-    }
-    if staleness_values:
-        metrics["polar/staleness/mean"] = sum(staleness_values) / len(staleness_values)
-        metrics["polar/staleness/max"] = max(staleness_values)
-    if rewards:
-        metrics["polar/reward_mean"] = sum(rewards) / len(rewards)
-    metrics.update(async_worker.snapshot_metrics())
+    metrics: dict[str, Any] = {}
     metrics.update(_polar_extra_metrics(flat, rewards))
     return RolloutFnTrainOutput(samples=data, metrics=metrics)
 
@@ -1355,83 +1322,64 @@ def _extract_sample_reward(sample: Any, reward_key: str) -> float:
 
 
 def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[str, float]:
-    """Session-level aggregates: timing means, reward std, usable vs
-    placeholder sample counts, and traces-per-session mean.
-
-    Placeholder samples are emitted by ``slime_bridge.adapter`` when a
-    Polar session returned zero usable traces (typically the pipeline
-    race or a genuine agent failure). Separating them from real samples
-    is critical for spotting reward collapses caused by the rollout
-    pipeline rather than the model.
-    """
+    """Compact user-facing Polar metrics for W&B."""
     out: dict[str, float] = {}
     seen: set[str] = set()
+    register_to_init_queue_ms: list[float] = []
     init_ms: list[float] = []
     run_ms: list[float] = []
     postrun_ms: list[float] = []
     session_is_placeholder: dict[str, bool] = {}
-    session_trace_count: dict[str, int] = {}
     session_report: dict[str, dict[str, Any]] = {}
     policy_staleness: list[float] = []
-    zombie_samples = 0
     for sample in flat_samples:
         polar_meta = sample.metadata.get("polar", {})
         if "policy_staleness" in polar_meta:
             policy_staleness.append(float(polar_meta["policy_staleness"]))
         session_id = polar_meta.get("session_id")
         is_placeholder = bool(polar_meta.get("placeholder"))
-        if is_placeholder:
-            zombie_samples += 1
         if not session_id:
             continue
         if session_id not in seen:
             seen.add(session_id)
             timing = polar_meta.get("timing") or {}
-            init_ms.append(float(timing.get("init_ms", 0.0)))
-            run_ms.append(float(timing.get("run_ms", 0.0)))
-            postrun_ms.append(float(timing.get("postrun_ms", 0.0)))
+            if timing:
+                register_to_init_queue_ms.append(
+                    float(timing.get("register_to_init_queue_ms", 0.0))
+                )
+                init_ms.append(float(timing.get("init_ms", 0.0)))
+                run_ms.append(float(timing.get("run_ms", 0.0)))
+                postrun_ms.append(float(timing.get("postrun_ms", 0.0)))
             session_is_placeholder[session_id] = is_placeholder
-            session_trace_count[session_id] = 0 if is_placeholder else 1
             evaluation = (polar_meta.get("trajectory_metadata") or {}).get("evaluation") or {}
             report = evaluation.get("report") or {}
-            if isinstance(report, dict):
+            if isinstance(report, dict) and report:
                 session_report[session_id] = report
-        elif not is_placeholder:
-            session_trace_count[session_id] += 1
 
     if init_ms:
+        out["polar/session_ms/register_to_init_queue_mean"] = (
+            sum(register_to_init_queue_ms) / len(register_to_init_queue_ms)
+        )
         out["polar/session_ms/init_mean"] = sum(init_ms) / len(init_ms)
         out["polar/session_ms/run_mean"] = sum(run_ms) / len(run_ms)
         out["polar/session_ms/postrun_mean"] = sum(postrun_ms) / len(postrun_ms)
+    if rewards:
+        out["polar/reward_mean"] = sum(rewards) / len(rewards)
     if len(rewards) > 1:
         out["polar/reward_std"] = statistics.pstdev(rewards)
     if policy_staleness:
-        out["polar/staleness/sample_mean"] = sum(policy_staleness) / len(policy_staleness)
-        out["polar/staleness/sample_max"] = max(policy_staleness)
+        out["polar/staleness/mean"] = sum(policy_staleness) / len(policy_staleness)
 
     total_sessions = len(seen)
     empty_sessions = sum(1 for p in session_is_placeholder.values() if p)
-    out["polar/zombie_samples"] = float(zombie_samples)
-    out["polar/usable_samples"] = float(len(flat_samples) - zombie_samples)
-    out["polar/empty_sessions"] = float(empty_sessions)
-    out["polar/total_sessions"] = float(total_sessions)
     if total_sessions > 0:
-        out["polar/traces_per_session/mean"] = (
-            sum(session_trace_count.values()) / total_sessions
-        )
+        out["polar/rollout_success_rate"] = (
+            total_sessions - empty_sessions
+        ) / total_sessions
     if session_report:
         graded_sessions = len(session_report)
         resolved = sum(1 for r in session_report.values() if r.get("resolved"))
-        failed_apply = sum(1 for r in session_report.values() if r.get("failed_apply_patch"))
-        empty_gen = sum(1 for r in session_report.values() if r.get("empty_generation"))
-        error_eval = sum(1 for r in session_report.values() if r.get("error_eval"))
-        test_timeout = sum(1 for r in session_report.values() if r.get("test_timeout"))
-        out["polar/eval/graded_sessions"] = float(graded_sessions)
         out["polar/eval/resolved_rate"] = resolved / graded_sessions
-        out["polar/eval/failed_apply_rate"] = failed_apply / graded_sessions
-        out["polar/eval/empty_generation_rate"] = empty_gen / graded_sessions
-        out["polar/eval/error_eval_rate"] = error_eval / graded_sessions
-        out["polar/eval/test_timeout_rate"] = test_timeout / graded_sessions
     return out
 
 

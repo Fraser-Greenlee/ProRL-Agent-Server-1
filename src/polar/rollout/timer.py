@@ -27,6 +27,7 @@ class StageTimer:
     def to_session_timing(self) -> SessionTiming:
         """Return durations for the init/run/post-run lifecycle."""
         return SessionTiming(
+            register_to_init_queue_ms=self._span_ms("dispatch_started", "init_started"),
             init_ms=self._duration_ms("init"),
             run_ms=self._duration_ms("run"),
             postrun_ms=self._postrun_span_ms(),
@@ -35,6 +36,13 @@ class StageTimer:
     def _duration_ms(self, stage: str) -> float:
         started = self._marks.get(f"{stage}_started")
         finished = self._marks.get(f"{stage}_finished") or started
+        if started is None or finished is None:
+            return 0.0
+        return max(0.0, (finished - started) * 1000.0)
+
+    def _span_ms(self, start_mark: str, end_mark: str) -> float:
+        started = self._marks.get(start_mark)
+        finished = self._marks.get(end_mark)
         if started is None or finished is None:
             return 0.0
         return max(0.0, (finished - started) * 1000.0)

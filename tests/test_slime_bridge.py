@@ -707,12 +707,73 @@ def test_eval_metrics_use_completed_sessions_for_display_reward() -> None:
         reward_filter="completed",
     )
 
-    assert metrics["polar/completed_sessions"] == 1
-    assert metrics["polar/timed_out_sessions"] == 1
     assert metrics["polar/reward_mean"] == 1.0
-    assert metrics["polar/reward_completed_mean"] == 1.0
-    assert metrics["polar/reward_all_mean"] == 0.5
-    assert metrics["polar/reward_count"] == 1
+    assert metrics["polar/rollout_success_rate"] == 0.5
+    assert set(metrics) == {
+        "polar/reward_mean",
+        "polar/rollout_success_rate",
+    }
+
+
+def test_polar_metrics_are_compact_user_facing_set() -> None:
+    from slime_bridge import rollout
+
+    config = rollout.resolve_polar_slime_config(_worker_args())
+    ok_sample = SimpleNamespace(
+        reward={"score": 1.0},
+        metadata={
+            "polar": {
+                "session_id": "s-ok",
+                "policy_staleness": 1,
+                "timing": {
+                    "register_to_init_queue_ms": 10.0,
+                    "init_ms": 20.0,
+                    "run_ms": 30.0,
+                    "postrun_ms": 40.0,
+                },
+                "trajectory_metadata": {
+                    "evaluation": {"report": {"resolved": True}},
+                },
+            }
+        },
+    )
+    empty_sample = SimpleNamespace(
+        reward={"score": 0.0},
+        metadata={
+            "polar": {
+                "session_id": "s-empty",
+                "placeholder": True,
+                "policy_staleness": 3,
+                "timing": {
+                    "register_to_init_queue_ms": 30.0,
+                    "init_ms": 40.0,
+                    "run_ms": 50.0,
+                    "postrun_ms": 60.0,
+                },
+                "trajectory_metadata": {
+                    "evaluation": {"report": {"resolved": False}},
+                },
+            }
+        },
+    )
+
+    metrics = rollout._build_metrics(
+        config,
+        [SimpleNamespace(results=[])],
+        [[ok_sample, empty_sample]],
+    )
+
+    assert metrics == {
+        "polar/session_ms/register_to_init_queue_mean": 20.0,
+        "polar/session_ms/init_mean": 30.0,
+        "polar/session_ms/run_mean": 40.0,
+        "polar/session_ms/postrun_mean": 50.0,
+        "polar/reward_mean": 0.5,
+        "polar/reward_std": 0.5,
+        "polar/staleness/mean": 2.0,
+        "polar/rollout_success_rate": 0.5,
+        "polar/eval/resolved_rate": 0.5,
+    }
 
 
 def test_submit_and_wait_continues_after_transient_poll_read_error() -> None:

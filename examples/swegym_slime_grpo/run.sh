@@ -7,8 +7,8 @@
 # RL requires the SGLang VLM input_ids patch (see MEMORY.md).
 #
 # GPU layout (8x B200, default):
-#   GPU 0-3     – Megatron GRPO training (TP=2, DP=2)
-#   GPU 4-7     – SGLang inference (4 engines × TP=1, managed by Slime/Ray)
+#   GPU 0-1     – Megatron GRPO training (TP=2, DP=1)
+#   GPU 2-7     – SGLang inference (6 engines × TP=1, managed by Slime/Ray)
 #
 # Port layout:
 #   9000        – SGLang router (slime-managed, load-balances engines)
@@ -211,13 +211,13 @@ RUNTIME_ENV_JSON="{
   }
 }"
 
-ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-4}"
-ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-4}"
+ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-2}"
+ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-6}"
 ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
-ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-8}"
-N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
+ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
+N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
 
-# Rollout sizing: 8 prompts × 8 trajectories = 64 trajectories/rollout.
+# Rollout sizing: 4 prompts × 16 trajectories = 64 trajectories/rollout.
 # This matches the earlier high-util baseline and keeps request groups smaller
 # so long tails do not collapse usable token throughput.
 # With --dynamic-history each trajectory explodes into one sample per trace,
