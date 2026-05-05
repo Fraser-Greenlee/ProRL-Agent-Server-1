@@ -14,10 +14,6 @@ expected to change as the example evolves.
 bash examples/swegym_slime_grpo/launch_e2e.sh
 ```
 
-The launcher prepares the local pieces needed by the example and then starts the
-run. Review the scripts below for the current setup before launching on a new
-machine.
-
 ## Files
 
 | File | Purpose |

@@ -238,6 +238,7 @@ ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-6}"
 ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
 N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
+MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-80000}"
 
 # Rollout sizing: 4 prompts × 16 trajectories = 64 trajectories/rollout.
 # This matches the earlier high-util baseline and keeps request groups smaller
@@ -289,7 +290,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --recompute-method uniform \
     --recompute-num-layers 1 \
     --use-dynamic-batch-size \
-    --max-tokens-per-gpu 80000 \
+    --max-tokens-per-gpu "$MAX_TOKENS_PER_GPU" \
     --log-probs-chunk-size 256 \
     --advantage-estimator grpo \
     --normalize-advantages \
