@@ -1,112 +1,94 @@
-# Agent Rollout Server
+# ProRL Agent Server (POLAR)
 
-An ultra-flexible rollout protocol for running **full async** agent RL
-on **ANY** agent harness.  It sits between your agent harness (Claude Code, OpenCode, Codex, OpenHands ...)
-and your model, transparently listening to LLM calls and reconstruct completions into trainable agent trajectories and rewards.
+**Polar** is a lightweight RL rollout framework targeting real-world aegnt harnesses. 
 
 <p align="center">
-  <img src="assets/arp.svg" alt="Agent Rollout Protocol logo" width="800"/>
+  <img src="assets/polar-logo.png" alt="Polar rollout architecture" width="360" />
 </p>
 
 
----
 
-## Core Features
+It features:
 
-### Rollout as a Service
+1. **Any Harness as Environment.** Trajectories are captured via API proxy, reconstruced and evaluated into token-faithful samples. Register your custom logic without friction.
+2. **Efficient Rollout Pipeline.** Maximizing GPU utilization by async staging and runtime prewarm.
+3. **Rollout as a Service.** Server mode by design -- for easy integration with training frameworks, Async RL and scaling.
 
-Submit a single task request and the rollout server handles the rest — dispatching *N* parallel sessions across a pool of gateway nodes, load-balancing, health tracking and collecting async trajectories through gateway node callbacks.
 
-### Framework Agnostic Agent Rollout
-
-With the unique proxy-rerouting design, ARP can be used to rollout **ANY** agent harness and environments by subscribing to internal requests.
-Register your own agent harnesses as a shell command or reuse our integrated ones.
-
-### Async Staging
-
-Inspired by [ProRL Agent Server](https://github.com/NVIDIA-NeMo/ProRL-Agent-Server) and SkyRL, `INIT` submits prepared runtimes to `READY` buffer for async `RUN` collection, sending time-consuming CPU-bound docker / apptainer initializations to the background, and maximizing system GPU utilization.
-
+## Architecture Overview
 <p align="center">
-  <img src="assets/skyrl.png" alt="Async Pipeline" width="800"/>
+  <img src="assets/polar_arch.svg" alt="Polar rollout architecture" width="860"/>
 </p>
 
-### Flexible Trajectory Construction
+*The Rollout Server manages and dispatches client requests into distributed Gateway Nodes, which asynchronously prepare runtime, execute agents, build trajectories and evaluate them. Agent harnesses are listened by a proxy that sits between agnostic agent execution processes and local inference servers.*
 
-Completion records are assembled into structured traces via extensible builders:
-
-| Builder | Behavior |
-|---------|----------|
-| `per_request` | One trace per completion — simple and lossless |
-| `prefix_merging` | Merges consecutive completions into longer multi-turn traces when each prompt is exactly the prior prompt + response; splits on context compaction |
-
----
 
 ## Installation
 
 ```bash
-uv pip install -e .              # core gateway + rollout server
-uv pip install -e ".[slime]"     # include Slime trainer bridge
+uv venv
+uv pip install -e .
 ```
 
-Install and run SGLang separately (see the [SGLang docs](https://docs.sglang.ai/)).
-
-## Quick Start
-
-See [examples/calculator/README.md](examples/calculator/README.md) for a minimal example to run with single machine with 2 x (>24G) GPUs.
-
-## CLI
+SGLang is installed and launched separately.
 
 ```bash
-polar serve_rollout -c topology.yaml
-polar serve_gateway -c topology.yaml --node-id node-a
-polar submit task.json -c topology.yaml
-polar status -c topology.yaml
+uv pip install --prerelease=allow sglang==0.5.10
+bash scripts/patch/patch_sglang.sh
 ```
 
-`polar submit` accepts JSON and YAML task files. `polar status` shows rollout health, registered nodes, queue pressure, and task states.
+For SWE-bench evaluation support:
 
-## Example Topology File
-
-```yaml
-rollout:
-  host: 127.0.0.1
-  port: 8080
-  public_url: http://127.0.0.1:8080
-  save_dir: ./rollout_results
-
-gateway:
-  heartbeat_interval_seconds: 30
-  nodes:
-    - id: localhost-node-01
-      host: 127.0.0.1
-      port: 8100
-      public_url: http://127.0.0.1:8100
-      model_served: Qwen/Qwen3.5-4B
-      max_init_workers: 8
-      max_run_workers: 4
-      max_postrun_workers: 4
-      sglang:
-        base_url: http://127.0.0.1:8000
+```bash
+uv pip install -e ".[swebench]"
 ```
 
-## Example Task Shape
+**Polar** itself is trainer agnostic. Currently, we provide a demo-purpose [Slime](https://github.com/THUDM/slime) integration in [Slime bridge installation guide](src/slime_bridge/README.md#slime-installation).
 
-```json
-{
-  "task_id": "example-task-001",
-  "instruction": "Write a calculator and save it as calculator.py",
-  "num_samples": 8,
-  "timeout_seconds": 900,
-  "runtime": {
-    "backend": "docker",
-    "image": "polar-localhost-codex:latest",
-    "workdir": "/polar/session/workspace",
-    "network": "host"
-  },
-  "agent": {
-    "harness": "codex",
-    "model_name": "openai/gpt-5.4"
-  },
-  "builder": {"strategy": "prefix_merging"}
-}
-```
+
+## Developer Guide
+
+- [Customize agent harnesses](src/polar/agent/README.md): choose a built-in harness, or use the shell harness for wrapped agent execution command.
+- [Customize trajectory build and evaluation](src/polar/trajectory/README.md):
+  choose or register builders and evaluators. See [builder](src/polar/trajectory/builder/README.md) and
+  [evaluator](src/polar/trajectory/evaluator/README.md) guides for built-in strategies.
+- [Topology configuration](src/polar/config/README.md): define
+  rollout and gateway nodes, networking, worker limits, and model endpoints.
+- [Rollout request configuration](src/polar/rollout/README.md): trainer / client side task submission.
+
+
+
+## Examples
+
+- [Calculator](examples/calculator/README.md): minimal smoke test without extra runtime dependency.
+- [SWE-bench Verified](examples/swebench_verified/README.md): benchmark-style
+  evaluation on SWE-bench Verified tasks.
+- [SWE-Gym Slime GRPO](examples/swegym_slime_grpo/README.md): training
+  path that connects Polar rollouts to Slime.
+
+This project is under early development. We are actively adding new examples for different tasks / models on diverse hardware setups. **Contributions are welcome!**
+
+
+
+## Roadmap
+
+<table>
+<tr>
+<td width="65%" valign="top">
+
+Our development goal for **Polar** is to stay low-intrusion and neutral, finding the lowest common ancestor to cover and support diverse training and inference frameworks.
+
+- [x] Initial release & tech report.
+- [x] Slime bridge & RL example.
+- [ ] vLLM dual inference support.
+- [ ] More trainer bridge examples.
+- [ ] CUA (VLM / VLA) (OSWorld) Support.
+
+</td>
+<td width="35%" align="center" valign="middle">
+  <img src="assets/rl-ecosystem.png" alt="Polar rollout architecture" width="300"/>
+</td>
+</tr>
+</table>
+
+

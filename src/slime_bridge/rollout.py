@@ -1149,7 +1149,7 @@ def _build_metrics(
     else:
         raise ValueError("reward_filter must be 'all' or 'completed'")
     metrics: dict[str, Any] = {}
-    metrics.update(_polar_extra_metrics(flat_samples, rewards))
+    metrics.update(_polar_extra_metrics(flat_samples, rewards, config.reward_key))
     return metrics
 
 
@@ -1207,7 +1207,7 @@ def generate_rollout_polar_async(args: Any, rollout_id: int, data_source: Any, e
     flat = [s for g in data for s in g]
     rewards = [_extract_sample_reward(s, async_worker.config.reward_key) for s in flat]
     metrics: dict[str, Any] = {}
-    metrics.update(_polar_extra_metrics(flat, rewards))
+    metrics.update(_polar_extra_metrics(flat, rewards, async_worker.config.reward_key))
     return RolloutFnTrainOutput(samples=data, metrics=metrics)
 
 
@@ -1321,7 +1321,11 @@ def _extract_sample_reward(sample: Any, reward_key: str) -> float:
     return 0.0
 
 
-def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[str, float]:
+def _polar_extra_metrics(
+    flat_samples: list[Any],
+    rewards: list[float],
+    reward_key: str,
+) -> dict[str, float]:
     """Compact user-facing Polar metrics for W&B."""
     out: dict[str, float] = {}
     seen: set[str] = set()
@@ -1331,6 +1335,7 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
     postrun_ms: list[float] = []
     session_is_placeholder: dict[str, bool] = {}
     session_report: dict[str, dict[str, Any]] = {}
+    completed_session_rewards: list[float] = []
     policy_staleness: list[float] = []
     for sample in flat_samples:
         polar_meta = sample.metadata.get("polar", {})
@@ -1355,6 +1360,10 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
             report = evaluation.get("report") or {}
             if isinstance(report, dict) and report:
                 session_report[session_id] = report
+            if _sample_session_status(sample) == "COMPLETED" and not is_placeholder:
+                completed_session_rewards.append(
+                    _extract_sample_reward(sample, reward_key)
+                )
 
     if init_ms:
         out["polar/session_ms/register_to_init_queue_mean"] = (
@@ -1367,6 +1376,10 @@ def _polar_extra_metrics(flat_samples: list[Any], rewards: list[float]) -> dict[
         out["polar/reward_mean"] = sum(rewards) / len(rewards)
     if len(rewards) > 1:
         out["polar/reward_std"] = statistics.pstdev(rewards)
+    if completed_session_rewards:
+        out["polar/reward_mean_completed"] = (
+            sum(completed_session_rewards) / len(completed_session_rewards)
+        )
     if policy_staleness:
         out["polar/staleness/mean"] = sum(policy_staleness) / len(policy_staleness)
 

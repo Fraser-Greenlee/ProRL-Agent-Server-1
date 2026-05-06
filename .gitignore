@@ -1,23 +1,119 @@
+# Byte-compiled / optimized files
 __pycache__/
-*.pyc
-*.pyo
-.venv/
-*.egg-info/
-*.log
-dist/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
 build/
-rollouts/
-completions/
-tmp.txt
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Test, coverage, lint, and type-check caches
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cover/
+
+# Python build/tool state
+.pdm.toml
+.pdm-python
+.pdm-build/
+__pypackages__/
+cython_debug/
+
+# Virtual environments and local env files
+.env
+.env.*
+!.env.example
+.venv/
+.venv*/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Jupyter / IPython
+.ipynb_checkpoints/
+profile_default/
+ipython_config.py
+
+# Editor, IDE, and OS files
+.DS_Store
+*.code-workspace
+.idea/
+*.iml
+.vscode/
+.cursor/
+.claude/
+
+# PyPI config
+.pypirc
+
+# Project-local outputs
+*.log
+*.out
+*.pkl
 batches/
 wandb/
 checkpoints/
 rollout_results/
-reference_projects/
-docs/
+outputs/
+local/
 logs/
 train-logs/
+tmp/
+**/rollout_data/
+**/buffer_stats/
+
+# Local third-party source checkouts
+reference_projects/
 slime/
 Megatron-LM/
-tmp/
+glm/
+_examples_synced/
+
+# Generated documentation
+docs/_build/
+/site
