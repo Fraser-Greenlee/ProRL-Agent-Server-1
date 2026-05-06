@@ -5,7 +5,7 @@ polar_rollout_url: "http://127.0.0.1:8080"
 polar_gateway_url: "http://127.0.0.1:8100"
 polar_reward_key: "score"
 polar_max_async_level: 2
-polar_request_timeout: 1200
+polar_request_timeout: 3600
 polar_callback_host: "127.0.0.1"
 polar_allow_weight_update_overlap: false
 polar_weight_update_pause_timeout: 300
@@ -20,7 +20,7 @@ polar_instruction_template: |
 # Task template rendered per sample group.  Placeholders are filled
 # from the context: {instruction}, {num_samples}, {sample.*}, {args.*}.
 polar_task_template:
-  timeout_seconds: 1200
+  timeout_seconds: 3600
   runtime:
     backend: "apptainer"
     # Use project-local SIF files prepared from the official SWE-Gym registry
@@ -56,7 +56,7 @@ polar_task_template:
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
           git config --global core.pager ''
   agent:
-    harness: "qwen_code"
+    harness: "codex"
     model_name: "gpt-5.4"
   builder:
     strategy: "prefix_merging"

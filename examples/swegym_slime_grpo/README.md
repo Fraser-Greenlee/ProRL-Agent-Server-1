@@ -14,6 +14,16 @@ expected to change as the example evolves.
 bash examples/swegym_slime_grpo/launch_e2e.sh
 ```
 
+`launch_e2e.sh` is the single-entry setup and run script for this example on a single node 8 x B200. It
+creates the Slime and Megatron-LM checkouts, installs Polar, applies the
+Slime and SGLang custom patches, builds the SWE-Gym data and Apptainer images, converts Qwen model weights
+into Megatron format, and then hands off to `run.sh` to
+launch the Polar rollout workers and Slime GRPO training job.
+
+- Adjust `topology.yaml` based on your hardware setups.
+- Adjust `polar_config.yaml` for Polar side configs like harness to use (codex / claude_code / qwen_code / opencode / pi), async level, timeout, etc.
+- Adjust `run.sh` for Slime side training arguments.
+
 ## Files
 
 | File | Purpose |

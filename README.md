@@ -54,9 +54,8 @@ uv pip install -e ".[swebench]"
 
 - ⭐ [Choose your Agent Harness](src/polar/agent/README.md): pick a built-in harness, or use the shell harness with any wrappers.
 - 🚀 [Trajectory Construction and Eval](src/polar/trajectory/README.md): See [builder](src/polar/trajectory/builder/README.md) and
-  [evaluator](src/polar/trajectory/evaluator/README.md) guides for built-in strategies or register your own logic.
-- 🔧 [Deployment Topology](src/polar/config/README.md): define
-  rollout and gateway nodes, networking, worker limits, and model endpoints.
+  [evaluator](src/polar/trajectory/evaluator/README.md) guides for built-in strategies or register your own.
+- 🔧 [Deployment Topology](src/polar/config/README.md): define rollout and gateway nodes, networking, worker limits, and model endpoints.
 - ▶️ [Request Rollout](src/polar/rollout/README.md): trainer / client side task submission through rollout API.
 
 

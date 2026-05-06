@@ -7,6 +7,8 @@ This is a small end-to-end Polar rollout example. Each agent gets a tiny
 Use this example when you want a quick local check that rollout, gateway,
 runtime setup, harness execution, and evaluation still work together.
 
+The topology setup is used on 4 x B200 GPUs. Adjust based on your hardware.
+
 ## What It Runs
 
 - rollout server on `:8080`

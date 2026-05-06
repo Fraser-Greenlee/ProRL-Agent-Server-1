@@ -98,6 +98,7 @@ ipython_config.py
 batches/
 wandb/
 checkpoints/
+experiments/
 rollout_results/
 outputs/
 local/

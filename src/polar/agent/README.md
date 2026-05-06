@@ -15,21 +15,22 @@ The public task field is `agent`, validated by `models.AgentSpec`.
 
 API type names match `polar.gateway.detection.APIType`: `anthropic`,
 `openai_chat`, `openai_responses`, and `google`. `require_streaming` describes the
-request style the harness sends to/from the Polar gateway.
+request style the harness sends to/from the Polar gateway. Package versions are
+verified external CLI/SDK releases for harnesses that need one; examples may
+choose their own pins or `latest`.
 
-| Harness | API type | require_streaming |
-|---|---|---|
-| `claude_code` | `anthropic` | `true` |
-| `codex` | `openai_responses` | `true` |
-| `gemini_cli` | `google` | `true` |
-| `opencode` | `openai_chat` | `true` |
-| `openhands_sdk` | `openai_chat` | `false` |
-| `pi` | `openai_chat` | `false` |
-| `qwen_code` | `openai_chat` | `true` |
-| `shell` | chosen by `agent.custom_shell` | chosen by `agent.custom_shell` |
+| Harness | API type | require_streaming | Package version |
+|---|---|---|---|
+| `claude_code` | `anthropic` | `true` | `@anthropic-ai/claude-code@2.1.116` |
+| `codex` | `openai_responses` | `true` | `@openai/codex@0.122.0` |
+| `gemini_cli` | `google` | `true` | `@google/gemini-cli@0.38.1` |
+| `opencode` | `openai_chat` | `true` | `opencode-ai@1.14.19` |
+| `openhands_sdk` | `openai_chat` | `false` | `openhands-sdk==1.18.0` |
+| `pi` | `openai_chat` | `false` | `@mariozechner/pi-coding-agent@0.67.68` |
+| `qwen_code` | `openai_chat` | `true` | `@qwen-code/qwen-code@0.14.5` |
+| `shell` | chosen by `agent.custom_shell` | chosen by `agent.custom_shell` | chosen by `agent.custom_shell` |
 
-`shell` is built in as an escape hatch, but the command decides which supported
-API family it calls and whether it streams.
+`shell` is built in as an escape hatch. Use this for your wrapped agents as execution commands.
 
 ## Harness Contract
 

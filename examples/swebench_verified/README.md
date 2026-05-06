@@ -4,6 +4,7 @@ Evaluate Polar agent harnesses on the full [SWE-bench Verified](https://huggingf
 
 Each task runs an agent inside a per-instance container with the repo at `base_commit`, then grades the resulting patch via `swebench.harness.grading`.
 
+The topology setup is used on 4 x B200 GPUs. Adjust based on your hardware.
 
 ## Installation
 
