@@ -12,11 +12,11 @@
 </p>
 
 
-**Polar** is a lightweight RL rollout framework targeting real-world agent harnesses. It features:
+**Polar** is a RL rollout framework targeting real-world agent harnesses.
 
-1. **Any Harness as Environment.** Trajectories are captured via API proxy, reconstruced and evaluated into token-faithful samples.
-2. **Smart Rollout Pipeline.** Maximizing GPU utilization by runtime prewarming and async rollout staging.
-3. **Rollout as a Service.** Server mode by design -- easy integration with any training frameworks. Towards Async RL at scale.
+1. **Harness as Environment.** Bring your agent harnesses as RL-ready environments without code change.
+2. **Smart Rollout Pipeline.** Maximizes GPU utilization with Polar's runtime prewarming and async rollout staging.
+3. **Rollout as a Service.** Server mode by design. Integrate Polar with any training frameworks for Async RL at scale.
 
 
 ## Architecture Overview
