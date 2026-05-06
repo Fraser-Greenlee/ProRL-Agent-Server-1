@@ -16,7 +16,7 @@
 
 1. **Harness as Environment.** Bring your agent harnesses as RL-ready environments without code change.
 2. **Smart Rollout Pipeline.** Maximizes GPU utilization with Polar's runtime prewarming and async rollout staging.
-3. **Rollout as a Service.** Server mode by design. Integrate Polar with any training frameworks for Async RL at scale.
+3. **Rollout as a Service.** Server mode by design -- scaling Async RL with any training frameworks.
 
 
 ## Architecture Overview
