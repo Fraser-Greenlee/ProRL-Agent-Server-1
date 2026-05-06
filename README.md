@@ -1,18 +1,22 @@
 # ProRL Agent Server (POLAR)
 
-**Polar** is a lightweight RL rollout framework targeting real-world aegnt harnesses. 
-
 <p align="center">
   <img src="assets/polar-logo.png" alt="Polar rollout architecture" width="360" />
 </p>
 
+<p align="center">
+<a href="https://www.apache.org/licenses/LICENSE-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-green.svg" alt="Apache 2.0 License" /></a>
+<!-- <a href="https://www.python.org/downloads/release/python-3100/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.11+" /></a> -->
+<!-- <a href="https://github.com/NVIDIA-NeMo/ProRL-Agent-Server/stargazers/"><img src="https://img.shields.io/github/stars/NVIDIA-NeMo/ProRL-Agent-Server.svg?style=social&label=Star" alt="GitHub Stars" /></a> -->
+
+</p>
 
 
-It features:
+**Polar** is a lightweight RL rollout framework targeting real-world agent harnesses. It features:
 
-1. **Any Harness as Environment.** Trajectories are captured via API proxy, reconstruced and evaluated into token-faithful samples. Register your custom logic without friction.
-2. **Efficient Rollout Pipeline.** Maximizing GPU utilization by async staging and runtime prewarm.
-3. **Rollout as a Service.** Server mode by design -- for easy integration with training frameworks, Async RL and scaling.
+1. **Any Harness as Environment.** Trajectories are captured via API proxy, reconstruced and evaluated into token-faithful samples.
+2. **Smart Rollout Pipeline.** Maximizing GPU utilization by runtime prewarming and async rollout staging.
+3. **Rollout as a Service.** Server mode by design -- easy integration with any training frameworks. Towards Async RL at scale.
 
 
 ## Architecture Overview
@@ -48,13 +52,12 @@ uv pip install -e ".[swebench]"
 
 ## Developer Guide
 
-- [Customize agent harnesses](src/polar/agent/README.md): choose a built-in harness, or use the shell harness for wrapped agent execution command.
-- [Customize trajectory build and evaluation](src/polar/trajectory/README.md):
-  choose or register builders and evaluators. See [builder](src/polar/trajectory/builder/README.md) and
-  [evaluator](src/polar/trajectory/evaluator/README.md) guides for built-in strategies.
-- [Topology configuration](src/polar/config/README.md): define
+- ⭐ [Choose your Agent Harness](src/polar/agent/README.md): pick a built-in harness, or use the shell harness for wrapped agent execution command.
+- 🚀 [Customize Trajectory Construction and Eval](src/polar/trajectory/README.md): See [builder](src/polar/trajectory/builder/README.md) and
+  [evaluator](src/polar/trajectory/evaluator/README.md) guides for built-in strategies or register your own logic.
+- 🔧 [Configure Deployment Topology](src/polar/config/README.md): define
   rollout and gateway nodes, networking, worker limits, and model endpoints.
-- [Rollout request configuration](src/polar/rollout/README.md): trainer / client side task submission.
+- ▶️ [Request Rollout in Batches](src/polar/rollout/README.md): trainer / client side task submission through rollout API
 
 
 
