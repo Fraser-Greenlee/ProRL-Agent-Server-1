@@ -13,6 +13,7 @@ import atexit
 import copy
 import json
 import logging
+import math
 import queue
 import statistics
 import tempfile
@@ -47,6 +48,10 @@ _LONGEST_TRACE_ARTIFACT_INTERVAL = 5  # dump longest trace every N rollouts
 
 class PolarRolloutSchedulerError(RuntimeError):
     """Raised when the async Polar scheduler cannot safely make progress."""
+
+
+class PolarLowCompleteAcceptFractionError(PolarRolloutSchedulerError):
+    """Raised when a completed task has too few trainable completed sessions."""
 
 
 @dataclass(slots=True)
@@ -335,6 +340,64 @@ def _trainable_token_count(sample: Any) -> int:
 
 def _has_trainable_tokens(samples: list[Any]) -> bool:
     return any(_trainable_token_count(sample) > 0 for sample in samples)
+
+
+def _low_complete_accept_fraction_rejection_reason(
+    config: PolarSlimeConfig,
+    task_result: TaskResult,
+    samples: list[Any],
+) -> str | None:
+    threshold = config.min_complete_accept_fraction
+    if threshold <= 0.0:
+        return None
+
+    total_sessions = len(task_result.results)
+    if total_sessions <= 0:
+        return "empty task results"
+
+    completed_trainable = _completed_trainable_session_count(task_result, samples)
+    required = math.ceil(total_sessions * threshold)
+    if completed_trainable >= required:
+        return None
+
+    fraction = completed_trainable / total_sessions
+    return (
+        f"completed trainable sessions {completed_trainable}/{total_sessions} "
+        f"({fraction:.3f}) below polar_min_complete_accept_fraction={threshold:g} "
+        f"(requires >= {required})"
+    )
+
+
+def _completed_trainable_session_count(
+    task_result: TaskResult,
+    samples: list[Any],
+) -> int:
+    trainable_session_ids: set[str] = set()
+    for sample in samples:
+        if _trainable_token_count(sample) <= 0:
+            continue
+        session_id = _sample_session_id(sample)
+        if session_id:
+            trainable_session_ids.add(session_id)
+
+    count = 0
+    for result in task_result.results:
+        if (
+            _status_value(result.status) == "COMPLETED"
+            and result.session_id in trainable_session_ids
+        ):
+            count += 1
+    return count
+
+
+def _sample_session_id(sample: Any) -> str | None:
+    polar_meta = (getattr(sample, "metadata", {}) or {}).get("polar", {})
+    session_id = polar_meta.get("session_id") or getattr(sample, "session_id", None)
+    return str(session_id) if session_id else None
+
+
+def _status_value(status: Any) -> str:
+    return str(getattr(status, "value", status))
 
 
 def _is_zero_trainable_error(exc: BaseException) -> bool:
@@ -672,6 +735,9 @@ class AsyncPolarRolloutWorker:
         if _is_zero_trainable_error(last_error):
             category_metric = "polar/dropped_zero_trainable_groups"
             reason = "zero trainable tokens"
+        elif isinstance(last_error, PolarLowCompleteAcceptFractionError):
+            category_metric = "polar/dropped_low_complete_fraction_groups"
+            reason = "low complete accept fraction"
         elif isinstance(last_error, RolloutLogprobError):
             category_metric = "polar/dropped_logprob_error_groups"
             reason = "rollout logprob error"
@@ -723,6 +789,13 @@ class AsyncPolarRolloutWorker:
         if not _has_trainable_tokens(group_samples):
             raise PolarRolloutSchedulerError(
                 f"Task {task_result.task_id} produced zero trainable tokens"
+            )
+        rejection_reason = _low_complete_accept_fraction_rejection_reason(
+            self.config, task_result, group_samples
+        )
+        if rejection_reason is not None:
+            raise PolarLowCompleteAcceptFractionError(
+                f"Task {task_result.task_id} cannot be accepted: {rejection_reason}"
             )
 
         return _CompletedGroup(

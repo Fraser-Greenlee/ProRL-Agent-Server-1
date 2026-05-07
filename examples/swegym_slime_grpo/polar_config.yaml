@@ -5,8 +5,9 @@ polar_rollout_url: "http://127.0.0.1:8080"
 polar_gateway_url: "http://127.0.0.1:8100"
 polar_reward_key: "score"
 polar_max_async_level: 2
-polar_request_timeout: 3600
+polar_request_timeout: 1200
 polar_callback_host: "127.0.0.1"
+polar_min_complete_accept_fraction: 0.8
 polar_allow_weight_update_overlap: false
 polar_weight_update_pause_timeout: 300
 # run.sh/launch_e2e.sh render this to an absolute host path before launch.
@@ -20,7 +21,7 @@ polar_instruction_template: |
 # Task template rendered per sample group.  Placeholders are filled
 # from the context: {instruction}, {num_samples}, {sample.*}, {args.*}.
 polar_task_template:
-  timeout_seconds: 3600
+  timeout_seconds: 1200
   runtime:
     backend: "apptainer"
     # Use project-local SIF files prepared from the official SWE-Gym registry
@@ -59,7 +60,7 @@ polar_task_template:
     harness: "codex"
     model_name: "gpt-5.4"
   builder:
-    strategy: "prefix_merging"
+    strategy: "prefix_merging". # per_request
   evaluator:
     strategy: "swebench_harness"
     refresh_runtime: true

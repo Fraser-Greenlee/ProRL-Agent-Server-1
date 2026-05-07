@@ -28,6 +28,7 @@ class PolarSlimeConfig:
     request_timeout: float | None
     callback_host: str
     scoring_mode: str
+    min_complete_accept_fraction: float
     tokenizer_name_or_path: str | None
     add_generation_prompt: bool
     eval_dataset_name: str
@@ -86,6 +87,12 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
     if scoring_mode not in {"group", "individual"}:
         raise ValueError("polar_scoring_mode must be 'group' or 'individual'")
 
+    min_complete_accept_fraction = float(
+        getattr(args, "polar_min_complete_accept_fraction", 0.0) or 0.0
+    )
+    if not 0.0 <= min_complete_accept_fraction <= 1.0:
+        raise ValueError("polar_min_complete_accept_fraction must be between 0 and 1")
+
     return PolarSlimeConfig(
         rollout_server_url=str(rollout_server_url).rstrip("/"),
         task_template=task_template,
@@ -105,6 +112,7 @@ def resolve_polar_slime_config(args: Any) -> PolarSlimeConfig:
         request_timeout=request_timeout,
         callback_host=callback_host,
         scoring_mode=scoring_mode,
+        min_complete_accept_fraction=min_complete_accept_fraction,
         tokenizer_name_or_path=getattr(args, "hf_checkpoint", None),
         add_generation_prompt=bool(getattr(args, "polar_add_generation_prompt", True)),
         eval_dataset_name=str(getattr(args, "polar_eval_dataset_name", "polar_eval")),

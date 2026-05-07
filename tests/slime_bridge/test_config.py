@@ -30,6 +30,7 @@ def _args(**overrides):
         "polar_request_timeout": 60,
         "polar_callback_host": "127.0.0.1",
         "polar_scoring_mode": "group",
+        "polar_min_complete_accept_fraction": 0.0,
         "hf_checkpoint": "tokenizer-name",
         "polar_add_generation_prompt": True,
         "polar_eval_dataset_name": "eval",
@@ -49,11 +50,26 @@ def test_resolve_polar_slime_config_computes_concurrency_and_normalizes_url() ->
     assert config.max_session_concurrency == 24
     assert config.max_off_policy_steps == 7
     assert config.request_timeout == 60.0
+    assert config.min_complete_accept_fraction == 0.0
 
 
 def test_resolve_polar_slime_config_requires_agent_template() -> None:
     with pytest.raises(ValueError, match="agent spec"):
         resolve_polar_slime_config(_args(polar_task_template={}))
+
+
+def test_resolve_polar_slime_config_accepts_complete_fraction_threshold() -> None:
+    config = resolve_polar_slime_config(
+        _args(polar_min_complete_accept_fraction=0.8)
+    )
+
+    assert config.min_complete_accept_fraction == 0.8
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1])
+def test_resolve_polar_slime_config_rejects_invalid_complete_fraction(value) -> None:
+    with pytest.raises(ValueError, match="polar_min_complete_accept_fraction"):
+        resolve_polar_slime_config(_args(polar_min_complete_accept_fraction=value))
 
 
 def test_render_task_payload_resolves_args_and_sample_placeholders() -> None:
