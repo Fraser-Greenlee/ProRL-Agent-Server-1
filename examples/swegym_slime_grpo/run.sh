@@ -238,7 +238,8 @@ ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-6}"
 ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
 N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
-MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-80000}"
+MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-60000}"
+SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-50000}"
 
 # Rollout sizing: 4 prompts × 16 trajectories = 64 trajectories/rollout.
 # This matches the earlier high-util baseline and keeps request groups smaller
@@ -260,7 +261,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --ref-load "$REF_LOAD" \
     --load "$LOAD_DIR" \
     --save "$SAVE_DIR" \
-    --save-interval "${SAVE_INTERVAL:-20}" \
+    --save-interval "${SAVE_INTERVAL:-10}" \
     --update-weights-interval 1 \
     --rollout-function-path slime_bridge.rollout.generate_rollout_polar_async \
     --custom-rm-path slime_bridge.reward.reward_func \
@@ -314,6 +315,7 @@ ray job submit --address="http://127.0.0.1:8265" \
     --attention-backend auto \
     --no-gradient-accumulation-fusion \
     --sglang-mem-fraction-static 0.8 \
+    --sglang-context-length "$SGLANG_CONTEXT_LENGTH" \
     --sglang-tool-call-parser qwen3_coder \
     --router-policy "${SGLANG_ROUTER_POLICY:-round_robin}" \
     --use-wandb \

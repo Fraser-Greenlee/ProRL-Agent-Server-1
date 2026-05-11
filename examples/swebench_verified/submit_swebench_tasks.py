@@ -34,6 +34,7 @@ HARNESS_NPM_PACKAGE: dict[str, str] = {
     "codex": "@openai/codex@latest",
     "opencode": "opencode-ai@latest",
     "claude_code": "@anthropic-ai/claude-code@latest",
+    "qwen_code": "@qwen-code/qwen-code@0.14.5",
 }
 
 _PREPARE_BASE = (
@@ -63,6 +64,8 @@ def evaluator_exclude_patterns_for_harness(harness: str) -> list[str]:
     patterns: list[str] = []
     if harness == "claude_code":
         patterns.extend([".claude/**", "**/.claude/**"])
+    if harness == "qwen_code":
+        patterns.extend([".qwen/**", "**/.qwen/**"])
     return patterns
 
 
@@ -98,6 +101,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=int(os.environ.get("MAX_CONCURRENT", "32")),
         help="Max parallel task submissions.",
+    )
+    parser.add_argument(
+        "--model-name",
+        default=os.environ.get("MODEL_NAME", "gpt-5.4"),
+        help="Model name passed to the agent harness; Polar rewrites it to the served model.",
     )
     return parser.parse_args()
 
@@ -169,6 +177,7 @@ def build_task_request(
         },
         "agent": {
             "harness": args.harness,
+            "model_name": args.model_name,
             "settings": {},
             "env": {},
         },

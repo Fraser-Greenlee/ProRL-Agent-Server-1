@@ -12,7 +12,7 @@ DATASET_SPLIT = "test"
 DEFAULT_CACHE_PATH = Path.home() / ".cache" / "polar" / "swebench_verified.json"
 HARNESS_IMAGE_PREFIX = "polar-swebench"
 
-SUPPORTED_HARNESSES = ("opencode", "codex", "claude_code")
+SUPPORTED_HARNESSES = ("opencode", "codex", "claude_code", "qwen_code")
 
 
 def sanitize_instance_id(instance_id: str) -> str:
