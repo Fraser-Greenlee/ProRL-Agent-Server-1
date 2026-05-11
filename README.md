@@ -1,118 +1,151 @@
-# ProRLAgent Server: A Scalable Multi-turn Rollout Infrastructure for RL Agents Training
+# ProRL Agent Server: Rollout-as-a-Service for Multi-Turn RL Agents
 
 <p align="center"><img src="NVIDIA_Assets/logo.png" alt="logo" width="400" /></p>
 
 <p align="center">
 <a href="https://codecov.io/gh/NVIDIA-NeMo/ProRL-Agent-Server"><img src="https://codecov.io/gh/NVIDIA-NeMo/ProRL-Agent-Server/graph/badge.svg?token=2F1UIV9HW6" alt="codecov" /></a>
-<a href="https://www.python.org/downloads/release/python-3100/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+" /></a>
+<a href="https://arxiv.org/abs/2603.18815"><img src="https://img.shields.io/badge/arXiv-2603.18815-b31b1b.svg" alt="arXiv:2603.18815" /></a>
+<a href="https://www.python.org/downloads/release/python-3120/"><img src="https://img.shields.io/badge/python-3.12%20%7C%203.13-blue.svg" alt="Python 3.12 or 3.13" /></a>
 <a href="https://github.com/NVIDIA-NeMo/ProRL-Agent-Server/stargazers/"><img src="https://img.shields.io/github/stars/NVIDIA-NeMo/ProRL-Agent-Server.svg?style=social&label=Star" alt="GitHub Stars" /></a>
 </p>
 
 ## ☁️ Introduction
 
-ProRLAgent Server is a scalable multi-turn rollout system for training and evaluating RL agents. Built on top of OpenHands, it offers high concurrency and a pluggable handler interface to support diverse agent tasks.
+ProRL Agent Server is a scalable rollout-as-a-service infrastructure for reinforcement-learning training of multi-turn LLM agents. It addresses a core systems bottleneck in agentic RL: rollout generation is I/O- and tool-execution-heavy, while policy optimization is GPU-heavy, yet many existing systems couple both lifecycles inside the trainer.
 
-- **Decoupled RL Training & Rollouts:** rollouts run as a service; any RL trainer can consume the outputs.
-- **High concurrency:**  execute large-scale jobs with LLM load balancing.
-- **Pluggable AgentHandler:**  customize for different tasks and agents.
-- **Lifecycle management:**  built-in support for status tracking, queuing, timeouts, and cleanup.
-- **Token-in / Token-out:** communicate in tokens to maintain turn alignment and ensure stable training.
-- **Singularity runtime:** rootless execution with single-file containers (.sif), seamless Slurm integration, secure multi-user support.
-- **Efficient Bash tool:** ptyprocess-based implementation for 6x speed improvements over tmux-based approach.
-- **Efficient IPython tool:** direct IPython kernel integration without network overhead.
-- **UDS communication:** Unix domain sockets for better throughput and isolation.
+ProRL Agent Server separates the full agentic rollout lifecycle from the RL trainer. A trainer submits task instances through HTTP and receives completed trajectories, rewards, and rollout metadata, while the server handles sandbox initialization, multi-turn tool use, LLM backend routing, evaluation, cancellation, and cleanup. The system is built on OpenHands, includes verl integration, is released as part of NVIDIA NeMo Gym, and is designed for rootless HPC deployments with Singularity/Apptainer.
+
+Paper: [ProRL Agent: Rollout-as-a-Service for RL Training of Multi-Turn LLM Agents](https://arxiv.org/abs/2603.18815)
+
+Key capabilities:
+
+- **Rollout-as-a-service:** expose the full rollout lifecycle through HTTP so trainers can remain agnostic to agent execution details.
+- **Three-stage async pipeline:** run `INIT -> RUN -> EVAL` through independent worker pools to overlap sandbox setup, agent execution, and reward evaluation.
+- **Dynamic LLM backend management:** register, clear, and load-balance vLLM backends during training, including checkpoint swaps without restarting the rollout server.
+- **Pluggable `AgentHandler` interface:** customize environment setup, multi-turn agent execution, reward scoring, error handling, and result serialization for new tasks.
+- **Token-in/token-out communication:** pass token IDs and log probabilities end to end to avoid re-tokenization drift in multi-turn trajectories.
+- **Rootless sandbox runtime:** support `.sif` containers, Slurm integration, and secure multi-user HPC environments through Singularity/Apptainer.
+- **Trainer integration:** connect to verl-style RL loops while keeping the rollout service independent of any single training backend.
+- **Lifecycle management:** track status, queue jobs, support cancellation, enforce phase-aware timeouts, and clean up resources.
+- **Efficient Bash tool:** use a `ptyprocess`-based implementation for up to 6x speedups over the previous tmux-based approach.
+- **Efficient IPython tool:** integrate directly with IPython kernels without extra network overhead.
+- **UDS communication:** use Unix domain sockets for improved throughput and isolation.
 
 ## 💻 Quick Start
 
-1) **Install dependencies**
+1. **Install dependencies**
 
-- Install OpenHands Dependencies
+   This project requires Python 3.12 or 3.13.
+
+   Install the Python dependencies:
+
+   ```bash
+   poetry install --with dev,test,runtime,evaluation
+   pip install git+https://github.com/SWE-Gym/SWE-Bench-Package.git
+   pip install git+https://github.com/R2E-Gym/R2E-Gym.git
+   ```
+
+   Install Singularity/Apptainer if your environment does not already provide it:
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y software-properties-common curl gnupg
+   sudo apt-get install -y singularity-container fuse
+   sudo add-apt-repository -y ppa:apptainer/ppa
+   sudo apt-get update
+   sudo apt-get install -y apptainer
+   ```
+
+2. **Start a vLLM server**
+
+   Launch vLLM with your Hugging Face model:
+
+   ```bash
+   vllm serve path/to/your/model \
+     --enable-auto-tool-choice \
+     --tool-call-parser hermes \
+     --host 127.0.0.1 \
+     --port 8000 \
+     --api-key key \
+     --served-model-name model_name &
+   ```
+
+   Replace `path/to/your/model`, `model_name`, host, port, and API key with the values for your setup.
+
+3. **Pull Singularity images for SWE tasks**
+
+   ```bash
+   python scripts/pull_swe_images.py \
+     --parquet-file /path/to/train.parquet \
+     --dest-dir /some/dir \
+     --temp-base /some/dir \
+     --log-name log
+   ```
+
+   Download the parquet data from Hugging Face first. Supported training datasets include:
+
+   - SWE-Gym: https://huggingface.co/datasets/NovaSky-AI/SkyRL-v0-293-data
+   - R2E-Gym: https://huggingface.co/R2E-Gym
+   - SWE-bench Multimodal: https://huggingface.co/datasets/SWE-bench/SWE-bench_Multimodal
+   - SWE-bench: https://huggingface.co/datasets/SWE-bench/SWE-bench
+   - SWE-smith: https://huggingface.co/datasets/SWE-bench/SWE-smith
+
+4. **Start the async evaluation server**
+
+   The FastAPI server manages rollouts through the same lifecycle described in the paper: initialization, multi-turn execution, and evaluation. It exposes `/start`, `/process`, `/status`, `/add_llm_server`, `/clear_llm_server`, `/cancel`, and related endpoints. Use `--max-init-workers`, `--max-run-workers`, and `--timeout` to control concurrency and time limits.
+
+   ```bash
+   export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
+   python scripts/start_server.py \
+     --host 0.0.0.0 \
+     --port 8006 \
+     --max-init-workers 64 \
+     --max-run-workers 64 \
+     --timeout 300
+   ```
+
+5. **Test the server**
+
+   Before sending jobs to `/process`, register at least one LLM server and start the worker process. The sequence below assumes the vLLM server from step 2 is already running.
+
+   Register the LLM server address. Include `/v1`:
+
+   ```bash
+   curl -X POST http://localhost:8006/add_llm_server \
+     -H 'Content-Type: application/json' \
+     -d '{"address":"http://127.0.0.1:8000/v1"}'
+   ```
+
+   Start the worker process:
+
+   ```bash
+   curl -X POST http://localhost:8006/start
+   ```
+
+   Optionally check server status:
+
+   ```bash
+   curl http://localhost:8006/status
+   ```
+
+   Notes:
+
+   - You can call `/add_llm_server` before `/start`; the address will be buffered and applied when the worker starts.
+   - During training, use `/clear_llm_server` and then re-register backends after loading a new policy checkpoint.
+   - Ensure `sampling_params.model` and `api_key` match the model name and key used when launching vLLM.
+
+### Quick Test Script
 
 ```bash
-poetry install --with dev,test,runtime,evaluation
-pip install git+https://github.com/SWE-Gym/SWE-Bench-Package.git
-pip install git+https://github.com/R2E-Gym/R2E-Gym.git
-```
-
-- Install Singularity/Apptainer Sandbox 
-
-```bash
-sudo apt-get update
-sudo apt-get install -y software-properties-common curl gnupg
-sudo apt-get install -y singularity-container fuse
-sudo add-apt-repository -y ppa:apptainer/ppa
-sudo apt-get update
-sudo apt-get install -y apptainer
-```
-2) **Start the VLLM server with your desired Hugging Face model:**
-
-```bash
-vllm serve path/to/your/model --enable-auto-tool-choice --tool-call-parser hermes  --host 127.0.0.1 --port 8000 --api-key key --served-model-name model_name &
-```
-
-Replace `path/to/your/model` with the actual path to your Hugging Face model. Set up the server IP, Port, and model name.
-
-
-3) **Pull singularity sandboxs for swe tasks**
-
-```bash
-python scripts/pull_swe_images.py --parquet-file /path/to/train.parquet --dest-dir /some/dir --temp-base /some/dir --log-name log
-```
-
-Download parquet data from Huggingface. Supported Training data:
-
-- swe-gym: https://huggingface.co/datasets/NovaSky-AI/SkyRL-v0-293-data
-- r2egym: https://huggingface.co/R2E-Gym
-- swe-bench-multimodal: https://huggingface.co/datasets/SWE-bench/SWE-bench_Multimodal
-- swe-bench: https://huggingface.co/datasets/SWE-bench/SWE-bench
-- swe-smith: https://huggingface.co/datasets/SWE-bench/SWE-smith
-
-4) **Start the async evaluation server (FastAPI)**
-
-This command starts the FastAPI-based async evaluation server and listens on the given host/port.
-It exposes /start, /process, and /status endpoints, and uses --max-init-workers/--max-run-workers and --timeout to control concurrency and time limits.
-
-```bash
-export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
-python scripts/start_server.py --host 0.0.0.0 --port 8006 --max-init-workers 64 --max-run-workers 64 --timeout 300
-```
-
-5) **Test the server (HTTP I/O)**
-
-Before sending jobs to `/process`, make sure you follow this sequence (assumes you already started a VLLM server in step 2):
-
-1. Register at least one LLM server address (include `/v1`):
-```bash
-curl -X POST http://localhost:8006/add_llm_server \
-  -H 'Content-Type: application/json' \
-  -d '{"address":"http://127.0.0.1:8000/v1"}'
-```
-
-2. Start the worker process:
-```bash
-curl -X POST http://localhost:8006/start
-```
-
-3. (Optional) Check status:
-```bash
-curl http://localhost:8006/status
-```
-
-Notes:
-- You can call `/add_llm_server` before `/start`; the address will be buffered and applied when the worker starts.
-- Ensure the `sampling_params.model` and `api_key` in your request match the model name and key you used when launching VLLM in step 2.
-
-**Option 1: Quick test using the built-in script**
-
-```
 python scripts/tests/test_server.py
 ```
 
-**Option 2: Test using curl**
+### cURL Example
 
-Quick try: send a task to `/process` and read the JSON result.
+Send a task to `/process` and read the JSON response.
 
 Input (request body):
+
 - `instance`: the task info (must include `data_source` and any fields your handler needs)
 - `sampling_params`: optional LLM/agent settings (e.g., `temperature`, `top_p`, `max_tokens`)
 - `job_id` (optional): your own identifier
@@ -155,27 +188,41 @@ Output (response body):
 }
 ```
 
-## 💻 Do RL Training with verl
-1) Clone [verl](https://github.com/verl-project/verl) and switch to specific commit
-```shell
-cd /path/to/verl
-git checkout 60138ebd
-```
-2) Install verl following [verl](https://github.com/verl-project/verl)'s instructions
-3) Install our verl patch
-```shell
-cd ProRL-Agent-Server/trainer_integration/verl
-pip install -e .
-```
-4) Start agent server
-```shell
-export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
-python scripts/start_server.py --host 0.0.0.0 --port 8006 --max-init-workers 64 --max-run-workers 64 --timeout 1000
-```
-5) Run training script
-```shell
-bash trainer_integration/verl/verl_custom/nvidia/scripts/run_proagent_qwn3_4B_instruct.sh
-```
+## 💻 RL Training with verl
+
+1. Clone [verl](https://github.com/verl-project/verl) and check out the supported commit:
+
+   ```bash
+   cd /path/to/verl
+   git checkout 60138ebd
+   ```
+
+2. Install verl by following the upstream [verl installation guide](https://github.com/verl-project/verl).
+
+3. Install the ProRL Agent Server verl integration:
+
+   ```bash
+   cd ProRL-Agent-Server/trainer_integration/verl
+   pip install -e .
+   ```
+
+4. Start the agent server:
+
+   ```bash
+   export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
+   python scripts/start_server.py \
+     --host 0.0.0.0 \
+     --port 8006 \
+     --max-init-workers 64 \
+     --max-run-workers 64 \
+     --timeout 1000
+   ```
+
+5. Run the training script:
+
+   ```bash
+   bash trainer_integration/verl/verl_custom/nvidia/scripts/run_proagent_qwn3_4B_instruct.sh
+   ```
 
 ## 💻 Add a New Task/Handler
 
@@ -183,8 +230,8 @@ To add a new task:
 
 - Implement an `AgentHandler` with `name`, `init(job_details, ...)`, `run(job_details, ...)`, and `eval(job_details, ...)`.
 - Register it in the registry so that `instance["data_source"] == name` routes requests to your handler.
-- Provide a `final_result(job_details)` function for result shaping.
-- Ensure your handler returns a consistent result schema and handles timeouts/errors.
+- Provide `final_result(job_details)` for result shaping.
+- Return a consistent result schema and handle timeouts and errors.
 
 Minimal sketch:
 
@@ -204,19 +251,22 @@ class MyTaskHandler(AgentHandler):
 register_agent_handler(MyTaskHandler())
 ```
 
-Then submit requests with `{"data_source": "my_task", ...}` in the `instance`.
+Then submit requests with `{"data_source": "my_task", ...}` in `instance`.
 
-## 💻 Run unit tests
+## 💻 Run Unit Tests
 
 Example:
+
 ```bash
 TEST_RUNTIME=singularity RUN_AS_OPENHANDS=False PYTHONPATH='.' pytest tests/runtime/test_browsing.py -v -s
 ```
 
-### Important Environment Variables
+## ⚙️ Environment Variables
 
-#### Image Storage Location
-**`OH_RUNTIME_SINGULARITY_IMAGE_REPO`** - Specifies the directory where Singularity runtime images will be stored.
+### Image Storage Location
+
+`OH_RUNTIME_SINGULARITY_IMAGE_REPO` specifies where Singularity runtime images are stored.
+
 ```bash
 export OH_RUNTIME_SINGULARITY_IMAGE_REPO=/path/to/singularity_images
 ```
@@ -233,14 +283,25 @@ More module READMEs (click to open):
 
 ## 💡 Current Results
 
+The paper evaluates ProRL Agent Server through end-to-end RL training across software engineering, STEM, math, and coding agents. For SWE tasks, we train on the 293-instance SWE-Gym subset used by [SkyRL-v0-293-data](https://huggingface.co/datasets/NovaSky-AI/SkyRL-v0-293-data). Training is performed with DAPO on 32 NVIDIA H100 GPUs unless otherwise specified.
 
-To validate the functionality of the ProRLAgent servers, we conducted experiments on software engineering (SWE) tasks by integrating the server with our ProRLAgent Training framework based on verl. We did some initial RL training on Qwen3-4B-Instruct-2507 model. We used 32 A100 GPUs to train the model. Our training data is a subset of [SWE-GYM](https://huggingface.co/datasets/NovaSky-AI/SkyRL-v0-293-data) with 293 training examples. Training for around 66 steps have allowed the Pass@1 on SWE-Bench-Verified to be improved from 14.8% to 21.2%，the following charts shows the test results on SWE-Bench-Verified. It increases during training.
+SWE-Bench Verified results:
+
+| Model scale | Base model | Pass@1 | ProRL Agent RL | Pass@1 |
+| --- | --- | ---: | --- | ---: |
+| 4B | Qwen3-4B-Instruct-2507 | 14.8 | ProRL Agent-4B | 21.2 |
+| 8B | Qwen3-8B | 9.6 | ProRL Agent-8B | 18.0 |
+| 14B | Qwen3-14B | 15.4 | ProRL Agent-14B | 23.6 |
+
+Beyond SWE, the same rollout infrastructure supports other agentic domains by changing handlers, tools, and rewards: STEM agents use web search plus Bash/IPython tools, math agents use IPython-backed computation and planning tools, and code agents use file editing plus test-driven verification.
+
 <img src="NVIDIA_Assets/swe-bench.png" alt="swe-bench curve" width="600" />
 
+## 📖 Citation
 
-## 📖 Reference
 > [!IMPORTANT]
-> If you find it useful, please consider citing our work:
+> If you find it useful, please read and cite our paper: https://arxiv.org/abs/2603.18815
+
 ```md
 @article{zhang2026prorl,
   title={ProRL Agent: Rollout-as-a-Service for RL Training of Multi-Turn LLM Agents},
@@ -249,4 +310,3 @@ To validate the functionality of the ProRLAgent servers, we conducted experiment
   year={2026}
 }
 ```
-
