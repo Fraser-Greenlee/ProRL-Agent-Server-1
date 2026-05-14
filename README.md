@@ -50,13 +50,13 @@ uv pip install -e ".[swebench]"
 **Polar** itself is trainer agnostic. Currently, we provide a demo-purpose [Slime](https://github.com/THUDM/slime) integration in [Slime bridge installation guide](src/slime_bridge/README.md#slime-installation).
 
 
-## Developer Guide
+## Guide
 
 - ⭐ [Choose your Agent Harness](src/polar/agent/README.md): pick a built-in harness, or use the shell harness with any wrappers.
 - 🚀 [Trajectory Construction and Eval](src/polar/trajectory/README.md): See [builder](src/polar/trajectory/builder/README.md) and
   [evaluator](src/polar/trajectory/evaluator/README.md) guides for built-in strategies or register your own.
 - 🔧 [Deployment Topology](src/polar/config/README.md): define rollout and gateway nodes, networking, worker limits, and model endpoints.
-- ▶️ [Request Rollout](src/polar/rollout/README.md): trainer / client side task submission through rollout API.
+- ▶️ [Request for Rollout](src/polar/rollout/README.md): trainer / client side task submission through rollout API.
 
 
 
@@ -93,4 +93,17 @@ Our development goal for **Polar** is low-intrusion and neutral, finding the low
 </tr>
 </table>
 
+
+
+## 📖 Reference
+> [!IMPORTANT]
+> If you find it useful, please consider citing our work:
+```md
+@article{zhang2026prorl,
+  title={ProRL Agent: Rollout-as-a-Service for RL Training of Multi-Turn LLM Agents},
+  author={Zhang, Hao and Liu, Mingjie and Zhang, Shaokun and Han, Songyang and Hu, Jian and Jin, Zhenghui and Zhang, Yuchi and Diao, Shizhe and Lu, Ximing and Xu, Binfeng and others},
+  journal={arXiv preprint arXiv:2603.18815},
+  year={2026}
+}
+```
 

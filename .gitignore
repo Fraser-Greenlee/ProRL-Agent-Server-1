@@ -109,11 +109,9 @@ tmp/
 **/buffer_stats/
 
 # Local third-party source checkouts
-reference_projects/
 slime/
 Megatron-LM/
 glm/
-_examples_synced/
 
 # Generated documentation
 docs/_build/
