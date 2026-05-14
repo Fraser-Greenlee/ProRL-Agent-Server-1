@@ -5,7 +5,7 @@ polar_rollout_url: "http://127.0.0.1:8080"
 polar_gateway_url: "http://127.0.0.1:8100"
 polar_reward_key: "score"
 polar_max_async_level: 2
-polar_request_timeout: 1800
+polar_request_timeout: 2400
 polar_callback_host: "127.0.0.1"
 polar_min_complete_accept_fraction: 0.6
 polar_allow_weight_update_overlap: false
@@ -13,15 +13,11 @@ polar_weight_update_pause_timeout: 300
 # run.sh/launch_e2e.sh render this to an absolute host path before launch.
 polar_agent_cli_dir: "tmp/swegym_agent_cli/opt_node"
 polar_apptainer_image_dir: "tmp/swegym_apptainer_images"
-polar_instruction_template: |
-  Fix the following issue in the repository at /polar/session/workspace.
-
-  {instruction}
 
 # Task template rendered per sample group.  Placeholders are filled
 # from the context: {instruction}, {num_samples}, {sample.*}, {args.*}.
 polar_task_template:
-  timeout_seconds: 1800
+  timeout_seconds: 2400
   runtime:
     backend: "apptainer"
     # Use project-local SIF files prepared from the official SWE-Gym registry
@@ -57,7 +53,7 @@ polar_task_template:
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
           git config --global core.pager ''
   agent:
-    harness: "codex"
+    harness: "qwen_code"
     model_name: "gpt-5.4"
   builder:
     strategy: "prefix_merging"
