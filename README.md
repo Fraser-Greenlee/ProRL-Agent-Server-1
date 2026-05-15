@@ -1,5 +1,3 @@
-# ProRL Agent Server (POLAR)
-
 <p align="center">
   <img src="assets/polar-logo.png" alt="Polar rollout architecture" width="360" />
 </p>
