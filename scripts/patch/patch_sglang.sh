@@ -169,21 +169,40 @@ utils_text = replace_once(
 utils_path.write_text(utils_text)
 
 # ---------------------------------------------------------------------------
-# tokenizer_manager.py — expose the already-tokenized prompt via meta_info so
-# serving_chat can emit input_token_ids without paying per-prompt-token
-# logprob compute.
+# tokenizer_manager.py — persist canonical prompt token IDs on ReqState right
+# after tokenization, then expose them via meta_info so serving_chat can emit
+# input_token_ids without paying per-prompt-token logprob compute.
 # ---------------------------------------------------------------------------
 tokenizer_manager_text = tokenizer_manager_path.read_text()
 tokenizer_manager_text = replace_once(
     tokenizer_manager_text,
-    "            # Build meta_info and return value\n"
-    "            meta_info = {\n"
-    "                \"id\": rid,\n"
-    "                \"finish_reason\": recv_obj.finished_reasons[i],\n"
-    "                \"prompt_tokens\": recv_obj.prompt_tokens[i],\n"
-    "                \"weight_version\": self.server_args.weight_version,\n"
-    "                \"total_retractions\": recv_obj.retraction_counts[i],\n"
-    "            }\n",
+    "    output_ids: List[int] = dataclasses.field(default_factory=list)\n"
+    "    input_token_logprobs_val: List[float] = dataclasses.field(default_factory=list)\n",
+    "    output_ids: List[int] = dataclasses.field(default_factory=list)\n"
+    "    input_token_ids: List[int] = dataclasses.field(default_factory=list)\n"
+    "    input_token_logprobs_val: List[float] = dataclasses.field(default_factory=list)\n",
+    label=str(tokenizer_manager_path),
+)
+tokenizer_manager_text = replace_once(
+    tokenizer_manager_text,
+    "        tokenized_obj.time_stats = self.rid_to_state[obj.rid].time_stats\n"
+    "        self.rid_to_state[obj.rid].time_stats.set_tokenize_finish_time()\n"
+    "\n"
+    "        return tokenized_obj\n",
+    "        state = self.rid_to_state[obj.rid]\n"
+    "        tokenized_obj.time_stats = state.time_stats\n"
+    "        state.time_stats.set_tokenize_finish_time()\n"
+    "        if isinstance(input_ids, list) and input_ids:\n"
+    "            if isinstance(input_ids[0], int):\n"
+    "                state.input_token_ids = list(input_ids)\n"
+    "            elif isinstance(input_ids[0], list) and input_ids[0]:\n"
+    "                state.input_token_ids = list(input_ids[0])\n"
+    "\n"
+    "        return tokenized_obj\n",
+    label=str(tokenizer_manager_path),
+)
+
+meta_info_base = (
     "            # Build meta_info and return value\n"
     "            meta_info = {\n"
     "                \"id\": rid,\n"
@@ -192,14 +211,38 @@ tokenizer_manager_text = replace_once(
     "                \"weight_version\": self.server_args.weight_version,\n"
     "                \"total_retractions\": recv_obj.retraction_counts[i],\n"
     "            }\n"
-    "            _obj_input_ids = getattr(state.obj, \"input_ids\", None)\n"
-    "            if isinstance(_obj_input_ids, list) and _obj_input_ids:\n"
-    "                if isinstance(_obj_input_ids[0], int):\n"
-    "                    meta_info[\"input_token_ids\"] = list(_obj_input_ids)\n"
-    "                elif isinstance(_obj_input_ids[0], list) and _obj_input_ids[0]:\n"
-    "                    meta_info[\"input_token_ids\"] = list(_obj_input_ids[0])\n",
-    label=str(tokenizer_manager_path),
 )
+meta_info_old_patch = (
+    meta_info_base
+    + "            _obj_input_ids = getattr(state.obj, \"input_ids\", None)\n"
+    + "            if isinstance(_obj_input_ids, list) and _obj_input_ids:\n"
+    + "                if isinstance(_obj_input_ids[0], int):\n"
+    + "                    meta_info[\"input_token_ids\"] = list(_obj_input_ids)\n"
+    + "                elif isinstance(_obj_input_ids[0], list) and _obj_input_ids[0]:\n"
+    + "                    meta_info[\"input_token_ids\"] = list(_obj_input_ids[0])\n"
+)
+meta_info_new_patch = (
+    meta_info_base
+    + "            _state_input_ids = getattr(state, \"input_token_ids\", None)\n"
+    + "            _obj_input_ids = _state_input_ids or getattr(state.obj, \"input_ids\", None)\n"
+    + "            if isinstance(_obj_input_ids, list) and _obj_input_ids:\n"
+    + "                if isinstance(_obj_input_ids[0], int):\n"
+    + "                    meta_info[\"input_token_ids\"] = list(_obj_input_ids)\n"
+    + "                elif isinstance(_obj_input_ids[0], list) and _obj_input_ids[0]:\n"
+    + "                    meta_info[\"input_token_ids\"] = list(_obj_input_ids[0])\n"
+)
+if meta_info_new_patch not in tokenizer_manager_text:
+    if meta_info_old_patch in tokenizer_manager_text:
+        tokenizer_manager_text = tokenizer_manager_text.replace(
+            meta_info_old_patch, meta_info_new_patch, 1
+        )
+    else:
+        tokenizer_manager_text = replace_once(
+            tokenizer_manager_text,
+            meta_info_base,
+            meta_info_new_patch,
+            label=str(tokenizer_manager_path),
+        )
 tokenizer_manager_path.write_text(tokenizer_manager_text)
 
 # ---------------------------------------------------------------------------

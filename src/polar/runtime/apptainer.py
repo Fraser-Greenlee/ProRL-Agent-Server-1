@@ -26,6 +26,10 @@ class ApptainerRuntime(BaseRuntime):
         safe_name = session_id.replace("/", "-")[:30]
         self._instance_name = f"polar-{safe_name}-{short_hash}"
         self._binary = self._resolve_binary()
+        self._direct_exec = bool(os.environ.get("POLAR_APPTAINER_DIRECT_EXEC")) or bool(
+            spec.kwargs.get("direct_exec", False)
+        )
+        self._overlay_dir = self.session_dir / "overlay"
 
     @property
     def runtime_id(self) -> str:
@@ -44,8 +48,18 @@ class ApptainerRuntime(BaseRuntime):
             raise RuntimeError("apptainer runtime was already destroyed")
         # Use a host-backed overlay directory instead of --writable-tmpfs
         # (default tmpfs overlay is only 64 MB, too small for most workloads).
-        self._overlay_dir = self.session_dir / "overlay"
         self._overlay_dir.mkdir(parents=True, exist_ok=True)
+        if self._direct_exec:
+            rc, _, stderr = await self._run_local_command(
+                *self._exec_prefix(),
+                "true",
+                capture=True,
+            )
+            if rc != 0:
+                raise RuntimeError(
+                    f"{self._binary} direct exec failed with exit code {rc}: {stderr}"
+                )
+            return
         args = [self._binary, "instance", "start",
                 "--overlay", str(self._overlay_dir)]
         if self.spec.gpus > 0:
@@ -76,6 +90,8 @@ class ApptainerRuntime(BaseRuntime):
         if self._destroyed:
             return
         self._destroyed = True
+        if self._direct_exec:
+            return
         rc, _, stderr = await self._run_local_command(
             self._binary, "instance", "stop", self._instance_name,
             timeout=self._STOP_TIMEOUT, capture=True,
@@ -105,7 +121,7 @@ class ApptainerRuntime(BaseRuntime):
                 shell_exports.append(f"export {key}={shlex.quote(str(effective_env[key]))};")
         if shell_exports:
             wrapped_command = " ".join(shell_exports + [wrapped_command])
-        args = [self._binary, "exec", f"instance://{self._instance_name}"]
+        args = self._exec_prefix()
         if effective_env:
             args.append("env")
             args.extend(f"{key}={value}" for key, value in effective_env.items())
@@ -128,7 +144,7 @@ class ApptainerRuntime(BaseRuntime):
             "bash",
             "-c",
             f"tar -cf - -C {shlex.quote(source_dir)} {shlex.quote(filename)} | "
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{shlex.join(self._exec_prefix())} "
             f"tar -xf - -C {shlex.quote(parent)}",
             capture=False,
         )
@@ -147,7 +163,7 @@ class ApptainerRuntime(BaseRuntime):
             "bash",
             "-c",
             f"tar -cf - -C {shlex.quote(local_path)} . | "
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{shlex.join(self._exec_prefix())} "
             f"tar -xf - -C {shlex.quote(remote_path)}",
             capture=False,
         )
@@ -164,7 +180,7 @@ class ApptainerRuntime(BaseRuntime):
         rc, _, _ = await self._run_local_command(
             "bash",
             "-c",
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{shlex.join(self._exec_prefix())} "
             f"tar -cf - -C {shlex.quote(parent)} {shlex.quote(filename)} | "
             f"tar -xf - -C {shlex.quote(local_dir)}",
             capture=False,
@@ -181,7 +197,7 @@ class ApptainerRuntime(BaseRuntime):
         rc, _, _ = await self._run_local_command(
             "bash",
             "-c",
-            f"{self._binary} exec instance://{self._instance_name} "
+            f"{shlex.join(self._exec_prefix())} "
             f"tar -cf - -C {shlex.quote(remote_path)} . | "
             f"tar -xf - -C {shlex.quote(local_path)}",
             capture=False,
@@ -190,6 +206,25 @@ class ApptainerRuntime(BaseRuntime):
             raise RuntimeError(
                 f"apptainer download_dir failed with exit code {rc}"
             )
+
+    def _exec_prefix(self) -> list[str]:
+        if not self._direct_exec:
+            return [self._binary, "exec", f"instance://{self._instance_name}"]
+        args = [self._binary, "exec", "--overlay", str(self._overlay_dir)]
+        if self.spec.gpus > 0:
+            args.append("--nv")
+        network_name: str | None
+        if not self.spec.allow_internet:
+            network_name = "none"
+        else:
+            network_name = self.spec.network
+        if network_name and network_name != "host":
+            args.extend(["--net", "--network", network_name])
+        args.extend(["--bind", f"{self.session_dir}:{self.runtime_session_dir}"])
+        for volume in self.spec.kwargs.get("volumes", []):
+            args.extend(["--bind", str(volume)])
+        args.append(self.spec.image)
+        return args
 
     @staticmethod
     def _resolve_binary() -> str:
