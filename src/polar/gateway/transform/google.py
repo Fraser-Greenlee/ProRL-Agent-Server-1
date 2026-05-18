@@ -378,9 +378,14 @@ class GoogleTransformer(BaseTransformer):
                 description = declaration.get("description")
                 if isinstance(description, str) and description:
                     function["description"] = description
-                parameters = declaration.get("parameters")
-                if isinstance(parameters, dict):
-                    function["parameters"] = parameters
+                parameters = (
+                    declaration.get("parameters")
+                    or declaration.get("parametersJsonSchema")
+                    or declaration.get("parameters_json_schema")
+                )
+                if not isinstance(parameters, dict):
+                    parameters = {"type": "object", "properties": {}}
+                function["parameters"] = parameters
                 openai_tools.append({"type": "function", "function": function})
         return openai_tools
 

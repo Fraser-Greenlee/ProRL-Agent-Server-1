@@ -1,5 +1,3 @@
-# ProRL Agent Server (POLAR)
-
 <p align="center">
   <img src="assets/polar-logo.png" alt="Polar rollout architecture" width="360" />
 </p>
@@ -50,13 +48,13 @@ uv pip install -e ".[swebench]"
 **Polar** itself is trainer agnostic. Currently, we provide a demo-purpose [Slime](https://github.com/THUDM/slime) integration in [Slime bridge installation guide](src/slime_bridge/README.md#slime-installation).
 
 
-## Guide
+## Quick Start
 
-- ⭐ [Choose your Agent Harness](src/polar/agent/README.md): pick a built-in harness, or use the shell harness with any wrappers.
+- ⭐ [Choose your Agent Harness](src/polar/agent/README.md): pick a built-in harness, or use the generic shell harness with wrapped agents.
 - 🚀 [Trajectory Construction and Eval](src/polar/trajectory/README.md): See [builder](src/polar/trajectory/builder/README.md) and
-  [evaluator](src/polar/trajectory/evaluator/README.md) guides for built-in strategies or register your own.
-- 🔧 [Deployment Topology](src/polar/config/README.md): define rollout and gateway nodes, networking, worker limits, and model endpoints.
-- ▶️ [Request for Rollout](src/polar/rollout/README.md): trainer / client side task submission through rollout API.
+  [evaluator](src/polar/trajectory/evaluator/README.md) guides for registered strategies.
+- 🔧 [Deployment Topology](src/polar/config/README.md): configure the Polar service.
+- ▶️ [Request for Rollout](src/polar/rollout/README.md): client side task submission via rollout API.
 
 
 
@@ -67,6 +65,10 @@ uv pip install -e ".[swebench]"
   evaluation on SWE-bench Verified tasks.
 - [SWE-Gym Slime GRPO](examples/swegym_slime_grpo/README.md): training
   path that connects Polar rollouts to Slime.
+
+<p align="center">
+  <img src="assets/swegym_grpo_training_curves.png" alt="Polar rollout architecture" width="760" />
+</p>
 
 This project is under early development. We are actively adding new examples for different tasks / models on diverse hardware setups. **Contributions are welcome!**
 
