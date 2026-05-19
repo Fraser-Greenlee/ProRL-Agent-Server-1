@@ -48,13 +48,27 @@ class GeminiCliHarness(BaseHarness):
 
     def run_steps(self, instruction: str) -> list[ExecInput]:
         escaped = shlex.quote(instruction)
+<<<<<<< HEAD
         env: dict[str, str] = {**self.env}
+=======
+        env: dict[str, str] = {
+            "GEMINI_CLI_TRUST_WORKSPACE": "true",
+            **self.env,
+        }
+>>>>>>> polar
 
         # --approval-mode=yolo is the documented replacement for the legacy
         # --yolo flag (both currently work but --yolo is listed as deprecated
         # in the latest CLI reference). Sandbox is off by default; we only
         # pass --sandbox when the caller explicitly opts in.
+<<<<<<< HEAD
         flags: list[str] = ["--approval-mode=yolo"]
+=======
+        #
+        # --skip-trust keeps headless SWE-Gym rollouts from exiting before the
+        # gateway is called when the temporary task workspace is not trusted.
+        flags: list[str] = ["--approval-mode=yolo", "--skip-trust"]
+>>>>>>> polar
         if self.model_name:
             flags.append(f"--model={shlex.quote(self.model_name)}")
         if self.settings.get("sandbox") is True:
