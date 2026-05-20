@@ -57,10 +57,7 @@ class GeminiCliHarness(BaseHarness):
         # --yolo flag (both currently work but --yolo is listed as deprecated
         # in the latest CLI reference). Sandbox is off by default; we only
         # pass --sandbox when the caller explicitly opts in.
-        #
-        # --skip-trust keeps headless SWE-Gym rollouts from exiting before the
-        # gateway is called when the temporary task workspace is not trusted.
-        flags: list[str] = ["--approval-mode=yolo", "--skip-trust"]
+        flags: list[str] = ["--approval-mode=yolo"]
         if self.model_name:
             flags.append(f"--model={shlex.quote(self.model_name)}")
         if self.settings.get("sandbox") is True:

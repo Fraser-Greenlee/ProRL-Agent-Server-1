@@ -13,7 +13,7 @@
 **Polar** is a RL rollout framework for real-world agent harnesses.
 
 1. **Harness as Environment.** Bring your agent harnesses as RL-ready environments without code change.
-2. **Smart Rollout Pipeline.** Maximize GPU utilization with Polar's async rollout staging.
+2. **Smart Rollout Pipeline.** Save GPU hours with Polar's parallel rollout staging & runtime prewarm.
 3. **Rollout as a Service.** Server mode by design -- scaling Async RL with any training frameworks.
 
 
@@ -84,9 +84,10 @@ Our development goal for **Polar** is low-intrusion and neutral, finding the low
 
 - [x] Initial release & tech report.
 - [x] Slime bridge & RL example.
+- [ ] CUA (VLM / VLA) Support.
+- [ ] More built-in evaluators (eg. self distillation with textual feedback).
 - [ ] vLLM dual inference support.
 - [ ] More trainer bridges (NemoRL, VERL, etc.).
-- [ ] CUA (VLM / VLA) Support.
 
 </td>
 <td width="35%" align="center" valign="middle">
