@@ -40,6 +40,12 @@ class ApptainerRuntime(BaseRuntime):
         return True
 
     @property
+    def supports_memory_limits(self) -> bool:
+        # Apptainer has no portable memory flag on this cluster, but the
+        # command shell can enforce RLIMIT_AS for sandbox commands.
+        return True
+
+    @property
     def can_disable_internet(self) -> bool:
         return True
 
@@ -115,12 +121,15 @@ class ApptainerRuntime(BaseRuntime):
         wrapped_command = command
         if effective_workdir:
             wrapped_command = f"cd {shlex.quote(effective_workdir)} && {command}"
-        shell_exports = []
+        shell_prefix = []
+        if self.spec.memory_mb is not None:
+            memory_kb = max(1, int(self.spec.memory_mb)) * 1024
+            shell_prefix.append(f"ulimit -v {memory_kb};")
         for key in ("HOME", "PATH"):
             if key in effective_env:
-                shell_exports.append(f"export {key}={shlex.quote(str(effective_env[key]))};")
-        if shell_exports:
-            wrapped_command = " ".join(shell_exports + [wrapped_command])
+                shell_prefix.append(f"export {key}={shlex.quote(str(effective_env[key]))};")
+        if shell_prefix:
+            wrapped_command = " ".join(shell_prefix + [wrapped_command])
         args = self._exec_prefix()
         if effective_env:
             args.append("env")
