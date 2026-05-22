@@ -4,41 +4,26 @@ A read-only observability dashboard for the Polar rollout stack. It bundles a
 React SPA and exposes a single FastAPI service that proxies (read-only) to the
 rollout and gateway processes.
 
-## Start
+The launch command (`polar dashboard -c topology.yaml [--port 8090]`) is
+documented in the [top-level README](../../../README.md#cli-interface);
+defaults: bind `127.0.0.1:8090`, rollout URL and `save_dir` pulled from
+topology.
+
+## Frontend build
+
+Production build (required for the wheel to ship a real UI; missing `web/dist/`
+falls back to a small JSON placeholder):
 
 ```
-polar dashboard -c examples/calculator/topology.yaml --port 8090
+cd web && npm install && npm run build      # writes web/dist/
 ```
 
-Defaults:
-
-- bind: `127.0.0.1:8090`
-- rollout URL: pulled from topology (`rollout.public_url`)
-- save_dir: pulled from topology (`rollout.save_dir`)
-
-Open <http://127.0.0.1:8090/> in a browser.
-
-## Frontend dev loop
+Dev loop with hot reload — runs at <http://127.0.0.1:5173/> and proxies
+`/api/*` to `http://127.0.0.1:8090/`:
 
 ```
-cd web
-npm install
-npm run dev
+cd web && npm install && npm run dev
 ```
-
-The dev server runs at <http://127.0.0.1:5173/> and proxies `/api/*` to
-`http://127.0.0.1:8090/`.
-
-## Production build
-
-```
-cd web
-npm install
-npm run build      # writes web/dist/
-```
-
-The Python wheel bundles `web/dist/`; the FastAPI app falls back to a small JSON
-placeholder if the dist directory is missing.
 
 ## API surface (under `/api`)
 

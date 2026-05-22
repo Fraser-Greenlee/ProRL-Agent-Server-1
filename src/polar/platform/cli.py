@@ -1,4 +1,4 @@
-"""CLI argument registration for `polar serve_platform`."""
+"""CLI argument registration for `polar dashboard`."""
 
 from __future__ import annotations
 

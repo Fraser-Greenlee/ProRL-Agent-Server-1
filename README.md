@@ -27,31 +27,39 @@
 
 ## Installation
 
-Install the **Rollout Server** (Polar): 
+#### Install the **Rollout Server** (Polar): 
 ```bash
 uv venv
 uv pip install -e .
 ```
 
-Install the **Inference Server** (SGLang):
+#### Install the **Inference Server** (SGLang):
 ```bash
 uv pip install --prerelease=allow sglang==0.5.10
 bash scripts/patch/patch_sglang.sh
 ```
 The patch applies necessary TITO and prompt token id emission on pinned `sglang` version. We'll remove this once upstream supports go through. `vllm` integration is on the way.
 
-For SWE-bench official evaluation harness:
+#### Polar is trainer agnostic. So choice of **Trainer** and **Training Backend** are highly flexible given Polar's server boundaries.
+
+Currently, we provide a demo-purpose [Slime](https://github.com/THUDM/slime) integration in [Slime bridge installation guide](src/slime_bridge/README.md#slime-installation).
+
+
+#### (Optional) For SWE-bench official evaluation harness:
 
 ```bash
 uv pip install -e ".[swebench]"
 ```
 
-Polar itself is trainer agnostic. So choice of **Trainer** and **Training Backend** are highly flexible given Polar's server boundaries.
+#### (Optional) To enable **polar dashboard** UI, build the frontend once.
 
-Currently, we provide a demo-purpose [Slime](https://github.com/THUDM/slime) integration in [Slime bridge installation guide](src/slime_bridge/README.md#slime-installation).
+```bash
+cd web && npm install && npm run build
+```
 
 
-## Quick Start
+
+## Usage Guide
 
 - ⭐ [Choose your Agent Harness](src/polar/agent/README.md): pick a built-in harness, or use the generic shell harness with wrapped agents.
 - 🚀 [Trajectory Construction and Eval](src/polar/trajectory/README.md): See [builder](src/polar/trajectory/builder/README.md) and

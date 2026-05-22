@@ -1,4 +1,4 @@
-"""FastAPI app for `polar serve_platform`."""
+"""FastAPI app for `polar dashboard`."""
 
 from __future__ import annotations
 

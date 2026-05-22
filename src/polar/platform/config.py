@@ -10,7 +10,7 @@ from polar.config import TopologyConfig
 
 @dataclass(slots=True)
 class PlatformConfig:
-    """Resolved configuration for `polar serve_platform`."""
+    """Resolved configuration for `polar dashboard`."""
 
     host: str
     port: int
