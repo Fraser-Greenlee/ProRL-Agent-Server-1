@@ -174,7 +174,7 @@ class _GoogleStreamState:
 class GoogleTransformer(BaseTransformer):
     """Transform between Google Generative AI and OpenAI API formats."""
 
-    ROLE_MAP = {"user": "user", "model": "assistant"}
+    ROLE_MAP = {"user": "user", "model": "assistant", "system": "system", "developer": "system"}
     FINISH_REASON_MAP_REVERSE = {
         "stop": "STOP",
         "length": "MAX_TOKENS",
@@ -188,18 +188,22 @@ class GoogleTransformer(BaseTransformer):
         config = body.get("config")
         config_section = config if isinstance(config, dict) else {}
 
-        system_instruction = body.get("systemInstruction") or config_section.get(
-            "systemInstruction"
+        system_instruction = (
+            body.get("systemInstruction")
+            or body.get("system_instruction")
+            or config_section.get("systemInstruction")
+            or config_section.get("system_instruction")
         )
-        if isinstance(system_instruction, dict):
-            system_text = self._extract_text_from_parts(system_instruction.get("parts", []))
-            if system_text:
-                messages.append({"role": "system", "content": system_text})
+        system_text = self._extract_system_instruction_text(system_instruction)
+        if system_text:
+            messages.append({"role": "system", "content": system_text})
 
         for content in body.get("contents", []):
             messages.extend(self._convert_content_to_messages(content))
 
         result: dict[str, Any] = {"messages": messages}
+        if "model" in body:
+            result["model"] = body["model"]
 
         gen_config: dict[str, Any] = {}
         for source in (
@@ -363,13 +367,17 @@ class GoogleTransformer(BaseTransformer):
             )
 
         usage = response.get("usage", {})
+        usage_metadata = {
+            "promptTokenCount": usage.get("prompt_tokens", 0),
+            "candidatesTokenCount": usage.get("completion_tokens", 0),
+            "totalTokenCount": usage.get("total_tokens", 0),
+        }
+        cached_tokens = self._cached_prompt_tokens(usage)
+        if cached_tokens:
+            usage_metadata["cachedContentTokenCount"] = cached_tokens
         result = {
             "candidates": candidates,
-            "usageMetadata": {
-                "promptTokenCount": usage.get("prompt_tokens", 0),
-                "candidatesTokenCount": usage.get("completion_tokens", 0),
-                "totalTokenCount": usage.get("total_tokens", 0),
-            },
+            "usageMetadata": usage_metadata,
         }
         function_calls = self._response_function_calls(candidates)
         if function_calls:
@@ -506,6 +514,10 @@ class GoogleTransformer(BaseTransformer):
                 if tool_calls:
                     assistant_message["tool_calls"] = tool_calls
                 messages.append(assistant_message)
+        elif openai_role == "system":
+            system_text = self._extract_text_from_parts(parts)
+            if system_text:
+                messages.append({"role": "system", "content": system_text})
         else:
             if user_parts:
                 messages.append({
@@ -668,3 +680,21 @@ class GoogleTransformer(BaseTransformer):
             elif isinstance(part, str):
                 texts.append(part)
         return "\n".join(texts)
+
+    def _extract_system_instruction_text(self, system_instruction: Any) -> str:
+        if isinstance(system_instruction, str):
+            return system_instruction
+        if isinstance(system_instruction, dict):
+            return self._extract_text_from_parts(system_instruction.get("parts", []))
+        if isinstance(system_instruction, list):
+            return self._extract_text_from_parts(system_instruction)
+        return ""
+
+    def _cached_prompt_tokens(self, usage: dict[str, Any]) -> int:
+        details = usage.get("prompt_tokens_details")
+        if isinstance(details, dict):
+            cached = details.get("cached_tokens")
+            if isinstance(cached, int):
+                return cached
+        cached = usage.get("cached_tokens")
+        return cached if isinstance(cached, int) else 0

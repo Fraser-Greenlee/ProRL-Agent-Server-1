@@ -402,6 +402,8 @@ class OpenAIResponsesTransformer(BaseTransformer):
             messages.extend(self._convert_input_items_to_messages(input_data))
 
         result: dict[str, Any] = {"messages": messages}
+        if "model" in body:
+            result["model"] = body["model"]
 
         if "max_tokens" in body:
             result["max_tokens"] = body["max_tokens"]
@@ -426,7 +428,9 @@ class OpenAIResponsesTransformer(BaseTransformer):
 
         # Responses `reasoning` request param → enable_thinking.
         reasoning_cfg = body.get("reasoning")
-        if isinstance(reasoning_cfg, dict):
+        if isinstance(reasoning_cfg, dict) and self._reasoning_config_enables_thinking(
+            reasoning_cfg
+        ):
             chat_template_kwargs = dict(result.get("chat_template_kwargs") or {})
             chat_template_kwargs["enable_thinking"] = True
             result["chat_template_kwargs"] = chat_template_kwargs
@@ -437,7 +441,9 @@ class OpenAIResponsesTransformer(BaseTransformer):
         if tools:
             result["tools"] = tools
             if "tool_choice" in body:
-                result["tool_choice"] = body["tool_choice"]
+                result["tool_choice"] = self._tool_choice_to_openai_chat(
+                    body["tool_choice"]
+                )
 
         return self._enhance_for_training(
             result,
@@ -453,8 +459,10 @@ class OpenAIResponsesTransformer(BaseTransformer):
             return None
 
         format_type = format_cfg.get("type")
-        if format_type in {"text", "json_object"}:
-            return {"type": format_type}
+        if format_type == "text":
+            return None
+        if format_type == "json_object":
+            return {"type": "json_object"}
         if format_type != "json_schema":
             return None
 
@@ -513,14 +521,7 @@ class OpenAIResponsesTransformer(BaseTransformer):
             func = tc.get("function", {})
             name = func.get("name", "")
             if name in ("shell", "execute", "run_command"):
-                output_items.append(
-                    {
-                        "type": "local_shell_call",
-                        "call_id": tc.get("id", ""),
-                        "status": "completed",
-                        "action": {"type": "execute", "command": func.get("arguments", "{}")},
-                    }
-                )
+                output_items.append(self._local_shell_call_from_tool_call(tc))
             else:
                 output_items.append(
                     {
@@ -534,6 +535,14 @@ class OpenAIResponsesTransformer(BaseTransformer):
                 )
 
         usage = response.get("usage", {})
+        response_usage = {
+            "input_tokens": usage.get("prompt_tokens", 0),
+            "output_tokens": usage.get("completion_tokens", 0),
+            "total_tokens": usage.get("total_tokens", 0),
+        }
+        cached_tokens = self._cached_prompt_tokens(usage)
+        if cached_tokens:
+            response_usage["input_tokens_details"] = {"cached_tokens": cached_tokens}
         return {
             "id": response.get("id", f"resp_{uuid.uuid4().hex}"),
             "object": "response",
@@ -541,11 +550,7 @@ class OpenAIResponsesTransformer(BaseTransformer):
             "status": "completed",
             "model": original_request.get("model", response.get("model", "unknown")),
             "output": output_items,
-            "usage": {
-                "input_tokens": usage.get("prompt_tokens", 0),
-                "output_tokens": usage.get("completion_tokens", 0),
-                "total_tokens": usage.get("total_tokens", 0),
-            },
+            "usage": response_usage,
         }
 
     def create_stream_state(self, original_request: dict[str, Any]) -> ResponsesStreamState:
@@ -668,11 +673,34 @@ class OpenAIResponsesTransformer(BaseTransformer):
                     }
                 )
 
+            elif item_type in {"local_shell_call", "shell_call"}:
+                if pending_input_content:
+                    messages.extend(self._flush_input_content(pending_input_content))
+                    pending_input_content = []
+                if pending_tool_outputs:
+                    messages.extend(
+                        self._flush_tool_block(
+                            pending_tool_calls,
+                            pending_tool_outputs,
+                            pending_reasoning,
+                        )
+                    )
+                    pending_tool_calls = []
+                    pending_tool_outputs = []
+                    pending_reasoning = ""
+                pending_tool_calls.append(self._local_shell_call_to_tool_call(item))
+
             elif item_type == "function_call_output":
                 if pending_input_content:
                     messages.extend(self._flush_input_content(pending_input_content))
                     pending_input_content = []
                 pending_tool_outputs.extend(self._function_call_output_messages(item))
+
+            elif item_type in {"local_shell_call_output", "shell_call_output"}:
+                if pending_input_content:
+                    messages.extend(self._flush_input_content(pending_input_content))
+                    pending_input_content = []
+                pending_tool_outputs.extend(self._local_shell_output_messages(item))
 
             else:
                 if pending_input_content:
@@ -733,6 +761,94 @@ class OpenAIResponsesTransformer(BaseTransformer):
         if image_parts:
             messages.append({"role": "user", "content": image_parts})
         return messages
+
+    def _local_shell_call_to_tool_call(self, item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": item.get("call_id") or item.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+            "type": "function",
+            "function": {
+                "name": "shell",
+                "arguments": self._local_shell_action_to_arguments(item.get("action")),
+            },
+        }
+
+    def _local_shell_output_messages(self, item: dict[str, Any]) -> list[dict[str, Any]]:
+        call_id = item.get("call_id") or item.get("id") or ""
+        return self._function_call_output_messages(
+            {"call_id": call_id, "output": item.get("output", "")}
+        )
+
+    def _local_shell_action_to_arguments(self, action: Any) -> str:
+        if isinstance(action, str):
+            return action
+        if not isinstance(action, dict):
+            return "{}"
+
+        command = action.get("command")
+        if isinstance(command, str):
+            stripped = command.strip()
+            if stripped.startswith(("{", "[")):
+                try:
+                    json.loads(stripped)
+                    return stripped
+                except json.JSONDecodeError:
+                    pass
+            return json.dumps({"cmd": command})
+
+        commands = action.get("commands")
+        if isinstance(commands, list):
+            command_values = [cmd for cmd in commands if isinstance(cmd, str)]
+            args: dict[str, Any]
+            if len(command_values) == 1:
+                args = {"cmd": command_values[0]}
+            else:
+                args = {"commands": command_values}
+            for key in ("timeout_ms", "max_output_length"):
+                if key in action:
+                    args[key] = action[key]
+            return json.dumps(args)
+
+        args = {key: value for key, value in action.items() if key != "type"}
+        return json.dumps(args) if args else "{}"
+
+    def _local_shell_call_from_tool_call(self, tool_call: dict[str, Any]) -> dict[str, Any]:
+        function = tool_call.get("function", {})
+        arguments = function.get("arguments", "{}") if isinstance(function, dict) else "{}"
+        call_id = tool_call.get("id", "")
+        return {
+            "type": "local_shell_call",
+            "id": f"lsh_{uuid.uuid4().hex[:24]}",
+            "call_id": call_id,
+            "status": "completed",
+            "action": self._local_shell_action_from_arguments(arguments),
+        }
+
+    def _local_shell_action_from_arguments(self, arguments: Any) -> dict[str, Any]:
+        parsed: Any = None
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                parsed = None
+        elif isinstance(arguments, dict):
+            parsed = arguments
+
+        if isinstance(parsed, dict):
+            commands = parsed.get("commands")
+            if isinstance(commands, list):
+                action = {"commands": [cmd for cmd in commands if isinstance(cmd, str)]}
+            else:
+                command = parsed.get("cmd") or parsed.get("command")
+                action = {"commands": [command]} if isinstance(command, str) else {}
+            for key in ("timeout_ms", "max_output_length"):
+                if key in parsed:
+                    action[key] = parsed[key]
+            if action.get("commands"):
+                return action
+
+        if isinstance(arguments, str) and arguments:
+            return {"commands": [arguments]}
+        return {"commands": []}
 
     def _function_call_output_content(self, output: Any) -> Any:
         if isinstance(output, dict):
@@ -835,10 +951,36 @@ class OpenAIResponsesTransformer(BaseTransformer):
                 converted.append({"type": "function", "function": tool["function"]})
                 continue
 
+            tool_type = tool.get("type")
+            if tool_type in {"shell", "local_shell"}:
+                converted.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "shell",
+                            "description": tool.get(
+                                "description", "Run shell commands in the local workspace."
+                            ),
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "cmd": {"type": "string"},
+                                    "commands": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "timeout_ms": {"type": "number"},
+                                    "max_output_length": {"type": "number"},
+                                },
+                            },
+                        },
+                    }
+                )
+                continue
+
             # Drop server-side tool types Polar can't dispatch (web_search,
             # file_search, computer_use, mcp, code_interpreter, image_generation,
-            # custom, local_shell, etc.). Only `function` is convertible.
-            tool_type = tool.get("type")
+            # custom, etc.). Only client-side functions/shell are convertible.
             if tool_type and tool_type != "function":
                 continue
 
@@ -865,6 +1007,44 @@ class OpenAIResponsesTransformer(BaseTransformer):
             converted.append({"type": "function", "function": func_def})
 
         return converted
+
+    def _tool_choice_to_openai_chat(self, tool_choice: Any) -> Any:
+        if isinstance(tool_choice, str):
+            if tool_choice == "shell":
+                return {"type": "function", "function": {"name": "shell"}}
+            return tool_choice
+
+        if not isinstance(tool_choice, dict):
+            return tool_choice
+
+        choice_type = tool_choice.get("type")
+        if choice_type == "function":
+            function = tool_choice.get("function")
+            if isinstance(function, dict):
+                return tool_choice
+            name = tool_choice.get("name")
+            if isinstance(name, str) and name:
+                return {"type": "function", "function": {"name": name}}
+        if choice_type in {"shell", "local_shell"}:
+            return {"type": "function", "function": {"name": "shell"}}
+        return tool_choice
+
+    def _reasoning_config_enables_thinking(self, reasoning_cfg: dict[str, Any]) -> bool:
+        if not reasoning_cfg:
+            return False
+        effort = reasoning_cfg.get("effort")
+        if isinstance(effort, str) and effort.lower() == "none":
+            return False
+        return True
+
+    def _cached_prompt_tokens(self, usage: dict[str, Any]) -> int:
+        details = usage.get("prompt_tokens_details")
+        if isinstance(details, dict):
+            cached = details.get("cached_tokens")
+            if isinstance(cached, int):
+                return cached
+        cached = usage.get("cached_tokens")
+        return cached if isinstance(cached, int) else 0
 
     def _make_error_response(self, message: str) -> dict[str, Any]:
         return {

@@ -127,10 +127,7 @@ def test_anthropic_request_maps_all_fields_and_image_input_to_chat() -> None:
         "function": {"name": "write_answer"},
     }
     assert transformed["logprobs"] is True
-    assert (
-        "chat_template_kwargs" not in transformed
-        or "enable_thinking" not in transformed["chat_template_kwargs"]
-    )
+    assert transformed["chat_template_kwargs"]["enable_thinking"] is False
 
 
 def test_anthropic_request_maps_multi_turn_reasoning_and_parallel_tools() -> None:
@@ -314,6 +311,28 @@ def test_anthropic_response_maps_openai_content_and_usage_back() -> None:
             "input": {"answer": 2},
         },
     ]
+
+
+def test_anthropic_response_preserves_cached_usage_tokens() -> None:
+    transformer = AnthropicTransformer()
+
+    response = transformer.transform_response(
+        {
+            "choices": [{"message": {"content": "Done"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 3,
+                "prompt_tokens_details": {"cached_tokens": 4},
+            },
+        },
+        {"model": "claude-test"},
+    )
+
+    assert response["usage"] == {
+        "input_tokens": 6,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 4,
+    }
 
 
 def test_anthropic_response_skips_empty_openai_content_with_tool_call() -> None:
@@ -617,6 +636,119 @@ def test_anthropic_request_drops_server_side_tools() -> None:
             },
         },
     ]
+
+
+def test_anthropic_request_system_list_with_cache_control_annotations() -> None:
+    transformer = AnthropicTransformer()
+    transformed = transformer.transform_request(
+        {
+            "system": [
+                {
+                    "type": "text",
+                    "text": "You are a careful assistant.",
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {"type": "text", "text": "Always cite sources."},
+            ],
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+        }
+    )
+
+    # cache_control is dropped silently; both text blocks are joined into one
+    # system message (Anthropic supports per-block cache markers; SGLang does
+    # not, so we forward only the prompt text).
+    assert transformed["messages"][0] == {
+        "role": "system",
+        "content": "You are a careful assistant.\nAlways cite sources.",
+    }
+
+
+def test_anthropic_stream_state_emits_parallel_tool_use_blocks() -> None:
+    transformer = AnthropicTransformer()
+    state = transformer.create_stream_state({"model": "claude-test"})
+
+    # Both tools opened in a single chunk; arguments split across two chunks.
+    events = state.process_chunk(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "toolu-a",
+                                "function": {"name": "lookup_a", "arguments": '{"q":'},
+                            },
+                            {
+                                "index": 1,
+                                "id": "toolu-b",
+                                "function": {"name": "lookup_b", "arguments": '{"q":'},
+                            },
+                        ]
+                    }
+                }
+            ]
+        },
+        is_first=True,
+    )
+    events.extend(
+        state.process_chunk(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {"index": 0, "function": {"arguments": '"a"}'}},
+                                {"index": 1, "function": {"arguments": '"b"}'}},
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"completion_tokens": 5},
+            }
+        )
+    )
+    events.extend(state.finalize())
+
+    # Two distinct content blocks: index 0 carries toolu-a, index 1 carries toolu-b.
+    starts = [
+        event for event in events if event["type"] == "content_block_start"
+    ]
+    assert len(starts) == 2
+    assert (starts[0]["index"], starts[0]["content_block"]["id"], starts[0]["content_block"]["name"]) == (
+        0,
+        "toolu-a",
+        "lookup_a",
+    )
+    assert (starts[1]["index"], starts[1]["content_block"]["id"], starts[1]["content_block"]["name"]) == (
+        1,
+        "toolu-b",
+        "lookup_b",
+    )
+
+    # Per-index argument deltas land on the right block.
+    deltas_by_index: dict[int, list[str]] = {}
+    for event in events:
+        if event["type"] == "content_block_delta" and event["delta"].get(
+            "type"
+        ) == "input_json_delta":
+            deltas_by_index.setdefault(event["index"], []).append(
+                event["delta"]["partial_json"]
+            )
+    assert "".join(deltas_by_index[0]) == '{"q":"a"}'
+    assert "".join(deltas_by_index[1]) == '{"q":"b"}'
+
+    # Both blocks are explicitly closed before the final message_delta.
+    stops = [
+        event["index"]
+        for event in events
+        if event["type"] == "content_block_stop"
+    ]
+    assert stops == [0, 1]
+    assert events[-2]["delta"]["stop_reason"] == "tool_use"
+    assert events[-1] == {"type": "message_stop"}
 
 
 def test_anthropic_stream_state_closes_thinking_before_tool_use() -> None:

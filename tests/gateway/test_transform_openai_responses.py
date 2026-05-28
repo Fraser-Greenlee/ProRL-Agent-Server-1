@@ -126,10 +126,7 @@ def test_responses_request_maps_all_fields_and_image_input_to_chat() -> None:
     ]
     assert transformed["tool_choice"] == "auto"
     assert transformed["logprobs"] is True
-    assert (
-        "chat_template_kwargs" not in transformed
-        or "enable_thinking" not in transformed["chat_template_kwargs"]
-    )
+    assert transformed["chat_template_kwargs"]["enable_thinking"] is False
 
 
 def test_responses_request_moves_image_function_output_to_user_message() -> None:
@@ -244,6 +241,125 @@ def test_responses_request_converts_nested_function_schema_and_preserves_strict(
         }
     ]
     assert transformed["tool_choice"] == "required"
+
+
+def test_responses_request_normalizes_flat_function_tool_choice() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "input": "use a tool",
+            "tools": [{"type": "function", "name": "lookup", "parameters": {}}],
+            "tool_choice": {"type": "function", "name": "lookup"},
+        }
+    )
+
+    assert transformed["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "lookup"},
+    }
+
+
+def test_responses_text_format_text_is_omitted_for_sglang() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "input": "plain text",
+            "text": {"format": {"type": "text"}},
+        }
+    )
+
+    assert "response_format" not in transformed
+
+
+def test_responses_reasoning_effort_none_does_not_enable_thinking() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "_polar_model_served": "MiniMax-M2.5",
+            "input": "answer directly",
+            "reasoning": {"effort": "none"},
+        }
+    )
+
+    assert "chat_template_kwargs" not in transformed
+
+
+def test_responses_request_round_trips_local_shell_items() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "input": [
+                {"type": "message", "role": "user", "content": "run tests"},
+                {
+                    "type": "local_shell_call",
+                    "call_id": "call-shell",
+                    "action": {"commands": ["pytest tests/gateway -q"], "timeout_ms": 1000},
+                    "status": "completed",
+                },
+                {
+                    "type": "local_shell_call_output",
+                    "id": "call-shell",
+                    "output": "ok",
+                    "status": "completed",
+                },
+            ],
+        }
+    )
+
+    assert transformed["messages"] == [
+        {"role": "user", "content": "run tests"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-shell",
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "arguments": '{"cmd": "pytest tests/gateway -q", "timeout_ms": 1000}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-shell", "content": "ok"},
+    ]
+
+
+def test_responses_response_emits_local_shell_call_for_shell_function() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    response = transformer.transform_response(
+        {
+            "id": "chatcmpl-1",
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-shell",
+                                "function": {
+                                    "name": "shell",
+                                    "arguments": '{"cmd": "pytest tests/gateway -q"}',
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+        },
+        {"model": "requested-model"},
+    )
+
+    shell_call = response["output"][0]
+    assert shell_call["type"] == "local_shell_call"
+    assert shell_call["call_id"] == "call-shell"
+    assert shell_call["action"] == {"commands": ["pytest tests/gateway -q"]}
 
 
 def test_responses_request_recovers_reasoning_from_encrypted_content_only() -> None:
@@ -560,6 +676,92 @@ def test_responses_stream_state_emits_response_events_for_text_and_tools() -> No
     assert events[-1]["response"]["model"] == "requested-model"
     assert events[-1]["response"]["output"][0]["content"][0]["text"] == "Hello"
     assert events[-1]["response"]["output"][1]["arguments"] == '{"q": "x"}'
+
+
+def test_responses_stream_state_emits_text_only_response() -> None:
+    transformer = OpenAIResponsesTransformer()
+    state = transformer.create_stream_state({"model": "requested-model"})
+
+    events = state.process_chunk(
+        {"choices": [{"delta": {"content": "Hel"}}]},
+        is_first=True,
+    )
+    events.extend(
+        state.process_chunk(
+            {
+                "choices": [{"delta": {"content": "lo."}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            }
+        )
+    )
+    events.extend(state.finalize())
+
+    types = [event["type"] for event in events]
+    assert types[0] == "response.created"
+    # Exactly one message item is opened and closed; no reasoning, no tool items.
+    assert types.count("response.output_item.added") == 1
+    assert types.count("response.output_item.done") == 1
+    added_item_types = [
+        event["item"]["type"]
+        for event in events
+        if event["type"] == "response.output_item.added"
+    ]
+    assert added_item_types == ["message"]
+    assert "response.reasoning_summary_text.delta" not in types
+    assert "response.function_call_arguments.delta" not in types
+
+    completed = events[-1]
+    assert completed["type"] == "response.completed"
+    assert [item["type"] for item in completed["response"]["output"]] == ["message"]
+    assert completed["response"]["output"][0]["content"][0]["text"] == "Hello."
+    assert completed["response"]["usage"]["output_tokens"] == 2
+
+
+def test_responses_stream_state_emits_reasoning_only_response() -> None:
+    transformer = OpenAIResponsesTransformer()
+    state = transformer.create_stream_state({"model": "requested-model"})
+
+    events = state.process_chunk(
+        {"choices": [{"delta": {"reasoning_content": "Think "}}]},
+        is_first=True,
+    )
+    events.extend(
+        state.process_chunk(
+            {
+                "choices": [
+                    {"delta": {"reasoning_content": "harder."}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            }
+        )
+    )
+    events.extend(state.finalize())
+
+    types = [event["type"] for event in events]
+    assert types[0] == "response.created"
+    # Reasoning summary lifecycle is complete: added → delta(s) → done.
+    assert "response.reasoning_summary_part.added" in types
+    assert "response.reasoning_summary_text.delta" in types
+    assert "response.reasoning_summary_text.done" in types
+    assert "response.reasoning_summary_part.done" in types
+    # No text or tool events because the model never emitted content/tool_calls.
+    assert "response.output_text.delta" not in types
+    assert "response.function_call_arguments.delta" not in types
+
+    added_item_types = [
+        event["item"]["type"]
+        for event in events
+        if event["type"] == "response.output_item.added"
+    ]
+    assert added_item_types == ["reasoning"]
+
+    completed = events[-1]
+    assert completed["type"] == "response.completed"
+    output = completed["response"]["output"]
+    assert [item["type"] for item in output] == ["reasoning"]
+    assert output[0]["summary"][0]["text"] == "Think harder."
+    assert output[0]["content"][0]["text"] == "Think harder."
+    assert output[0]["encrypted_content"]
 
 
 def test_responses_stream_state_orders_reasoning_before_tool_without_text() -> None:

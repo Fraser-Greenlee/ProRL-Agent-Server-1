@@ -356,6 +356,8 @@ class AnthropicTransformer(BaseTransformer):
             "messages": messages,
             "max_tokens": body.get("max_tokens", 4096),
         }
+        if "model" in body:
+            result["model"] = body["model"]
 
         if "temperature" in body:
             result["temperature"] = body["temperature"]
@@ -436,6 +438,7 @@ class AnthropicTransformer(BaseTransformer):
         finish_reason = choice.get("finish_reason", "stop")
         stop_reason = self.FINISH_TO_STOP_REASON.get(finish_reason, "end_turn")
         usage = response.get("usage", {})
+        anthropic_usage = self._usage_to_anthropic(usage)
 
         if not content:
             content.append({"type": "text", "text": ""})
@@ -448,10 +451,7 @@ class AnthropicTransformer(BaseTransformer):
             "model": original_request.get("model", "claude-3"),
             "stop_reason": stop_reason,
             "stop_sequence": None,
-            "usage": {
-                "input_tokens": usage.get("prompt_tokens", 0),
-                "output_tokens": usage.get("completion_tokens", 0),
-            },
+            "usage": anthropic_usage,
         }
 
     def create_stream_state(self, original_request: dict[str, Any]) -> AnthropicStreamState:
@@ -646,6 +646,32 @@ class AnthropicTransformer(BaseTransformer):
             return json.loads(s)
         except (json.JSONDecodeError, TypeError):
             return {}
+
+    def _usage_to_anthropic(self, usage: dict[str, Any]) -> dict[str, Any]:
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        cache_read = self._cached_prompt_tokens(usage)
+        input_tokens = max(prompt_tokens - cache_read, 0) if cache_read else prompt_tokens
+
+        result: dict[str, Any] = {
+            "input_tokens": input_tokens,
+            "output_tokens": completion_tokens,
+        }
+        if cache_read:
+            result["cache_read_input_tokens"] = cache_read
+        cache_creation = usage.get("cache_creation_input_tokens")
+        if isinstance(cache_creation, int) and cache_creation:
+            result["cache_creation_input_tokens"] = cache_creation
+        return result
+
+    def _cached_prompt_tokens(self, usage: dict[str, Any]) -> int:
+        details = usage.get("prompt_tokens_details")
+        if isinstance(details, dict):
+            cached = details.get("cached_tokens")
+            if isinstance(cached, int):
+                return cached
+        cached = usage.get("cached_tokens")
+        return cached if isinstance(cached, int) else 0
 
     def _error_response(self, message: str) -> dict[str, Any]:
         return {

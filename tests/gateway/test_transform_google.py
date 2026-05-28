@@ -162,10 +162,7 @@ def test_google_request_maps_all_fields_and_image_input_to_chat() -> None:
         "function": {"name": "write_answer"},
     }
     assert transformed["logprobs"] is True
-    assert (
-        "chat_template_kwargs" not in transformed
-        or "enable_thinking" not in transformed["chat_template_kwargs"]
-    )
+    assert transformed["chat_template_kwargs"]["enable_thinking"] is False
 
 
 def test_google_request_maps_tool_choice_modes() -> None:
@@ -210,6 +207,25 @@ def test_google_request_maps_tool_choice_modes() -> None:
             },
         }
     )["tool_choice"] == {"type": "function", "function": {"name": "lookup"}}
+
+
+def test_google_request_maps_system_instruction_and_system_content_role() -> None:
+    transformer = GoogleTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "systemInstruction": "Top-level system.",
+            "contents": [
+                {"role": "system", "parts": [{"text": "Inline system."}]},
+                {"role": "user", "parts": [{"text": "Hi"}]},
+            ],
+        }
+    )
+
+    assert transformed["messages"] == [
+        {"role": "system", "content": "Top-level system.\n\nInline system."},
+        {"role": "user", "content": "Hi"},
+    ]
 
 
 def test_google_request_maps_multi_turn_reasoning_and_parallel_tools() -> None:
@@ -494,6 +510,25 @@ def test_google_response_maps_extended_finish_reasons() -> None:
     )
     # Unknown finish reasons fall through to STOP rather than crashing.
     assert unknown["candidates"][0]["finishReason"] == "STOP"
+
+
+def test_google_response_preserves_cached_usage_tokens() -> None:
+    transformer = GoogleTransformer()
+
+    response = transformer.transform_response(
+        {
+            "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "total_tokens": 12,
+                "prompt_tokens_details": {"cached_tokens": 5},
+            },
+        },
+        {},
+    )
+
+    assert response["usageMetadata"]["cachedContentTokenCount"] == 5
 
 
 def test_google_request_drops_server_side_tools() -> None:

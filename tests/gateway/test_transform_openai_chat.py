@@ -58,7 +58,7 @@ def test_openai_chat_request_preserves_fields_and_image_content() -> None:
     assert transformed["tools"] == body["tools"]
     assert transformed["tool_choice"] == "auto"
     assert transformed["logprobs"] is True
-    assert transformed["chat_template_kwargs"] == {"foo": "bar"}
+    assert transformed["chat_template_kwargs"] == {"foo": "bar", "enable_thinking": False}
 
 
 def test_openai_chat_response_and_stream_preserve_requested_model() -> None:
@@ -99,6 +99,27 @@ def test_openai_chat_request_aliases_max_completion_tokens() -> None:
     assert transformed["max_completion_tokens"] == 32
     assert transformed["max_tokens"] == 32
     assert transformed["response_format"] == {"type": "json_object"}
+
+
+def test_openai_chat_merges_developer_role_for_non_qwen_models() -> None:
+    transformer = OpenAIChatTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "_polar_model_served": "MiniMax-M2.5",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "developer", "content": "Use short answers."},
+                {"role": "system", "content": [{"type": "text", "text": "Be precise."}]},
+            ],
+        }
+    )
+
+    assert transformed["messages"] == [
+        {"role": "system", "content": "Use short answers.\n\nBe precise."},
+        {"role": "user", "content": "hi"},
+    ]
+    assert "chat_template_kwargs" not in transformed
 
 
 def test_openai_chat_preserves_tool_turns_and_reasoning_content() -> None:

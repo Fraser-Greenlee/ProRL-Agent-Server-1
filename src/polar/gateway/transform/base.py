@@ -52,7 +52,23 @@ class BaseTransformer(ABC):
         return "qwen" in model_name.lower()
 
     @staticmethod
-    def _merge_developer_role(request: dict[str, Any]) -> dict[str, Any]:
+    def _content_to_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict):
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts)
+        return str(content) if content else ""
+
+    @classmethod
+    def _merge_developer_role(cls, request: dict[str, Any]) -> dict[str, Any]:
         """Rename 'developer' role to 'system' and merge all system messages into one."""
         messages = request.get("messages")
         if not isinstance(messages, list):
@@ -69,17 +85,19 @@ class BaseTransformer(ABC):
         non_system: list[Any] = []
         for msg in normalized:
             if isinstance(msg, dict) and msg.get("role") == "system":
-                content = msg.get("content", "")
-                text = content if isinstance(content, str) else str(content) if content else ""
+                text = cls._content_to_text(msg.get("content", ""))
                 if text:
                     system_parts.append(text)
             else:
                 non_system.append(msg)
 
-        if len(system_parts) > 1:
-            request["messages"] = [{"role": "system", "content": "\n\n".join(system_parts)}, *non_system]
+        if system_parts:
+            request["messages"] = [
+                {"role": "system", "content": "\n\n".join(system_parts)},
+                *non_system,
+            ]
         else:
-            request["messages"] = normalized
+            request["messages"] = non_system
         return request
 
     def _enhance_for_training(
@@ -90,10 +108,11 @@ class BaseTransformer(ABC):
         """Apply model compatibility fixes and request fields needed for training."""
         request.pop("_polar_model_served", None)
 
+        request = self._merge_developer_role(request)
+
         if self._is_qwen_model(model_name):
             # Qwen chat templates do not support the developer role and need
             # to be thinking disabled.
-            request = self._merge_developer_role(request)
             chat_template_kwargs = dict(request.get("chat_template_kwargs") or {})
             chat_template_kwargs.setdefault("enable_thinking", False)
             request["chat_template_kwargs"] = chat_template_kwargs
