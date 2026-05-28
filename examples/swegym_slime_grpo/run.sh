@@ -91,31 +91,8 @@ if [ ! -d "$REF_LOAD" ] || [ ! -f "$REF_LOAD/latest_checkpointed_iteration.txt" 
     exit 1
 fi
 
-# Mirrors slime/slime/scripts/models/qwen3.5-4B.sh.  --spec wires in the hybrid
-# GatedDeltaNet + full-attention layer layout.  tie_word_embeddings=true in HF
-# config → do NOT pass --untie-embeddings-and-output-weights.
-MODEL_ARGS=(
-    --spec "slime_plugins.models.qwen3_5" "get_qwen3_5_spec"
-    --disable-bias-linear
-    --qk-layernorm
-    --group-query-attention
-    --num-attention-heads 16
-    --num-query-groups 4
-    --kv-channels 256
-    --num-layers 32
-    --hidden-size 2560
-    --ffn-hidden-size 9216
-    --use-gated-attention
-    --normalization RMSNorm
-    --apply-layernorm-1p
-    --position-embedding-type rope
-    --norm-epsilon 1e-6
-    --rotary-percent 0.25
-    --swiglu
-    --vocab-size 248320
-    --rotary-base 10000000
-    --attention-output-gate
-)
+# shellcheck source=./model_args.sh
+source "${SCRIPT_DIR}/model_args.sh"
 
 # First run has an empty SAVE_DIR — slime's load_checkpoint asserts on empty.
 # Pick REF_LOAD (torch_dist) until the first save lands.
@@ -133,51 +110,25 @@ if [ ! -f "$PROMPT_DATA" ]; then
 fi
 
 # ── Runtime configs ─────────────────────────────────────────────────
-AGENT_CLI_DIR="${AGENT_CLI_DIR:-${PROJECT_ROOT}/tmp/swegym_agent_cli/opt_node}"
-APPTAINER_IMAGE_DIR="${APPTAINER_IMAGE_DIR:-${PROJECT_ROOT}/tmp/swegym_apptainer_images}"
-POLAR_APPTAINER_BIN="${POLAR_APPTAINER_BIN:-/usr/bin/apptainer}"
-export POLAR_APPTAINER_BIN
+export AGENT_CLI_DIR="${AGENT_CLI_DIR:-${PROJECT_ROOT}/tmp/swegym_agent_cli/opt_node}"
+export APPTAINER_IMAGE_DIR="${APPTAINER_IMAGE_DIR:-${PROJECT_ROOT}/tmp/swegym_apptainer_images}"
+# Prefer apptainer in PATH (HPC modules etc.); fall back to /usr/bin for Ubuntu defaults.
+export POLAR_APPTAINER_BIN="${POLAR_APPTAINER_BIN:-$(command -v apptainer || echo /usr/bin/apptainer)}"
 SGLANG_ROUTER_PORT="${SGLANG_ROUTER_PORT:-9000}"
 SGLANG_ROUTER_HOST="${SGLANG_ROUTER_HOST:-$(detect_host_ip)}"
-SGLANG_ROUTER_BASE_URL="${SGLANG_ROUTER_BASE_URL:-http://${SGLANG_ROUTER_HOST}:${SGLANG_ROUTER_PORT}}"
+export SGLANG_ROUTER_BASE_URL="${SGLANG_ROUTER_BASE_URL:-http://${SGLANG_ROUTER_HOST}:${SGLANG_ROUTER_PORT}}"
 TOPOLOGY_TEMPLATE="${TOPOLOGY_TEMPLATE:-${SCRIPT_DIR}/topology.yaml}"
 POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.yaml}"
 TOPOLOGY_PATH="${TOPOLOGY_PATH:-${RUN_DIR}/topology.yaml}"
 CUSTOM_CONFIG_PATH="${CUSTOM_CONFIG_PATH:-${RUN_DIR}/polar_config.yaml}"
 
-"${PYTHON_BIN}" - "$TOPOLOGY_TEMPLATE" "$TOPOLOGY_PATH" "$SGLANG_ROUTER_BASE_URL" \
-       "$POLAR_CONFIG_TEMPLATE" "$CUSTOM_CONFIG_PATH" "$AGENT_CLI_DIR" \
-       "$APPTAINER_IMAGE_DIR" <<'PY'
-from pathlib import Path
-import sys
-import yaml
-
-(
-    topology_template,
-    topology_out,
-    router_url,
-    polar_template,
-    polar_out,
-    agent_cli_dir,
-    apptainer_image_dir,
-) = sys.argv[1:]
-
-with open(topology_template, encoding="utf-8") as fh:
-    topology = yaml.safe_load(fh) or {}
-for node in topology.get("gateway", {}).get("nodes", []):
-    node.setdefault("sglang", {})["base_url"] = router_url
-Path(topology_out).parent.mkdir(parents=True, exist_ok=True)
-with open(topology_out, "w", encoding="utf-8") as fh:
-    yaml.safe_dump(topology, fh, sort_keys=False)
-
-with open(polar_template, encoding="utf-8") as fh:
-    polar_config = yaml.safe_load(fh) or {}
-polar_config["polar_agent_cli_dir"] = agent_cli_dir
-polar_config["polar_apptainer_image_dir"] = apptainer_image_dir
-Path(polar_out).parent.mkdir(parents=True, exist_ok=True)
-with open(polar_out, "w", encoding="utf-8") as fh:
-    yaml.safe_dump(polar_config, fh, sort_keys=False)
-PY
+# Render YAML templates: only the listed ${VARS} are expanded, so literal
+# $HOME / $... inside polar_config.yaml are left untouched.
+command -v envsubst >/dev/null || { echo "ERROR: envsubst not found (install gettext-base)"; exit 1; }
+TEMPLATE_VARS='${SGLANG_ROUTER_BASE_URL} ${AGENT_CLI_DIR} ${APPTAINER_IMAGE_DIR}'
+mkdir -p "$(dirname "$TOPOLOGY_PATH")" "$(dirname "$CUSTOM_CONFIG_PATH")"
+envsubst "$TEMPLATE_VARS" < "$TOPOLOGY_TEMPLATE"     > "$TOPOLOGY_PATH"
+envsubst "$TEMPLATE_VARS" < "$POLAR_CONFIG_TEMPLATE" > "$CUSTOM_CONFIG_PATH"
 
 echo "Using topology: ${TOPOLOGY_PATH}"
 echo "Using Polar config: ${CUSTOM_CONFIG_PATH}"
@@ -209,14 +160,31 @@ sleep 2
 curl -sf http://127.0.0.1:8080/health || { echo "Polar rollout server not healthy"; exit 1; }
 
 # ── Step 2: Ray + Slime (manages SGLang engines + training) ───────
-echo "=== Starting Ray (all 8 GPUs) ==="
+# GPU split — defaults are 2 training + 6 rollout (8x B200 single node).
+ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-2}"
+ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-6}"
+ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
+ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
+N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
+# Memory budget — sized for B200 (180GB). On A100/H100 80GB lower these.
+MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-60000}"
+SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-50000}"
+
+# Ray sizing — derive total GPUs from the actor/rollout split.
+RAY_NUM_GPUS="${RAY_NUM_GPUS:-$((ACTOR_NUM_GPUS_PER_NODE + ROLLOUT_NUM_GPUS))}"
+RAY_HEAD_IP="${RAY_HEAD_IP:-127.0.0.1}"
+
+echo "=== Starting Ray on ${RAY_HEAD_IP} (${RAY_NUM_GPUS} GPUs) ==="
 ray stop --force 2>/dev/null || true
 sleep 1
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address "$RAY_HEAD_IP" --num-gpus "$RAY_NUM_GPUS" --disable-usage-stats
 
-CUDNN_LIB="${CUDNN_LIB:-${PROJECT_ROOT}/.venv/lib/python3.13/site-packages/nvidia/cudnn/lib}"
+# cuDNN lib path — probe the active venv instead of hardcoding python3.13.
+if [ -z "${CUDNN_LIB:-}" ]; then
+    CUDNN_LIB="$("${PYTHON_BIN}" -c 'import nvidia.cudnn, os; print(os.path.join(list(nvidia.cudnn.__path__)[0], "lib"))' 2>/dev/null || true)"
+fi
 RUNTIME_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-if [ -d "$CUDNN_LIB" ]; then
+if [ -n "${CUDNN_LIB}" ] && [ -d "$CUDNN_LIB" ]; then
     RUNTIME_LD_LIBRARY_PATH="${CUDNN_LIB}:${RUNTIME_LD_LIBRARY_PATH}"
 fi
 RUNTIME_ENV_JSON="{
@@ -233,14 +201,6 @@ RUNTIME_ENV_JSON="{
   }
 }"
 
-ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-2}"
-ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-6}"
-ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
-ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
-N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
-MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-60000}"
-SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-50000}"
-
 # Rollout sizing: 4 prompts × 16 trajectories = 64 trajectories/rollout.
 # This matches the earlier high-util baseline and keeps request groups smaller
 # so long tails do not collapse usable token throughput.
@@ -249,7 +209,7 @@ SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-50000}"
 # The custom data source rounds epoch length up to 37 rollout batches, so all
 # 293 train prompts are consumed once; the final fixed-size batch wraps 3 prompts.
 echo "=== Launching train_async.py ==="
-ray job submit --address="http://127.0.0.1:8265" \
+ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --runtime-env-json="${RUNTIME_ENV_JSON}" \
     -- "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
     --actor-num-nodes 1 \

@@ -12,6 +12,8 @@ class OpenAIChatTransformer(BaseTransformer):
 
     def transform_request(self, body: dict[str, Any]) -> dict[str, Any]:
         result = body.copy()
+        if "max_tokens" not in result and "max_completion_tokens" in result:
+            result["max_tokens"] = result["max_completion_tokens"]
         return self._enhance_for_training(
             result,
             body.get("_polar_model_served"),

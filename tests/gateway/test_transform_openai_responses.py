@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from polar.gateway.transform.reasoning import encrypt_reasoning
 from polar.gateway.transform.openai_responses import OpenAIResponsesTransformer
 
 IMAGE_URL = "data:image/png;base64,abc123"
@@ -38,7 +39,21 @@ def test_responses_request_maps_all_fields_and_image_input_to_chat() -> None:
             "max_output_tokens": 128,
             "temperature": 0.2,
             "top_p": 0.9,
+            "top_logprobs": 3,
+            "parallel_tool_calls": False,
             "stream": True,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"count": {"type": "integer"}},
+                        "required": ["count"],
+                    },
+                    "strict": True,
+                }
+            },
             "tool_choice": "auto",
             "tools": [
                 {
@@ -83,7 +98,21 @@ def test_responses_request_maps_all_fields_and_image_input_to_chat() -> None:
     assert transformed["max_tokens"] == 128
     assert transformed["temperature"] == 0.2
     assert transformed["top_p"] == 0.9
+    assert transformed["top_logprobs"] == 3
+    assert transformed["parallel_tool_calls"] is False
     assert transformed["stream"] is True
+    assert transformed["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "answer",
+            "schema": {
+                "type": "object",
+                "properties": {"count": {"type": "integer"}},
+                "required": ["count"],
+            },
+            "strict": True,
+        },
+    }
     assert transformed["tools"] == [
         {
             "type": "function",
@@ -97,7 +126,10 @@ def test_responses_request_maps_all_fields_and_image_input_to_chat() -> None:
     ]
     assert transformed["tool_choice"] == "auto"
     assert transformed["logprobs"] is True
-    assert transformed["chat_template_kwargs"]["enable_thinking"] is False
+    assert (
+        "chat_template_kwargs" not in transformed
+        or "enable_thinking" not in transformed["chat_template_kwargs"]
+    )
 
 
 def test_responses_request_moves_image_function_output_to_user_message() -> None:
@@ -168,6 +200,247 @@ def test_responses_request_drops_tool_choice_when_tools_are_empty() -> None:
     assert "tool_choice" not in transformed
     assert "tools" not in transformed
     assert transformed["logprobs"] is True
+
+
+def test_responses_request_converts_nested_function_schema_and_preserves_strict() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "input": "use a tool",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Lookup data",
+                    "input_schema": {
+                        "jsonSchema": {
+                            "type": "object",
+                            "properties": {"q": {"type": "string"}},
+                            "required": ["q"],
+                        }
+                    },
+                    "strict": True,
+                },
+                {"type": "web_search"},
+            ],
+            "tool_choice": "required",
+        }
+    )
+
+    assert transformed["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "Lookup data",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"q": {"type": "string"}},
+                    "required": ["q"],
+                },
+                "strict": True,
+            },
+        }
+    ]
+    assert transformed["tool_choice"] == "required"
+
+
+def test_responses_request_recovers_reasoning_from_encrypted_content_only() -> None:
+    transformer = OpenAIResponsesTransformer()
+    encrypted = encrypt_reasoning("Recovered private reasoning.")
+
+    transformed = transformer.transform_request(
+        {
+            "input": [
+                {"type": "message", "role": "user", "content": "continue"},
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [],
+                    "content": [],
+                    "encrypted_content": encrypted,
+                },
+                {"type": "message", "role": "assistant", "content": "ok"},
+            ]
+        }
+    )
+
+    assert transformed["messages"][1] == {
+        "role": "assistant",
+        "content": "ok",
+        "reasoning_content": "Recovered private reasoning.",
+    }
+
+
+def test_responses_request_keeps_reasoning_with_each_tool_turn() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "input": [
+                {"type": "message", "role": "user", "content": "do two steps"},
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "Plan first call."}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call-a",
+                    "name": "lookup",
+                    "arguments": '{"step": 1}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-a",
+                    "output": "first result",
+                },
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "Plan second call."}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call-b",
+                    "name": "lookup",
+                    "arguments": '{"step": 2}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-b",
+                    "output": "second result",
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}],
+                },
+            ]
+        }
+    )
+
+    assert transformed["messages"] == [
+        {"role": "user", "content": "do two steps"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-a",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": '{"step": 1}'},
+                }
+            ],
+            "reasoning_content": "Plan first call.",
+        },
+        {"role": "tool", "tool_call_id": "call-a", "content": "first result"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-b",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": '{"step": 2}'},
+                }
+            ],
+            "reasoning_content": "Plan second call.",
+        },
+        {"role": "tool", "tool_call_id": "call-b", "content": "second result"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+
+def test_responses_request_groups_parallel_function_calls_and_outputs() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "input": [
+                {"type": "message", "role": "user", "content": "parallel"},
+                {
+                    "type": "function_call",
+                    "call_id": "call-a",
+                    "name": "lookup",
+                    "arguments": '{"q": "a"}',
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call-b",
+                    "name": "lookup",
+                    "arguments": '{"q": "b"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-a",
+                    "output": {"body": "A"},
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call-b",
+                    "output": {"content": [{"type": "output_text", "text": "B"}]},
+                },
+            ]
+        }
+    )
+
+    assert transformed["messages"] == [
+        {"role": "user", "content": "parallel"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-a",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": '{"q": "a"}'},
+                },
+                {
+                    "id": "call-b",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": '{"q": "b"}'},
+                },
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-a", "content": "A"},
+        {"role": "tool", "tool_call_id": "call-b", "content": "B"},
+    ]
+
+
+def test_responses_request_drops_server_side_tools() -> None:
+    transformer = OpenAIResponsesTransformer()
+
+    transformed = transformer.transform_request(
+        {
+            "input": "search the web",
+            "tools": [
+                {"type": "function", "name": "lookup", "parameters": {"type": "object"}},
+                {"type": "web_search"},
+                {"type": "file_search"},
+                {"type": "computer_use_preview"},
+                {"type": "mcp", "server_url": "https://example.test"},
+                {"type": "code_interpreter"},
+                {"type": "image_generation"},
+                # Typed tool with a name should still be dropped — name must
+                # not be enough to override the type filter.
+                {"type": "computer_use", "name": "computer_use"},
+            ],
+            "tool_choice": "auto",
+        }
+    )
+
+    # Only the custom function tool reaches SGLang.
+    assert transformed["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+    assert transformed["tool_choice"] == "auto"
 
 
 def test_responses_response_maps_chat_result_back_to_response_shape() -> None:
@@ -287,3 +560,47 @@ def test_responses_stream_state_emits_response_events_for_text_and_tools() -> No
     assert events[-1]["response"]["model"] == "requested-model"
     assert events[-1]["response"]["output"][0]["content"][0]["text"] == "Hello"
     assert events[-1]["response"]["output"][1]["arguments"] == '{"q": "x"}'
+
+
+def test_responses_stream_state_orders_reasoning_before_tool_without_text() -> None:
+    transformer = OpenAIResponsesTransformer()
+    state = transformer.create_stream_state({"model": "requested-model"})
+
+    events = state.process_chunk(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning_content": "Need a lookup.",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call-1",
+                                "function": {"name": "lookup", "arguments": '{"q":"x"}'},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+        },
+        is_first=True,
+    )
+    events.extend(state.finalize())
+
+    added = [
+        (event["output_index"], event["item"]["type"])
+        for event in events
+        if event["type"] == "response.output_item.added"
+    ]
+    done = [
+        (event["output_index"], event["item"]["type"])
+        for event in events
+        if event["type"] == "response.output_item.done"
+    ]
+
+    assert added == [(0, "reasoning"), (1, "function_call")]
+    assert done[:2] == [(0, "reasoning"), (1, "function_call")]
+    assert events[-1]["response"]["output"][0]["type"] == "reasoning"
+    assert events[-1]["response"]["output"][1]["type"] == "function_call"

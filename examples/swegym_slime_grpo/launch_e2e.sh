@@ -34,7 +34,7 @@ AGENT_CLI_DIR="${AGENT_CLI_DIR:-${PROJECT_ROOT}/tmp/swegym_agent_cli/opt_node}"
 APPTAINER_IMAGE_DIR="${APPTAINER_IMAGE_DIR:-${PROJECT_ROOT}/tmp/swegym_apptainer_images}"
 APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${PROJECT_ROOT}/tmp/apptainer_cache}"
 APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-${PROJECT_ROOT}/tmp/apptainer_tmp}"
-POLAR_APPTAINER_BIN="${POLAR_APPTAINER_BIN:-/usr/bin/apptainer}"
+POLAR_APPTAINER_BIN="${POLAR_APPTAINER_BIN:-$(command -v apptainer || echo /usr/bin/apptainer)}"
 
 INSTALL_EDITABLE="${INSTALL_EDITABLE:-1}"
 APPLY_SGLANG_PATCH="${APPLY_SGLANG_PATCH:-1}"
@@ -97,6 +97,7 @@ require_cmd "${PYTHON_BIN}"
 require_cmd uv
 require_cmd "${POLAR_APPTAINER_BIN}"
 require_cmd ray
+require_cmd envsubst  # run.sh uses it to render YAML templates
 
 clone_if_missing "Slime" "${SLIME_REPO}" "${SLIME_REF}" "${SLIME_DIR}"
 clone_if_missing "Megatron-LM" "${MEGATRON_REPO}" "${MEGATRON_REF}" "${MEGATRON_DIR}"
