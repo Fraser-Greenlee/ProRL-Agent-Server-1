@@ -17,7 +17,8 @@ The top-level fields are:
 - `gateway`: heartbeat interval, optional rollout URL override, and gateway
   node list.
 - `gateway.nodes[]`: node id, host, port, public URL, served model name, worker
-  limits, SGLang endpoint, and optional default runtime.
+  limits, inference backend (`inference.engine` + `inference.base_url`), and
+  optional default runtime.
 
 Unknown keys are rejected so removed or misspelled options fail early.
 
@@ -43,7 +44,8 @@ gateway:
       max_init_workers: 8
       max_run_workers: 4
       max_postrun_workers: 4
-      sglang:
+      inference:
+        engine: sglang   # or vllm
         base_url: http://127.0.0.1:8000
 ```
 
@@ -53,7 +55,7 @@ gateway:
 
 - The rollout server calls each gateway node's `public_url`.
 - Gateway nodes call the rollout server callback URL.
-- Each gateway calls its configured `sglang.base_url`.
+- Each gateway calls its configured `inference.base_url`.
 
 When `public_url` is omitted or empty, Polar derives a local URL from host and
 port. For multi-node deployments, set explicit reachable URLs.
@@ -62,4 +64,4 @@ port. For multi-node deployments, set explicit reachable URLs.
 
 `polar serve_gateway` needs `--node-id` when the topology contains more than one
 gateway node. This prevents a gateway process from accidentally starting with
-the wrong SGLang endpoint or worker limits.
+the wrong inference endpoint or worker limits.

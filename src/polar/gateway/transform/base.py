@@ -1,4 +1,4 @@
-"""Base transformer interface with SGLang request enhancement."""
+"""Base transformer interface with inference-backend request enhancement."""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from typing import Any
 class BaseTransformer(ABC):
     """Abstract base class for API transformers.
 
-    Transforms requests from source API format to OpenAI format (for SGLang),
-    and transforms responses back to source API format.
+    Transforms requests from source API format to OpenAI format (for the
+    inference backend), and transforms responses back to source API format.
     """
 
     @abstractmethod
     def transform_request(self, body: dict[str, Any]) -> dict[str, Any]:
-        """Transform request body to OpenAI/SGLang format."""
+        """Transform request body to OpenAI format for the inference backend."""
         pass
 
     @abstractmethod

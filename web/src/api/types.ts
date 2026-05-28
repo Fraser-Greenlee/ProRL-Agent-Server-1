@@ -93,7 +93,8 @@ export interface TopologyPayload {
     port: number;
     gateway_url: string;
     model_served: string;
-    sglang_base_url: string;
+    engine: string;
+    inference_base_url: string;
     max_init_workers: number;
     max_run_workers: number;
     max_postrun_workers: number;

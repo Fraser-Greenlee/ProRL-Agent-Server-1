@@ -15,5 +15,6 @@ gateway:
       max_run_workers: 16
       max_postrun_workers: 16
       model_served: Qwen/Qwen3.5-4B
-      sglang:
+      inference:
+        engine: sglang
         base_url: ${SGLANG_ROUTER_BASE_URL}
