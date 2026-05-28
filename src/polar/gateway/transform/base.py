@@ -46,10 +46,10 @@ class BaseTransformer(ABC):
         return None
 
     @staticmethod
-    def _is_qwen_model(model_name: str | None) -> bool:
+    def _is_qwen35_model(model_name: str | None) -> bool:
         if not model_name:
             return False
-        return "qwen" in model_name.lower()
+        return "qwen3.5" in model_name.lower()
 
     @staticmethod
     def _content_to_text(content: Any) -> str:
@@ -110,9 +110,9 @@ class BaseTransformer(ABC):
 
         request = self._merge_developer_role(request)
 
-        if self._is_qwen_model(model_name):
-            # Qwen chat templates do not support the developer role and need
-            # to be thinking disabled.
+        if self._is_qwen35_model(model_name):
+            # Qwen3.5 outputs tool calls inside thinking; disable thinking.
+            # https://www.reddit.com/r/LocalLLaMA/comments/1sccqt2/i_think_i_got_solutions_for_qwen_35_tool_call_in/
             chat_template_kwargs = dict(request.get("chat_template_kwargs") or {})
             chat_template_kwargs.setdefault("enable_thinking", False)
             request["chat_template_kwargs"] = chat_template_kwargs
