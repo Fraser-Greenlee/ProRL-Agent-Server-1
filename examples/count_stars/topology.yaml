@@ -16,7 +16,7 @@ gateway:
       max_postrun_workers: 8
       model_served: Qwen/Qwen3.6-27B
       inference:
-        engine: sglang
+        engine: vllm
         base_url: http://127.0.0.1:8000
     - id: localhost-node-02
       host: 127.0.0.1
@@ -27,5 +27,5 @@ gateway:
       max_postrun_workers: 8
       model_served: Qwen/Qwen3.6-27B
       inference:
-        engine: sglang
+        engine: vllm
         base_url: http://127.0.0.1:8001
