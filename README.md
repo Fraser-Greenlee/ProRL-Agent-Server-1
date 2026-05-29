@@ -72,7 +72,7 @@ cd web && npm install && npm run build
 
 ## Usage Guide
 
-- ⭐ [Choose your Agent Harness](src/polar/agent/README.md): pick a built-in harness, or use the generic shell harness with wrapped agents.
+- ⭐ [Choose your Agent Harness](src/polar/agent/README.md): Express your agent using the generic `shell` harness, or pick a preset shortcut.
 - 🚀 [Trajectory Construction and Eval](src/polar/trajectory/README.md): See [builder](src/polar/trajectory/builder/README.md) and
   [evaluator](src/polar/trajectory/evaluator/README.md) guides for registered strategies.
 - 🔧 [Deployment Topology](src/polar/config/README.md): configure the Polar service.

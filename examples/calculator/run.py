@@ -28,10 +28,22 @@ STARTER_FILE = ASSETS_DIR / "calculator.py"
 TOPOLOGY = EXAMPLE_DIR / "topology.yaml"
 RUNTIME_IMAGE = "polar-localhost-calculator:latest"
 NUM_SAMPLES = 1
-TIMEOUT_SECONDS = 600.0
+# Generous budget: INIT install (npm / pip / venv) shares the per-task budget
+# with the agent run and evaluation.
+TIMEOUT_SECONDS = 1200.0
 POLL_INTERVAL_SECONDS = 10.0
 
-HARNESSES = ("claude_code", "codex", "gemini_cli", "opencode", "pi", "qwen_code")
+HARNESSES = (
+    "claude_code",
+    "codex",
+    "gemini_cli",
+    "opencode",
+    "pi",
+    "qwen_code",
+    "openhands_sdk",
+    "openclaw",
+    "hermes",
+)
 
 INSTRUCTION = """\
 `calculator.py` has a `Calculator` class with a tokenizer and three stub methods.
@@ -52,24 +64,30 @@ Requirements:
 - Use `//` for division (integer division).
 - You must make actual edits. An empty git diff fails the task.
 
-After editing, run `python3 test_calculator.py` and stop.
-
-These checks must pass exactly:
-- `cal("4*3-3") == 9`
-- `cal("(2+3)*4") == 20`
-- `cal("10/2+7") == 12`
-- `cal("18-(3*4)") == 6`
-- `cal(" 8 + 2 * 5 ") == 18`
+After editing, run `python3 test_calculator.py` to test.
 """
 
+# Per-harness INIT install command. npm CLIs install globally into
+# ~/.local/bin; the two Python agents install via pip (hermes from PyPI,
+# openhands-sdk into ~/.venv where its harness looks for the interpreter).
 # Pinned versions keep the quickstart stable. Bump intentionally.
-HARNESS_NPM_PACKAGE: dict[str, str] = {
-    "claude_code": "@anthropic-ai/claude-code@2.1.111",
-    "codex": "@openai/codex@0.121.0",
-    "gemini_cli": "@google/gemini-cli@0.38.1",
-    "opencode": "opencode-ai@1.4.6",
-    "pi": "@mariozechner/pi-coding-agent@0.67.68",
-    "qwen_code": "@qwen-code/qwen-code@0.14.5",
+HARNESS_INSTALL: dict[str, str] = {
+    "claude_code": "npm install -g @anthropic-ai/claude-code@2.1.111",
+    "codex": "npm install -g @openai/codex@0.121.0",
+    "gemini_cli": "npm install -g @google/gemini-cli@0.38.1",
+    "opencode": "npm install -g opencode-ai@1.4.6",
+    "pi": "npm install -g @mariozechner/pi-coding-agent@0.67.68",
+    "qwen_code": "npm install -g @qwen-code/qwen-code@0.14.5",
+    "openclaw": "npm install -g openclaw@2026.5.27",
+    "hermes": "python3 -m pip install --user --quiet hermes-agent==0.15.1",
+    # Pin sdk + tools to the same version. Unpinned, pip resolves a mismatched
+    # pair (sdk 1.17 + tools 1.24) whose imports break; the latest 1.24 needs
+    # Python 3.13 (lmnr dep conflict on 3.12), so pin to 1.17.0 for this image.
+    "openhands_sdk": (
+        "python3 -m venv $HOME/.venv && "
+        "$HOME/.venv/bin/pip install --quiet "
+        "openhands-sdk==1.17.0 openhands-tools==1.17.0"
+    ),
 }
 
 # Model name the harness CLI sends; the gateway rewrites it to the served model.
@@ -80,6 +98,9 @@ HARNESS_MODEL: dict[str, str] = {
     "opencode": "openai/gpt-5.4",
     "pi": "openai/gpt-5.4",
     "qwen_code": "qwen3-coder-plus",
+    "openhands_sdk": "openai/gpt-5.4",
+    "openclaw": "openai/gpt-5.4",
+    "hermes": "openai/gpt-5.4",
 }
 
 # INIT stage: install the harness CLI, then set up a clean git workspace.
@@ -100,6 +121,9 @@ _EVAL_EXCLUDES: dict[str, list[str]] = {
     "opencode": [".opencode/**", "**/.opencode/**", ".config/opencode/**"],
     "pi": [".pi/**", "**/.pi/**"],
     "qwen_code": [".qwen/**", "**/.qwen/**"],
+    "openclaw": [".openclaw/**", "**/.openclaw/**"],
+    "hermes": [".hermes/**", "**/.hermes/**"],
+    "openhands_sdk": [".openhands/**", "**/.openhands/**"],
 }
 _COMMON_EXCLUDES = ["node_modules/**", "**/node_modules/**", ".cache/**", "**/.cache/**", ".venv/**", "**/.venv/**"]
 
@@ -120,7 +144,7 @@ def build_task_payload(harness: str, batch_id: str, backend: str) -> dict[str, A
             "backend": backend,
             "image": runtime_image_for_backend(backend),
             "prepare": [
-                {"type": "exec", "command": f"npm install -g {HARNESS_NPM_PACKAGE[harness]} && {_WORKSPACE_PREPARE}"},
+                {"type": "exec", "command": f"{HARNESS_INSTALL[harness]} && {_WORKSPACE_PREPARE}"},
                 {"type": "upload_file", "source": str(TEST_FILE), "target": "/polar/session/workspace/test_calculator.py"},
                 {"type": "upload_file", "source": str(STARTER_FILE), "target": "/polar/session/workspace/calculator.py"},
                 {"type": "exec", "command": "cd /polar/session/workspace && git add -A && git commit -qm 'initial'"},

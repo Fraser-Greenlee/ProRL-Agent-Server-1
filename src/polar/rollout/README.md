@@ -58,7 +58,7 @@ A minimal task looks like:
 Task fields:
 
 - `runtime` selects Docker or Apptainer and describes the sandbox image.
-- `agent` selects a built-in harness or a custom import path.
+- `agent` selects a preset harness, the generic `shell` harness, or a custom import path.
 - `builder` selects how completion records become trajectories.
 - `evaluator` attaches rewards after the agent run.
 - `metadata` can carry training fields such as group id, rollout step, or policy

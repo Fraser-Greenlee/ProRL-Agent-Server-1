@@ -1,23 +1,46 @@
 # SWE-Gym Slime GRPO
 
-End-to-end example: train **Qwen3.5-4B** with async **GRPO** on **SWE-Gym** tasks,
-using **Polar** for agent rollouts and **Slime** for training. Targets a single
-node with 8× B200.
+End-to-end **training** example: train **Qwen3.5-4B** with async **GRPO** on
+**SWE-Gym** tasks, using **Polar** for agent rollouts and **Slime** for training.
+Targets a single node with 8× B200 (2 GPUs train, 6 serve).
+
+> Unlike the rollout demos (calculator / count_stars / swebench_verified), this
+> path serves the model with **SGLang**: Slime owns the inference engines and
+> syncs the freshly trained weights into them every step (GPU-to-GPU NCCL). The
+> served model and backend are therefore fixed by the training setup — don't
+> swap them here.
+
+## Prerequisites
+
+Install Polar, Slime, and Megatron per the
+[Slime bridge installation guide](../../src/slime_bridge/README.md#slime-installation).
+`launch_e2e.sh` clones Slime + Megatron-LM for you if they are missing.
 
 ## Quick Start
+
+One command sets everything up and starts training:
 
 ```bash
 bash examples/swegym_slime_grpo/launch_e2e.sh
 ```
 
-`launch_e2e.sh` is the one-shot entry point: it clones Slime + Megatron-LM,
-applies the Slime/SGLang patches, builds the 293-task SWE-Gym JSONL, pulls
-Apptainer images and the shared agent CLIs, converts the Qwen weights to
-torch_dist, then hands off to `run.sh`.
+It clones Slime + Megatron-LM, applies the Slime/SGLang patches, builds the
+293-task SWE-Gym JSONL, pulls the Apptainer images + shared agent CLIs, converts
+the Qwen weights to torch_dist, then hands off to `run.sh` (Polar services + Ray
++ the Slime training job).
 
-For Slime/Megatron install details see
-[../../src/slime_bridge/README.md](../../src/slime_bridge/README.md#slime-installation).
+## (Optional) Watch rollouts in the dashboard
 
+While training runs, start the dashboard **from the repo root** (so its
+`./rollout_results` path matches the rollout server's) to inspect live agent
+sessions, trajectories, and the rewards feeding each training step:
+
+```bash
+uv run polar dashboard -c tmp/swegym_slime_grpo/topology.yaml
+```
+
+Open <http://127.0.0.1:8090>. (`tmp/swegym_slime_grpo/topology.yaml` is the
+rendered topology that `run.sh` writes at launch.)
 
 ## Files
 
@@ -43,5 +66,3 @@ For Slime/Megatron install details see
 | Gateway/rollout host & port, model served | `topology.yaml` |
 | Which SWE-Gym dataset / split | `sample_tasks.py` → `DATASET_NAME`, `DATASET_SPLITS` |
 | Model architecture args (don't change unless swapping models) | `model_args.sh` |
-
-
