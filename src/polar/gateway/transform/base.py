@@ -100,12 +100,15 @@ class BaseTransformer(ABC):
             request["messages"] = non_system
         return request
 
-    def _enhance_for_training(
+    def _normalize_request(
         self,
         request: dict[str, Any],
         model_name: str | None = None,
     ) -> dict[str, Any]:
-        """Apply model compatibility fixes and request fields needed for training."""
+        """Normalize the OpenAI request: drop internal keys, merge system roles,
+        and apply per-model template fixes. Training-signal params (logprobs,
+        token ids) are added later by the inference engine.
+        """
         request.pop("_polar_model_served", None)
 
         request = self._merge_developer_role(request)
@@ -117,5 +120,4 @@ class BaseTransformer(ABC):
             chat_template_kwargs.setdefault("enable_thinking", False)
             request["chat_template_kwargs"] = chat_template_kwargs
 
-        request["logprobs"] = True
         return request

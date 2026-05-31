@@ -125,7 +125,6 @@ def test_responses_request_maps_all_fields_and_image_input_to_chat() -> None:
         }
     ]
     assert transformed["tool_choice"] == "auto"
-    assert transformed["logprobs"] is True
     assert transformed["chat_template_kwargs"]["enable_thinking"] is False
 
 
@@ -196,7 +195,6 @@ def test_responses_request_drops_tool_choice_when_tools_are_empty() -> None:
     assert transformed["messages"] == [{"role": "user", "content": "hello"}]
     assert "tool_choice" not in transformed
     assert "tools" not in transformed
-    assert transformed["logprobs"] is True
 
 
 def test_responses_request_converts_nested_function_schema_and_preserves_strict() -> None:

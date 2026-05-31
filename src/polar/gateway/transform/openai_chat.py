@@ -14,7 +14,7 @@ class OpenAIChatTransformer(BaseTransformer):
         result = body.copy()
         if "max_tokens" not in result and "max_completion_tokens" in result:
             result["max_tokens"] = result["max_completion_tokens"]
-        return self._enhance_for_training(
+        return self._normalize_request(
             result,
             body.get("_polar_model_served"),
         )

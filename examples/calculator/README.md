@@ -8,8 +8,8 @@ and evaluation all work together.
 ## Prerequisites
 
 Install **Polar** and **vLLM** as described in the [top-level README](../../README.md#installation).
-This example assumes 1 node **8×B200** — two vLLM servers (tensor-parallel 4 each).
-Adjust the servers and topology for your hardware.
+This example uses 1 node 8×B200 — two vLLM servers (tensor-parallel 4 each).
+Adjust the setup and topology for your hardware.
 
 ## Quick Start
 
@@ -19,22 +19,19 @@ Adjust the servers and topology for your hardware.
 uv run python examples/calculator/build_image.py
 ```
 
-The harness CLIs (`claude_code`, `codex`, …) install automatically during each
-task's **INIT** stage — there is nothing to install by hand.
-
 ### 2. Start two vLLM servers
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 vllm serve Qwen/Qwen3.6-27B --port 8000 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 uv run vllm serve Qwen/Qwen3.6-27B --port 8000 \
   --tensor-parallel-size 4 --max-model-len 262144 \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 
-CUDA_VISIBLE_DEVICES=4,5,6,7 vllm serve Qwen/Qwen3.6-27B --port 8001 \
+CUDA_VISIBLE_DEVICES=4,5,6,7 uv run vllm serve Qwen/Qwen3.6-27B --port 8001 \
   --tensor-parallel-size 4 --max-model-len 262144 \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 ```
 
-### 3. Start Polar
+### 3. Start Polar Servers
 
 ```bash
 uv run polar serve_rollout -c examples/calculator/topology.yaml
@@ -60,3 +57,9 @@ uv run polar dashboard -c examples/calculator/topology.yaml
 
 Open <http://127.0.0.1:8090> to inspect live tasks, sessions, trajectories,
 and evaluations.
+
+<p align="center">
+  <img src="../../assets/dashboard_calculator.png" alt="Calculator dashboard" width="400">
+  <img src="../../assets/dashboard_trajectory.png" alt="Trajectory view" width="400">
+</p>
+

@@ -7,6 +7,8 @@ export interface TaskSummary {
   completed_sessions: number;
   errored_sessions?: number;
   mean_reward?: number | null;
+  mean_traces?: number | null;
+  mean_completions?: number | null;
   created_at?: number | null;
   updated_at?: number | null;
   save_dir_path?: string;

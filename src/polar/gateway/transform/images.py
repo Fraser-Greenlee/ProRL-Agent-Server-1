@@ -28,9 +28,15 @@ def parse_data_url(url: str) -> tuple[str, str] | None:
     return mime_type, match.group("data")
 
 
+# OpenAI's image_url.detail only accepts these values; vLLM rejects anything
+# else. Harnesses send their own (e.g. codex's "original"), so drop unknowns
+# rather than forward a value that 400s the whole image request.
+_VALID_IMAGE_DETAILS = frozenset({"auto", "low", "high"})
+
+
 def openai_image_url_block(url: str, *, detail: Any = None) -> dict[str, Any]:
     image_url: dict[str, Any] = {"url": url}
-    if isinstance(detail, str) and detail:
+    if isinstance(detail, str) and detail in _VALID_IMAGE_DETAILS:
         image_url["detail"] = detail
     return {"type": "image_url", "image_url": image_url}
 

@@ -7,10 +7,12 @@ Two backends are supported, and they differ only in:
      Polar needs for training, and
   2. the exact shape of those fields in the response.
 
-Each backend is a small strategy with two hooks: ``prepare_request`` (inject
-engine-specific params) and ``normalize_response`` (canonicalize the response
-so everything downstream -- storage, trace builder, transforms, slime adapter
--- sees one shape). The canonical shape is SGLang's patched output:
+The base implements the canonical contract -- request ``logprobs`` (the one
+training param every backend needs) and a pass-through response. A backend
+overrides only what it does differently, via two hooks: ``prepare_request``
+(extra request params) and ``normalize_response`` (response canonicalization).
+Everything downstream -- storage, trace builder, transforms, slime adapter --
+then sees one shape. The canonical shape is SGLang's patched output:
 
   - prompt token ids:   ``choice.input_token_ids`` (or ``response.prompt_token_ids``)
   - response token ids: ``choice.token_ids``       (or ``logprobs.content[].token_id``)
@@ -22,34 +24,46 @@ natively via the ``return_token_ids`` request flag plus a light response rename.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any
 
 
 class InferenceEngine(ABC):
-    """Strategy for one OpenAI-compatible inference backend."""
+    """Strategy for one OpenAI-compatible inference backend.
+
+    The base encodes the canonical contract: request ``logprobs`` (the one
+    training param every backend needs) and pass the response through
+    unchanged. A backend overrides only what it does differently.
+    """
 
     name: str
 
-    @abstractmethod
     def prepare_request(self, request: dict[str, Any]) -> dict[str, Any]:
-        """Inject the params this backend needs to emit training token ids/logprobs."""
+        """Inject the request params this backend needs to emit training signals.
 
-    @abstractmethod
-    def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
-        """Canonicalize the backend's response (in place) and return it."""
-
-
-class SGLangEngine(InferenceEngine):
-    """SGLang is already canonical (via patch_sglang.sh); both hooks pass through."""
-
-    name = "sglang"
-
-    def prepare_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        ``logprobs`` is universal; subclasses add backend-specific params (e.g.
+        token-id flags) on top via ``super().prepare_request(...)``.
+        """
+        request["logprobs"] = True
         return request
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Canonicalize the backend's response (in place) and return it.
+
+        The canonical shape is SGLang's patched output, so the default is a
+        pass-through; a backend that differs overrides this.
+        """
         return response
+
+
+class SGLangEngine(InferenceEngine):
+    """Canonical backend: it emits Polar's training shape with no per-request or
+    response adaptation here -- so it inherits the base hooks unchanged. The one
+    thing SGLang lacks natively is token-id *output* (no request flag exists for
+    it); ``scripts/patch/patch_sglang.sh`` adds that on the response side.
+    """
+
+    name = "sglang"
 
 
 class VLLMEngine(InferenceEngine):
@@ -65,9 +79,15 @@ class VLLMEngine(InferenceEngine):
     name = "vllm"
 
     def prepare_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        request = super().prepare_request(request)  # logprobs=True
         request["return_token_ids"] = True
-        if request.get("logprobs"):
-            request.setdefault("top_logprobs", 0)
+        request.setdefault("top_logprobs", 0)
+        # vLLM reads input reasoning from `reasoning`, not Polar's canonical
+        # `reasoning_content`; rename it so prior turns' interleaved thinking
+        # survives templating (else they render an empty `<think></think>`).
+        for message in request.get("messages") or []:
+            if isinstance(message, dict) and message.get("reasoning_content") is not None:
+                message["reasoning"] = message.pop("reasoning_content")
         return request
 
     def normalize_response(self, response: dict[str, Any]) -> dict[str, Any]:

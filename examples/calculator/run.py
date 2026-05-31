@@ -27,7 +27,7 @@ TEST_FILE = ASSETS_DIR / "test_calculator.py"
 STARTER_FILE = ASSETS_DIR / "calculator.py"
 TOPOLOGY = EXAMPLE_DIR / "topology.yaml"
 RUNTIME_IMAGE = "polar-localhost-calculator:latest"
-NUM_SAMPLES = 1
+NUM_SAMPLES = 4
 # Generous budget: INIT install (npm / pip / venv) shares the per-task budget
 # with the agent run and evaluation.
 TIMEOUT_SECONDS = 1200.0

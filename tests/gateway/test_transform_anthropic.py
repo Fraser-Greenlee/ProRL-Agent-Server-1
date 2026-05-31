@@ -126,7 +126,6 @@ def test_anthropic_request_maps_all_fields_and_image_input_to_chat() -> None:
         "type": "function",
         "function": {"name": "write_answer"},
     }
-    assert transformed["logprobs"] is True
     assert transformed["chat_template_kwargs"]["enable_thinking"] is False
 
 

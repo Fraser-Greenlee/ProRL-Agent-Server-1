@@ -15,16 +15,18 @@ def test_get_engine_rejects_unknown_name() -> None:
         get_engine("tgi")
 
 
-def test_sglang_engine_is_pass_through() -> None:
+def test_sglang_engine_requests_logprobs_and_passes_through() -> None:
     engine = SGLangEngine()
-    request = {"messages": [], "logprobs": True}
-    assert engine.prepare_request(request) is request
+    request = {"messages": []}
+    out = engine.prepare_request(request)
+    assert out is request and out["logprobs"] is True
     response = {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
     assert engine.normalize_response(response) is response
 
 
 def test_vllm_prepare_request_requests_token_ids_and_logprobs() -> None:
     out = VLLMEngine().prepare_request({"messages": [], "logprobs": True})
+    assert out["logprobs"] is True
     assert out["return_token_ids"] is True
     assert out["top_logprobs"] == 0
 
@@ -34,10 +36,11 @@ def test_vllm_prepare_request_keeps_explicit_top_logprobs() -> None:
     assert out["top_logprobs"] == 5
 
 
-def test_vllm_prepare_request_skips_top_logprobs_without_logprobs() -> None:
+def test_vllm_prepare_request_forces_logprobs_when_absent() -> None:
     out = VLLMEngine().prepare_request({"messages": []})
+    assert out["logprobs"] is True
     assert out["return_token_ids"] is True
-    assert "top_logprobs" not in out
+    assert out["top_logprobs"] == 0
 
 
 def test_vllm_normalize_renames_reasoning_to_reasoning_content() -> None:

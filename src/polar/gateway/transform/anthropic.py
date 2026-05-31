@@ -391,7 +391,7 @@ class AnthropicTransformer(BaseTransformer):
                     body.get("tool_choice", {"type": "auto"})
                 )
 
-        return self._enhance_for_training(
+        return self._normalize_request(
             result,
             body.get("_polar_model_served"),
         )

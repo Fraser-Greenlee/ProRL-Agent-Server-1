@@ -8,8 +8,8 @@ image through the local vLLM OpenAI-compatible backend.
 ## Prerequisites
 
 Install **Polar** and **vLLM** as described in the [top-level README](../../README.md#installation).
-This example assumes 1 node **8×B200** — two vLLM servers (tensor-parallel 4 each).
-Adjust the servers and topology for your hardware.
+This example uses 1 node 8×B200 — two vLLM servers (tensor-parallel 4 each).
+Adjust the setup and topology for your hardware.
 
 ## Quick Start
 
@@ -18,9 +18,6 @@ Adjust the servers and topology for your hardware.
 ```bash
 uv run python examples/count_stars/build_image.py
 ```
-
-The harness CLIs (`claude_code`, `codex`, `gemini_cli`) install automatically
-during each task's **INIT** stage — there is nothing to install by hand.
 
 ### 2. Start two vLLM servers
 
@@ -34,7 +31,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 vllm serve Qwen/Qwen3.6-27B --port 8001 \
   --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
 ```
 
-### 3. Start Polar
+### 3. Start Polar Servers
 
 ```bash
 uv run polar serve_rollout -c examples/count_stars/topology.yaml

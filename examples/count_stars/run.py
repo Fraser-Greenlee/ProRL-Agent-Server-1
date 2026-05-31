@@ -27,7 +27,7 @@ IMAGE_FILE = EXAMPLE_DIR / "assets" / "polar_stars.png"
 TOPOLOGY = EXAMPLE_DIR / "topology.yaml"
 RUNTIME_IMAGE = "polar-localhost-count-stars:latest"
 RUNTIME_IMAGE_PATH = "/polar/session/workspace/polar_stars.png"
-NUM_SAMPLES = 1
+NUM_SAMPLES = 4
 TIMEOUT_SECONDS = 300.0
 POLL_INTERVAL_SECONDS = 10.0
 

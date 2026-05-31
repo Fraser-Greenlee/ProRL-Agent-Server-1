@@ -57,7 +57,6 @@ def test_openai_chat_request_preserves_fields_and_image_content() -> None:
     assert transformed["stop"] == ["END"]
     assert transformed["tools"] == body["tools"]
     assert transformed["tool_choice"] == "auto"
-    assert transformed["logprobs"] is True
     assert transformed["chat_template_kwargs"] == {"foo": "bar", "enable_thinking": False}
 
 

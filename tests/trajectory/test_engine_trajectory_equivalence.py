@@ -126,7 +126,7 @@ def test_single_turn_trace_is_identical_across_engines() -> None:
     assert vllm.response_ids == [10, 11, 12, 13]
     assert vllm.loss_mask == [1, 1, 1, 1]
     assert vllm.response_messages[0]["reasoning_content"] == "thinking"
-    assert [e["logprob"] for e in vllm.response_logprobs] == [-0.1, -0.2, -0.3, -0.4]
+    assert vllm.response_logprobs == [-0.1, -0.2, -0.3, -0.4]
 
 
 def test_per_request_builder_is_identical_across_engines() -> None:
