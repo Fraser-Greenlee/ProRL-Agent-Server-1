@@ -10,6 +10,12 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 
 SLIME_DIR="${SLIME_DIR:-${PROJECT_ROOT}/slime}"
 MEGATRON_DIR="${MEGATRON_DIR:-${PROJECT_ROOT}/Megatron-LM}"
+PYTHON_BIN="${PYTHON_BIN:-${PROJECT_ROOT}/.venv/bin/python3}"
+if [ ! -x "${PYTHON_BIN}" ]; then
+    PYTHON_BIN="$(command -v python3 || command -v python)"
+fi
+PYTHON_BIN_DIR="$(cd -- "$(dirname -- "${PYTHON_BIN}")" &>/dev/null && pwd)"
+export PATH="${PYTHON_BIN_DIR}:${PATH}"
 
 if [ ! -f "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" ]; then
     echo "ERROR: Slime not found at ${SLIME_DIR}. Clone it first:"

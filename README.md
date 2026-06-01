@@ -30,8 +30,9 @@
 
 #### 🟩 Install the **Rollout Server** (Polar): 
 ```bash
-uv venv
+uv venv --python 3.13
 uv pip install -e .
+source .venv/bin/activate
 ```
 
 ### 🟩 Install the **Inference Server** (SGLang or vLLM):
@@ -45,7 +46,7 @@ uv pip install vllm --torch-backend=auto
 
 **SGLang**
 ```bash
-uv pip install --prerelease=allow sglang==0.5.10
+uv pip install --prerelease=allow sglang==0.5.10 torch==2.9.1+cu128
 bash scripts/patch/patch_sglang.sh
 ```
 The patch applies necessary TITO and prompt token id emission on the pinned `sglang` version. We'll remove this once upstream support goes through.

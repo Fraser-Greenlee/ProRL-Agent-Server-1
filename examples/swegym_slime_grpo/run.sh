@@ -32,6 +32,7 @@ if [ ! -x "${PYTHON_BIN}" ]; then
     PYTHON_BIN="$(command -v python3 || command -v python)"
 fi
 PYTHON_BIN_DIR="$(cd -- "$(dirname -- "${PYTHON_BIN}")" &>/dev/null && pwd)"
+export PATH="${PYTHON_BIN_DIR}:${PATH}"
 
 is_path_like() {
     case "$1" in
@@ -78,7 +79,9 @@ fi
 # through slime_plugins.mbridge.qwen3_5 (text_config-aware) at convert-time.
 HF_CHECKPOINT="${HF_CHECKPOINT:-Qwen/Qwen3.5-4B}"
 REF_LOAD="${REF_LOAD:-${PROJECT_ROOT}/tmp/checkpoints/Qwen3.5-4B_torch_dist}"
-SAVE_DIR="${SAVE_DIR:-${PROJECT_ROOT}/tmp/ckpt/swegym_slime_grpo_qwen35_4b}"
+RUN_ID="${RUN_ID:-swegym-slime-grpo-$(date -u +%Y%m%dT%H%M%SZ)}"
+SAVE_ROOT="${SAVE_ROOT:-${PROJECT_ROOT}/tmp/ckpt/swegym_slime_grpo_qwen35_4b}"
+SAVE_DIR="${SAVE_DIR:-${SAVE_ROOT}/${RUN_ID}}"
 mkdir -p "$SAVE_DIR"
 if is_path_like "$HF_CHECKPOINT" && [ ! -e "$HF_CHECKPOINT" ]; then
     echo "ERROR: HF checkpoint not found at $HF_CHECKPOINT"
@@ -103,7 +106,7 @@ else
 fi
 
 # ── Data ───────────────────────────────────────────────────────────
-PROMPT_DATA="${SCRIPT_DIR}/swegym_train_293.jsonl"
+PROMPT_DATA="${PROMPT_DATA:-${SCRIPT_DIR}/swegym_train_293.jsonl}"
 if [ ! -f "$PROMPT_DATA" ]; then
     echo "Preparing train data..."
     "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_data.py"
@@ -133,6 +136,7 @@ envsubst "$TEMPLATE_VARS" < "$POLAR_CONFIG_TEMPLATE" > "$CUSTOM_CONFIG_PATH"
 echo "Using topology: ${TOPOLOGY_PATH}"
 echo "Using Polar config: ${CUSTOM_CONFIG_PATH}"
 echo "Using Apptainer image dir: ${APPTAINER_IMAGE_DIR}"
+echo "Using run id: ${RUN_ID}"
 echo "Using save dir: ${SAVE_DIR}"
 echo "Using SGLang router URL for Polar gateway: ${SGLANG_ROUTER_BASE_URL}"
 
@@ -166,7 +170,6 @@ ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-6}"
 ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
 N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
-# Memory budget — sized for B200 (180GB). On A100/H100 80GB lower these.
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-60000}"
 SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-50000}"
 
@@ -191,11 +194,11 @@ RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"${MEGATRON_DIR}:${PROJECT_ROOT}/src\",
     \"PATH\": \"${PYTHON_BIN_DIR}:${PATH}\",
-    \"VIRTUAL_ENV\": \"${PROJECT_ROOT}/.venv\",
+    \"VIRTUAL_ENV\": \"${VIRTUAL_ENV:-${PROJECT_ROOT}/.venv}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"WANDB_DIR\": \"${PROJECT_ROOT}/logs\",
     \"LD_LIBRARY_PATH\": \"${RUNTIME_LD_LIBRARY_PATH}\",
-    \"PYTORCH_CUDA_ALLOC_CONF\": \"max_split_size_mb:2048,expandable_segments:True\",
+    \"PYTORCH_ALLOC_CONF\": \"max_split_size_mb:2048,expandable_segments:True\",
     \"NVTE_DEBUG\": \"1\",
     \"NVTE_DEBUG_LEVEL\": \"2\"
   }
@@ -234,7 +237,7 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --metadata-key metadata \
     --rollout-shuffle \
     --reward-key score \
-    --num-epoch 1 \
+    --num-epoch "${NUM_EPOCH:-1}" \
     --rollout-batch-size "$ROLLOUT_BATCH_SIZE" \
     --n-samples-per-prompt "$N_SAMPLES_PER_PROMPT" \
     --rollout-max-response-len 16000 \

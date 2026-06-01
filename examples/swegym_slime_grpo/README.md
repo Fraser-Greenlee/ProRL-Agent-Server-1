@@ -6,28 +6,31 @@ Targets a single node with 8× B200 (2 GPUs train, 6 serve).
 
 > Unlike the rollout demos (calculator / count_stars / swebench_verified), this
 > path serves the model with **SGLang**: Slime owns the inference engines and
-> syncs the freshly trained weights into them every step (GPU-to-GPU NCCL). The
-> served model and backend are therefore fixed by the training setup — don't
-> swap them here.
+> syncs the freshly trained weights into them every step (GPU-to-GPU NCCL).
 
 ## Prerequisites
 
-Install Polar, Slime, and Megatron per the
-[Slime bridge installation guide](../../src/slime_bridge/README.md#slime-installation).
-`launch_e2e.sh` clones Slime + Megatron-LM for you if they are missing.
+Install Polar and SGLang per [Polar installation](../../README.md#installation).
+
+Make sure to install Polar's optional swebench dependency for evaluation.
+```
+uv pip install -e ".[swebench]"
+```
 
 ## Quick Start
 
-One command sets everything up and starts training:
+Log into wandb and one command sets everything up and starts training:
 
 ```bash
+export WANDB_API_KEY=<your-key>
 bash examples/swegym_slime_grpo/launch_e2e.sh
 ```
 
-It clones Slime + Megatron-LM, applies the Slime/SGLang patches, builds the
+It clones Slime + Megatron-LM, installs the training-stack extras (Transformer
+Engine; Flash Linear Attention; flash-attn on B200), applies the Slime/SGLang
+patches, builds the
 293-task SWE-Gym JSONL, pulls the Apptainer images + shared agent CLIs, converts
-the Qwen weights to torch_dist, then hands off to `run.sh` (Polar services + Ray
-+ the Slime training job).
+the Qwen weights to torch_dist, then hands off to `run.sh` (Polar services + Ray + the Slime training job).
 
 ## (Optional) Watch rollouts in the dashboard
 

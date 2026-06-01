@@ -55,7 +55,7 @@ polar_task_template:
           ln -sf /opt/miniconda3/envs/testbed/bin/python "$HOME/.venv/bin/python3" &&
           git config --global core.pager ''
   agent:
-    harness: "qwen_code"
+    harness: "codex"
     model_name: "gpt-5.4"
   builder:
     strategy: "prefix_merging"
