@@ -115,11 +115,12 @@ class InferenceClient:
         """Non-streaming chat completion. Returns the full JSON response."""
         await self._acquire_generation_slot()
         client = await self._get_client()
-        request_copy = request.copy()
+        from copy import deepcopy
+
+        request_copy = deepcopy(request)
         request_copy.pop("stream", None)
         request_copy["stream"] = False
         request_copy = self.engine.prepare_request(request_copy)
-
         try:
             resp = await client.post(
                 "/v1/chat/completions",
