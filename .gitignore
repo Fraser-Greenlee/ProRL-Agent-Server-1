@@ -111,6 +111,9 @@ tmp/
 
 # Local third-party source checkouts
 slime/
+sglang/
+vllm/
+trl/
 Megatron-LM/
 glm/
 
