@@ -24,6 +24,26 @@ def _extract_response_ids(response: dict[str, Any], choice: dict[str, Any]) -> l
             ]
             if extracted:
                 return extracted
+
+    meta_info = choice.get("meta_info")
+    if isinstance(meta_info, dict):
+        output_logprobs = meta_info.get("output_token_logprobs")
+        if isinstance(output_logprobs, list):
+            extracted = []
+            for item in output_logprobs:
+                token_id = None
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    token_id = item[1]
+                elif isinstance(item, dict):
+                    token_id = item.get("token_id")
+                if token_id is None:
+                    continue
+                try:
+                    extracted.append(int(token_id))
+                except (TypeError, ValueError):
+                    continue
+            if extracted:
+                return extracted
     return []
 
 
@@ -70,7 +90,11 @@ def build_trace_from_completion(completion: CompletionRecord) -> Trace:
         if isinstance(choices, list) and choices and isinstance(choices[0], dict)
         else {}
     )
-    prompt_ids = first_choice.get("input_token_ids") or response.get("prompt_token_ids")
+    prompt_ids = (
+        first_choice.get("input_token_ids")
+        or first_choice.get("prompt_token_ids")
+        or response.get("prompt_token_ids")
+    )
     response_message = first_choice.get("message")
     finish_reason = first_choice.get("finish_reason")
 

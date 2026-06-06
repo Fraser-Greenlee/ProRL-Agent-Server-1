@@ -1,16 +1,17 @@
 """Both backends must produce the same trajectory from the same generation.
 
-SGLang (patched) and vLLM (`return_token_ids` + `VLLMEngine.normalize_response`)
-expose the training fields in different response shapes. These tests pin that
-the two shapes collapse to byte-identical ``Trace`` objects through the real
-builders, so downstream training sees one trajectory regardless of engine.
+Source SGLang (`return_prompt_token_ids` + `return_meta_info`) and vLLM
+(`return_token_ids` + engine normalization) expose the training fields in
+different response shapes. These tests pin that the two shapes collapse to
+byte-identical ``Trace`` objects through the real builders, so downstream
+training sees one trajectory regardless of engine.
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from polar.gateway.engine import VLLMEngine
+from polar.gateway.engine import SGLangEngine, VLLMEngine
 from polar.trajectory.builder.per_request import PerRequestBuilder
 from polar.trajectory.builder.prefix_merging import PrefixMergingBuilder
 from polar.trajectory.builder.record_utils import build_trace_from_completion
@@ -31,25 +32,31 @@ def _sglang_record(
     prompt_messages: list[dict],
     response_message: dict,
 ) -> CompletionRecord:
-    """Canonical SGLang shape: input_token_ids on the choice, token_id in logprobs."""
+    """Native source SGLang shape, passed through the gateway's normalize_response."""
     message = {"role": "assistant", "content": content, **response_message}
     if reasoning is not None:
         message["reasoning_content"] = reasoning
     response = {
         "choices": [
             {
-                "input_token_ids": list(prompt_ids),
+                "prompt_token_ids": list(prompt_ids),
                 "message": message,
                 "finish_reason": finish_reason,
                 "logprobs": {
                     "content": [
-                        {"token": f"t{tid}", "token_id": tid, "logprob": lp, "bytes": []}
+                        {"token": f"t{tid}", "logprob": lp, "bytes": []}
                         for tid, lp in zip(response_ids, logprobs)
+                    ]
+                },
+                "meta_info": {
+                    "output_token_logprobs": [
+                        [lp, tid, f"t{tid}"] for tid, lp in zip(response_ids, logprobs)
                     ]
                 },
             }
         ]
     }
+    response = SGLangEngine().normalize_response(response)
     return CompletionRecord(
         completion_id=completion_id,
         request={"messages": prompt_messages},
