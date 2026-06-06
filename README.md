@@ -30,12 +30,12 @@
 
 #### 🟩 Install the **Rollout Server** (Polar): 
 ```bash
-uv venv --python 3.13
+uv venv --python 3.12
 uv pip install -e .
 source .venv/bin/activate
 ```
 
-### 🟩 Install the **Inference Server** (SGLang or vLLM):
+#### 🟩 Install the **Inference Server** (SGLang or vLLM):
 
 Pick one (that your trainer supports). Avoid installing both under the same environment given dependency conflicts.
 
@@ -51,7 +51,7 @@ bash scripts/patch/patch_sglang.sh
 ```
 The patch applies necessary TITO and prompt token id emission on the pinned `sglang` version. We'll remove this once upstream support goes through.
 
-### 🟩 Install your favorite **Training Framework**:
+#### 🟩 Install your favorite **Training Framework**:
 
 Polar is trainer agnostic. So choice of **Trainer** and **Training Backend** are highly flexible given Polar's HTTP server boundaries.
 
@@ -70,6 +70,17 @@ uv pip install -e ".[swebench]"
 cd web && npm install && npm run build
 ```
 
+## Examples
+- [Calculator](examples/calculator/README.md): minimal smoke test. Start here!
+- [Count Stars](examples/count_stars/README.md): minimal test for VLM.
+- [SWE-bench Verified](examples/swebench_verified/README.md): benchmark-style
+  evaluation on SWE-bench Verified tasks.
+- [SWE-Gym Slime GRPO](examples/swegym_slime_grpo/README.md): training
+  path that connects Polar rollouts to Slime.
+
+<p align="center">
+  <img src="assets/swegym_grpo_training_curves.png" alt="Polar rollout architecture" width="660" />
+</p>
 
 
 ## Usage Guide
@@ -93,20 +104,6 @@ polar dashboard       -c topology.yaml [--port 8090]              # observabilit
 polar submit          <task.json|yaml> -c topology.yaml           # submit a task and tail it
 polar status          -c topology.yaml                            # one-shot health / topology check
 ```
-
-## Examples
-- [Calculator](examples/calculator/README.md): minimal smoke test.
-- [Count Stars](examples/count_stars/README.md): minimal test for VLM.
-- [SWE-bench Verified](examples/swebench_verified/README.md): benchmark-style
-  evaluation on SWE-bench Verified tasks.
-- [SWE-Gym Slime GRPO](examples/swegym_slime_grpo/README.md): training
-  path that connects Polar rollouts to Slime.
-
-<p align="center">
-  <img src="assets/swegym_grpo_training_curves.png" alt="Polar rollout architecture" width="660" />
-</p>
-
-🟩 We are adding new examples for different tasks / models on diverse hardware setups. **Contributions are welcome!**
 
 
 

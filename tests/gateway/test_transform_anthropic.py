@@ -12,6 +12,7 @@ def test_anthropic_request_maps_all_fields_and_image_input_to_chat() -> None:
     transformed = transformer.transform_request(
         {
             "_polar_model_served": "Qwen/Qwen3.5-4B",
+            "_polar_engine": "sglang",
             "system": "x-anthropic-billing-header: cch=unstable;\nBe direct.",
             "messages": [
                 {
@@ -261,6 +262,26 @@ def test_anthropic_adaptive_thinking_request_param_enables_thinking() -> None:
     )
 
     assert transformed["chat_template_kwargs"]["enable_thinking"] is True
+
+
+def test_qwen_thinking_disabled_on_sglang_kept_on_vllm() -> None:
+    # SGLang's reasoning parser swallows tool calls when Qwen thinks; vLLM tolerates
+    # it, so the thinking-off override is gated to the sglang engine only.
+    transformer = AnthropicTransformer()
+
+    def thinking_kwargs(engine: str) -> dict:
+        return transformer.transform_request(
+            {
+                "_polar_model_served": "Qwen/Qwen3.6-27B",
+                "_polar_engine": engine,
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 128,
+            }
+        )["chat_template_kwargs"]
+
+    assert thinking_kwargs("sglang") == {"enable_thinking": False}
+    assert thinking_kwargs("vllm") == {"enable_thinking": True}
 
 
 def test_anthropic_response_maps_openai_content_and_usage_back() -> None:

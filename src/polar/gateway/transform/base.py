@@ -46,10 +46,10 @@ class BaseTransformer(ABC):
         return None
 
     @staticmethod
-    def _is_qwen35_model(model_name: str | None) -> bool:
+    def _is_qwen_model(model_name: str | None) -> bool:
         if not model_name:
             return False
-        return "qwen3.5" in model_name.lower()
+        return "qwen" in model_name.lower()
 
     @staticmethod
     def _content_to_text(content: Any) -> str:
@@ -104,20 +104,27 @@ class BaseTransformer(ABC):
         self,
         request: dict[str, Any],
         model_name: str | None = None,
+        engine: str | None = None,
     ) -> dict[str, Any]:
         """Normalize the OpenAI request: drop internal keys, merge system roles,
         and apply per-model template fixes. Training-signal params (logprobs,
         token ids) are added later by the inference engine.
         """
         request.pop("_polar_model_served", None)
+        request.pop("_polar_engine", None)
 
         request = self._merge_developer_role(request)
 
-        if self._is_qwen35_model(model_name):
-            # Qwen3.5 outputs tool calls inside thinking; disable thinking.
+        if engine == "sglang" and self._is_qwen_model(model_name):
+            # SGLang-only: with thinking on, Qwen emits tool calls without closing
+            # </think>, and SGLang's reasoning parser swallows the whole turn (tool
+            # calls included) into reasoning_content, so the harness sees no action.
+            # Override, not setdefault: the per-API thinking mappings (anthropic
+            # `thinking`, responses `reasoning`) set enable_thinking=True upstream.
+            # vLLM tolerates thinking+tools, so leave it untouched there.
             # https://www.reddit.com/r/LocalLLaMA/comments/1sccqt2/i_think_i_got_solutions_for_qwen_35_tool_call_in/
             chat_template_kwargs = dict(request.get("chat_template_kwargs") or {})
-            chat_template_kwargs.setdefault("enable_thinking", False)
+            chat_template_kwargs["enable_thinking"] = False
             request["chat_template_kwargs"] = chat_template_kwargs
 
         return request

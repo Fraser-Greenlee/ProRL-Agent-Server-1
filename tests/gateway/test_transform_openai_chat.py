@@ -10,6 +10,7 @@ def test_openai_chat_request_preserves_fields_and_image_content() -> None:
 
     body = {
         "_polar_model_served": "Qwen/Qwen3.5-4B",
+        "_polar_engine": "sglang",
         "model": "client-visible-model",
         "messages": [
             {"role": "developer", "content": "Use short answers."},

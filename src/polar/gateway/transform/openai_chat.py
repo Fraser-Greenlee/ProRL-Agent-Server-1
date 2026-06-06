@@ -17,6 +17,7 @@ class OpenAIChatTransformer(BaseTransformer):
         return self._normalize_request(
             result,
             body.get("_polar_model_served"),
+            body.get("_polar_engine"),
         )
 
     def transform_response(

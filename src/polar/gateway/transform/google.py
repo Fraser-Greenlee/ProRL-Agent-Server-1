@@ -266,6 +266,7 @@ class GoogleTransformer(BaseTransformer):
         return self._normalize_request(
             result,
             body.get("_polar_model_served"),
+            body.get("_polar_engine"),
         )
 
     def _convert_response_format(self, gen_config: dict[str, Any]) -> dict[str, Any] | None:

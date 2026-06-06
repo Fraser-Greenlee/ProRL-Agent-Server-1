@@ -643,6 +643,7 @@ async def proxy_request(request: Request, path: str):
 
     transformed_body = body.copy()
     transformed_body["_polar_model_served"] = state.node.model_served
+    transformed_body["_polar_engine"] = state.node.engine
     openai_request = transformer.transform_request(transformed_body)
     openai_request["model"] = state.node.model_served
     is_streaming = openai_request.get("stream", False)
