@@ -140,10 +140,9 @@ class VLLMEngine(InferenceEngine):
     """vLLM via its native OpenAI-compatible server.
 
     ``return_token_ids`` makes vLLM emit ``response.prompt_token_ids`` and
-    ``choice.token_ids`` -- the same ids SGLang's patch produces, with no source
-    patch needed. ``top_logprobs`` must be set (not None) for vLLM to populate
-    ``logprobs.content[]`` given ``logprobs=True``; 0 returns just the sampled
-    token's logprob, which is all training needs.
+    ``choice.token_ids``. `top_logprobs`` must be set (not None) for vLLM
+    to populate ``logprobs.content[]`` given ``logprobs=True``; 0 returns just
+    the sampled token's logprob, which is all training needs.
     """
 
     name = "vllm"

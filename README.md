@@ -46,10 +46,8 @@ uv pip install vllm --torch-backend=auto
 
 **SGLang**
 ```bash
-git clone git@github.com:sgl-project/sglang.git
-uv pip install --prerelease=allow -e ./sglang/python
+uv pip install sglang
 ```
-Installing from source for now because necessary TITO feature has not been released.
 
 #### 🟩 Install your favorite **Training Framework**:
 

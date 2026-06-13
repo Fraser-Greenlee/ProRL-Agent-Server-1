@@ -88,6 +88,8 @@ Use Apptainer instead of Docker with `--runtime-backend apptainer`.
 
 ### 5. (Optional) Watch in the dashboard
 
+`topology.vllm.yaml` shown; swap for `topology.sgl.yaml` if you use sglang.
+
 ```bash
 uv run polar dashboard -c examples/swebench_verified/topology.vllm.yaml
 ```

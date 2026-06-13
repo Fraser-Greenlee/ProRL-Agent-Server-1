@@ -2,7 +2,7 @@
 #
 # Patch the external Slime checkout with the small hook surface Polar needs for
 # bounded async training. Slime is cloned as a git repo, so a normal git patch
-# is clearer than the site-packages text replacement used by patch_sglang.sh.
+# is clearer than site-packages text replacement.
 
 set -euo pipefail
 

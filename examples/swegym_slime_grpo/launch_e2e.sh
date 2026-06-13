@@ -2,7 +2,7 @@
 # Single-entry launcher for the full SWE-Gym Slime GRPO example.
 #
 # This script bootstraps the pieces that are safe to automate on a cluster:
-# external checkouts, local editable installs, Slime/SGLang patches, SWE-Gym
+# external checkouts, local editable installs, the Slime patch, SWE-Gym
 # train JSONL data, shared agent CLI assets, base runtime images, Megatron weight
 # conversion, and finally the Polar + Slime training run.
 set -euo pipefail
@@ -44,7 +44,6 @@ INSTALL_EDITABLE="${INSTALL_EDITABLE:-1}"
 INSTALL_TRAINING_STACK="${INSTALL_TRAINING_STACK:-1}"  # TE + FLA + flash-attn (SM100 only)
 FLASH_LINEAR_ATTENTION_VERSION="${FLASH_LINEAR_ATTENTION_VERSION:-0.5.0}"
 MBRIDGE_VERSION="${MBRIDGE_VERSION:-0.15.1}"  # HF<->Megatron weight bridge (slime conversion)
-APPLY_SGLANG_PATCH="${APPLY_SGLANG_PATCH:-1}"
 PREPARE_IMAGES="${PREPARE_IMAGES:-1}"
 APPTAINER_PREPARE_JOBS="${APPTAINER_PREPARE_JOBS:-2}"
 CONVERT_WEIGHTS="${CONVERT_WEIGHTS:-auto}"
@@ -236,9 +235,6 @@ if [ "${INSTALL_TRAINING_STACK}" = "1" ]; then
 fi
 
 bash "${PROJECT_ROOT}/scripts/patch/patch_slime.sh" "${SLIME_DIR}"
-if [ "${APPLY_SGLANG_PATCH}" = "1" ]; then
-    bash "${PROJECT_ROOT}/scripts/patch/patch_sglang.sh"
-fi
 
 "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_data.py"
 
