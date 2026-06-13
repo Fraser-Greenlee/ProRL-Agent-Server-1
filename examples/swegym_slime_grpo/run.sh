@@ -65,7 +65,6 @@ if [ ! -f "${SLIME_DIR}/train_async.py" ]; then
     echo "  git clone git@github.com:THUDM/slime.git ${SLIME_DIR}"
     exit 1
 fi
-bash "${PROJECT_ROOT}/scripts/patch/patch_slime.sh" "${SLIME_DIR}"
 
 MEGATRON_DIR="${MEGATRON_DIR:-${PROJECT_ROOT}/Megatron-LM}"
 if [ ! -d "${MEGATRON_DIR}/megatron" ]; then

@@ -2,8 +2,8 @@
 # Single-entry launcher for the full SWE-Gym Slime GRPO example.
 #
 # This script bootstraps the pieces that are safe to automate on a cluster:
-# external checkouts, local editable installs, the Slime patch, SWE-Gym
-# train JSONL data, shared agent CLI assets, base runtime images, Megatron weight
+# external checkouts, local editable installs, SWE-Gym train JSONL data,
+# shared agent CLI assets, base runtime images, Megatron weight
 # conversion, and finally the Polar + Slime training run.
 set -euo pipefail
 
@@ -19,7 +19,7 @@ PYTHON_BIN_DIR="$(cd -- "$(dirname -- "${PYTHON_BIN}")" &>/dev/null && pwd)"
 export PATH="${PYTHON_BIN_DIR}:${PATH}"
 SLIME_DIR="${SLIME_DIR:-${PROJECT_ROOT}/slime}"
 SLIME_REPO="${SLIME_REPO:-https://github.com/THUDM/slime.git}"
-SLIME_REF="${SLIME_REF:-v0.2.4}"
+SLIME_REF="${SLIME_REF:-v0.3.0}"
 
 MEGATRON_DIR="${MEGATRON_DIR:-${PROJECT_ROOT}/Megatron-LM}"
 MEGATRON_REPO="${MEGATRON_REPO:-https://github.com/NVIDIA/Megatron-LM.git}"
@@ -233,8 +233,6 @@ fi
 if [ "${INSTALL_TRAINING_STACK}" = "1" ]; then
     ensure_training_stack
 fi
-
-bash "${PROJECT_ROOT}/scripts/patch/patch_slime.sh" "${SLIME_DIR}"
 
 "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_data.py"
 
