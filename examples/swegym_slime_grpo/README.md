@@ -26,10 +26,11 @@ export WANDB_API_KEY=<your-key>
 bash examples/swegym_slime_grpo/launch_e2e.sh
 ```
 
-It clones Slime + Megatron-LM, installs the training-stack extras (Transformer
-Engine; Flash Linear Attention; flash-attn on B200), builds the 293-task
-SWE-Gym JSONL, pulls the Apptainer images + shared agent CLIs, converts
-the Qwen weights to torch_dist, then hands off to `run.sh` (Polar services + Ray + the Slime training job).
+It clones Slime + Megatron-LM, applies the Slime router-token metadata patch,
+installs the training-stack extras (Transformer Engine; Flash Linear Attention;
+flash-attn on B200), builds the 293-task SWE-Gym JSONL, pulls the Apptainer
+images + shared agent CLIs, converts the Qwen weights to torch_dist, then hands
+off to `run.sh` (Polar services + Ray + the Slime training job).
 
 ## (Optional) Watch rollouts in the dashboard
 

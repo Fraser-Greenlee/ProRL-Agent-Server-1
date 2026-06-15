@@ -46,7 +46,7 @@ uv pip install vllm --torch-backend=auto
 
 **SGLang**
 ```bash
-uv pip install sglang
+uv pip install "sglang>=0.5.13"
 ```
 
 #### 🟩 Install your favorite **Training Framework**:

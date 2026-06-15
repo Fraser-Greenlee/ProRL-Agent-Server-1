@@ -104,6 +104,35 @@ def _vllm_record(
     )
 
 
+def _vllm_record_without_logprobs(
+    completion_id: str,
+    prompt_ids: list[int],
+    response_ids: list[int],
+    *,
+    content: str,
+    finish_reason: str,
+    prompt_messages: list[dict],
+    response_message: dict,
+) -> CompletionRecord:
+    message = {"role": "assistant", "content": content, **response_message}
+    response = {
+        "prompt_token_ids": list(prompt_ids),
+        "choices": [
+            {
+                "token_ids": list(response_ids),
+                "message": message,
+                "finish_reason": finish_reason,
+            }
+        ],
+    }
+    response = VLLMEngine().normalize_response(response)
+    return CompletionRecord(
+        completion_id=completion_id,
+        request={"messages": prompt_messages},
+        response=response,
+    )
+
+
 def _assert_traces_equal(a, b) -> None:
     assert a.prompt_ids == b.prompt_ids
     assert a.response_ids == b.response_ids
@@ -134,6 +163,50 @@ def test_single_turn_trace_is_identical_across_engines() -> None:
     assert vllm.loss_mask == [1, 1, 1, 1]
     assert vllm.response_messages[0]["reasoning_content"] == "thinking"
     assert vllm.response_logprobs == [-0.1, -0.2, -0.3, -0.4]
+
+
+def test_sglang_normalization_recovers_aligned_logprobs_from_meta_info() -> None:
+    response = {
+        "choices": [
+            {
+                "prompt_token_ids": [1, 2, 3],
+                "message": {"role": "assistant", "content": "4"},
+                "finish_reason": "stop",
+                "logprobs": {
+                    "content": [
+                        {"token": "t10", "logprob": -0.1, "bytes": []},
+                        {"token": "t11", "logprob": -0.2, "bytes": []},
+                    ]
+                },
+                "meta_info": {
+                    "output_token_logprobs": [
+                        [-0.1, 10, "t10"],
+                        [-0.2, 11, "t11"],
+                        [-0.3, 12, "t12"],
+                    ]
+                },
+            }
+        ]
+    }
+
+    normalized = SGLangEngine().normalize_response(response)
+    choice = normalized["choices"][0]
+
+    assert "meta_info" not in choice
+    assert choice["input_token_ids"] == [1, 2, 3]
+    assert choice["token_ids"] == [10, 11, 12]
+    assert [entry["token_id"] for entry in choice["logprobs"]["content"]] == [10, 11, 12]
+    assert [entry["logprob"] for entry in choice["logprobs"]["content"]] == [-0.1, -0.2, -0.3]
+
+    trace = build_trace_from_completion(
+        CompletionRecord(
+            completion_id="c1",
+            request={"messages": [{"role": "user", "content": "2+2?"}]},
+            response=normalized,
+        )
+    )
+    assert trace.response_ids == [10, 11, 12]
+    assert trace.response_logprobs == [-0.1, -0.2, -0.3]
 
 
 def test_per_request_builder_is_identical_across_engines() -> None:
@@ -234,3 +307,41 @@ def test_prefix_merging_chain_is_identical_across_engines() -> None:
     # with interstitial tokens masked out.
     assert vllm.traces[0].response_ids == [10, 11, _EOT, 50, 51, 20, 21, _EOT]
     assert vllm.traces[0].loss_mask == [1, 1, 1, 0, 0, 1, 1, 1]
+    assert vllm.traces[0].response_logprobs == [-0.1, -0.2, -0.3, 0.0, 0.0, -0.5, -0.6, -0.7]
+
+
+def test_prefix_merging_drops_logprobs_when_trainable_token_is_missing_logprob() -> None:
+    q1 = {"role": "user", "content": "Q1"}
+    a1 = {"role": "assistant", "content": "A1"}
+    tool = {"role": "tool", "content": "result"}
+    c1 = _vllm_record(
+        "c1",
+        prompt_ids=[1, 2, 3],
+        response_ids=[10, 11, _EOT],
+        logprobs=[-0.1, -0.2, -0.3],
+        content="A1",
+        reasoning=None,
+        finish_reason="stop",
+        prompt_messages=[q1],
+        response_message={},
+    )
+    c2 = _vllm_record_without_logprobs(
+        "c2",
+        prompt_ids=[1, 2, 3, 10, 11, _EOT, 50, 51],
+        response_ids=[20, 21, _EOT],
+        content="A2",
+        finish_reason="stop",
+        prompt_messages=[q1, a1, tool],
+        response_message={},
+    )
+
+    trajectory = asyncio.run(
+        PrefixMergingBuilder(end_of_turn_token_id=_EOT).build(
+            CompletionSession(session_id="s", completions=[c1, c2])
+        )
+    )
+
+    trace = trajectory.traces[0]
+    assert trace.response_ids == [10, 11, _EOT, 50, 51, 20, 21, _EOT]
+    assert trace.loss_mask == [1, 1, 1, 0, 0, 1, 1, 1]
+    assert trace.response_logprobs is None

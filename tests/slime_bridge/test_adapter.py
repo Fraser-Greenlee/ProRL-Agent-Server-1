@@ -17,9 +17,38 @@ class FakeSample:
         FAILED = "failed"
         TRUNCATED = "truncated"
 
-    def __init__(self, **kwargs) -> None:
-        for key, value in kwargs.items():
-            setattr(self, key, value)
+    def __init__(
+        self,
+        *,
+        group_index: int,
+        index: int,
+        group_id: int,
+        prompt,
+        tokens: list[int],
+        response: str,
+        response_length: int,
+        reward,
+        loss_mask: list[int],
+        rollout_log_probs: list[float],
+        status,
+        session_id: str,
+        metadata: dict,
+        remove_sample: bool = False,
+    ) -> None:
+        self.group_index = group_index
+        self.index = index
+        self.group_id = group_id
+        self.prompt = prompt
+        self.tokens = tokens
+        self.response = response
+        self.response_length = response_length
+        self.reward = reward
+        self.loss_mask = loss_mask
+        self.rollout_log_probs = rollout_log_probs
+        self.status = status
+        self.session_id = session_id
+        self.metadata = metadata
+        self.remove_sample = remove_sample
 
 
 def _session_result(

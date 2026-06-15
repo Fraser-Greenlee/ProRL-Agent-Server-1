@@ -216,6 +216,8 @@ require_cmd envsubst  # run.sh uses it to render YAML templates
 clone_if_missing "Slime" "${SLIME_REPO}" "${SLIME_REF}" "${SLIME_DIR}"
 clone_if_missing "Megatron-LM" "${MEGATRON_REPO}" "${MEGATRON_REF}" "${MEGATRON_DIR}"
 
+SLIME_DIR="${SLIME_DIR}" bash "${PROJECT_ROOT}/scripts/patch/patch_slime_router_tokens.sh"
+
 if [ "${INSTALL_EDITABLE}" = "1" ]; then
     # [swebench] is load-bearing even though swegym (installed below) does the actual
     # grading: swegym is a swebench fork that ships NO deps of its own, so it reuses
