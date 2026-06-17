@@ -110,6 +110,7 @@ tmp/
 **/buffer_stats/
 
 # Local third-party source checkouts
+external/
 slime/
 Megatron-LM/
 glm/

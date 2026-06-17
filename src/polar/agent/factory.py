@@ -13,6 +13,7 @@ def _builtin_harness_map() -> dict[str, type[BaseHarness]]:
     from polar.agent.presets.codex import CodexHarness
     from polar.agent.presets.gemini_cli import GeminiCliHarness
     from polar.agent.presets.hermes import HermesHarness
+    from polar.agent.presets.notre_hermes import NotreHermesHarness
     from polar.agent.presets.openclaw import OpenClawHarness
     from polar.agent.presets.openhands_sdk import OpenHandsSdkHarness
     from polar.agent.presets.opencode import OpenCodeHarness
@@ -25,6 +26,7 @@ def _builtin_harness_map() -> dict[str, type[BaseHarness]]:
         "codex": CodexHarness,
         "gemini_cli": GeminiCliHarness,
         "hermes": HermesHarness,
+        "notre_hermes": NotreHermesHarness,
         "openclaw": OpenClawHarness,
         "openhands_sdk": OpenHandsSdkHarness,
         "opencode": OpenCodeHarness,
