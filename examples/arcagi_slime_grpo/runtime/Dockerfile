@@ -81,6 +81,22 @@ RUN /opt/arcagi-venv/bin/python -c "import arckit; arckit.load_data()" || true
 RUN cd /opt/auto-compress \
     && /opt/arcagi-venv/bin/python eval.py --scaffold
 
+# For the synthetic rl_tasks image: reset every sft/rl_tasks/<id>/<id>.hy to its
+# raw-grid baseline (so the agent compresses from scratch and no reference
+# solution leaks). pairs.json (ground truth) is kept — the grader reads it but
+# the diff filter blocks the agent from editing it. Gated so the arcagi image
+# is unaffected (and sft/ may be absent there per .dockerignore).
+ARG SCAFFOLD_RL_TASKS=0
+RUN if [ "$SCAFFOLD_RL_TASKS" = "1" ] && [ -d /opt/auto-compress/sft/rl_tasks ]; then \
+        cd /opt/auto-compress && \
+        for d in sft/rl_tasks/*/; do \
+            id="$(basename "$d")"; \
+            [ -f "$d/pairs.json" ] || continue; \
+            /opt/arcagi-venv/bin/python sft/rl_tasks/score_synthetic.py --scaffold "$id" >/dev/null || true; \
+        done && \
+        echo "scaffolded synthetic rl_tasks to baseline"; \
+    fi
+
 # Persist PATH for login shells (docker exec bash -lc).
 RUN echo 'export PATH=/home/polar/.local/bin:/opt/arcagi-venv/bin:$PATH' \
     > /etc/profile.d/polar-path.sh

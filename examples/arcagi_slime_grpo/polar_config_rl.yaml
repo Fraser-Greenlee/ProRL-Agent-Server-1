@@ -1,0 +1,91 @@
+# Polar bridge config for the SYNTHETIC rl_tasks GRPO run (cold-start).
+# Same shape as polar_config.yaml but: evaluator scores synthetic tasks via
+# score_synthetic.py (task_kind=synthetic), and the diff filter keeps the
+# agent's edited sft/rl_tasks/<id>/<id>.hy while excluding ground truth +
+# everything else.
+
+polar_rollout_url: "http://127.0.0.1:8080"
+polar_gateway_url: "http://127.0.0.1:8100"
+polar_reward_key: "score"
+polar_max_async_level: 2
+polar_request_timeout: 2400
+polar_callback_host: "127.0.0.1"
+polar_min_complete_accept_fraction: 0.6
+
+# Synthetic-task image: auto-compress repo + sft/rl_tasks (all task .hy reset to
+# baseline, pairs.json kept), arcagi venv, baked openhands-sdk venv.
+polar_arcagi_image: "polar-arcagi-rl:latest"
+
+polar_task_template:
+  timeout_seconds: 2400
+  runtime:
+    backend: "docker"
+    image: "{args.polar_arcagi_image}"
+    network: "host"
+    workdir: "/polar/session/workspace"
+    env:
+      HOME: "/polar/session/home"
+      AUTO_COMPRESS: "/polar/session/workspace"
+      PATH: "/opt/arcagi-venv/bin:/opt/openhands-sdk-venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+    prepare:
+      - type: exec
+        command: >-
+          rm -rf /polar/session/workspace &&
+          mkdir -p /polar/session/workspace /polar/session/home
+          /polar/session/logs/agent &&
+          cp -a /opt/auto-compress/. /polar/session/workspace/ &&
+          cd /polar/session/workspace &&
+          git init -q &&
+          git config user.email 'polar@arcagi' &&
+          git config user.name 'Polar' &&
+          git add -A &&
+          git commit -qm 'baseline scaffold'
+    eval_prepare:
+      - type: exec
+        command: >-
+          rm -rf /polar/session/workspace &&
+          mkdir -p /polar/session/workspace /polar/session/home &&
+          cp -a /opt/auto-compress/. /polar/session/workspace/ &&
+          cd /polar/session/workspace &&
+          git init -q &&
+          git config user.email 'polar@arcagi' &&
+          git config user.name 'Polar' &&
+          git add -A &&
+          git commit -qm 'baseline scaffold'
+  agent:
+    harness: "openhands_sdk"
+    model_name: "openai/Fraser/Qwen3.6-27B-ARC-Hy"
+    settings:
+      max_iterations: 30
+  builder:
+    strategy: "prefix_merging"
+  evaluator:
+    strategy: "examples.arcagi_slime_grpo.arc_compress_evaluator:ArcCompressEvaluator"
+    refresh_runtime: true
+    config:
+      task_id: "{sample.metadata.task_id}"
+      baseline_size: "{sample.metadata.baseline_size}"
+      task_kind: "synthetic"
+      repo_dir: "/polar/session/workspace"
+      synthetic_root: "/polar/session/workspace/sft/rl_tasks"
+      # The agent edits sft/rl_tasks/<id>/<id>.hy. Drop everything else from the
+      # graded diff: the ground-truth pairs.json (reward-hack guard), the scorer,
+      # library/eval, and the rest of the repo.
+      exclude_patterns:
+        - "**/pairs.json"
+        - "sft/rl_tasks/score_synthetic.py"
+        - "sft/rl_tasks/*.py"
+        - "library.hy"
+        - "eval.py"
+        - "reference/**"
+        - "**/reference/**"
+        - "baseline_run/**"
+        - "tasks/**"
+        - ".openhands/**"
+        - "**/.openhands/**"
+        - "node_modules/**"
+        - "**/node_modules/**"
+        - ".venv/**"
+        - "**/.venv/**"
+
+polar_task_id_template: "polar-arcagi-rl-{rollout_id}-{sample.group_index}"

@@ -44,7 +44,9 @@ class ArcCompressEvaluator(BasePatchEvaluator):
         *,
         task_id: str,
         baseline_size: int,
+        task_kind: str = "arcagi",
         repo_dir: str = "/polar/session/workspace",
+        synthetic_root: str = "/polar/session/workspace/sft/rl_tasks",
         patch_command: str | None = None,
         apply_timeout: float = 60.0,
         test_timeout: float = 120.0,
@@ -64,6 +66,19 @@ class ArcCompressEvaluator(BasePatchEvaluator):
         self.baseline_size = int(baseline_size)
         if self.baseline_size <= 0:
             raise ValueError("baseline_size must be positive")
+        if task_kind not in ("arcagi", "synthetic"):
+            raise ValueError(f"task_kind must be arcagi|synthetic, got {task_kind!r}")
+        self.task_kind = task_kind
+        self.synthetic_root = synthetic_root
+        # Correctness + size commands per task source. Both emit the same
+        # formats the parsers expect: "<id>: n/N correct" and a bare integer.
+        if task_kind == "arcagi":
+            self._check_cmd = f"python eval.py --task arcagi/{task_id}"
+            self._size_cmd = f"python eval.py --size arcagi/{task_id}"
+        else:
+            scorer = "sft/rl_tasks/score_synthetic.py"
+            self._check_cmd = f"python {scorer} --root {synthetic_root} --check {task_id}"
+            self._size_cmd = f"python {scorer} --root {synthetic_root} --size {task_id}"
 
     async def evaluate(
         self,
@@ -111,9 +126,10 @@ class ArcCompressEvaluator(BasePatchEvaluator):
             "arc_reward": -1.0,
         }
 
-        # Correctness: `eval.py --task arcagi/<id>` → "<task>: nc/nt correct".
+        # Correctness check → "<id>: nc/nt correct" (arcagi: eval.py --task;
+        # synthetic: score_synthetic.py --check).
         correct_res = await runtime.exec(
-            f"python eval.py --task arcagi/{self.task_id}",
+            self._check_cmd,
             cwd=self.repo_dir,
             env=env,
             timeout_sec=bounded_timeout(self.test_timeout, timeout_cap),
@@ -129,7 +145,7 @@ class ArcCompressEvaluator(BasePatchEvaluator):
         if n_total is not None and n_correct == n_total:
             # Fully correct — measure the compressed object count.
             size_res = await runtime.exec(
-                f"python eval.py --size arcagi/{self.task_id}",
+                self._size_cmd,
                 cwd=self.repo_dir,
                 env=env,
                 timeout_sec=bounded_timeout(self.test_timeout, timeout_cap),
@@ -158,8 +174,8 @@ class ArcCompressEvaluator(BasePatchEvaluator):
             )
 
         log_path.write_text(
-            f"$ eval.py --task arcagi/{self.task_id}\n{correct_out}\n"
-            f"$ eval.py --size arcagi/{self.task_id}\n{size_out}\n"
+            f"$ {self._check_cmd}\n{correct_out}\n"
+            f"$ {self._size_cmd}\n{size_out}\n"
         )
         return report, log_path
 

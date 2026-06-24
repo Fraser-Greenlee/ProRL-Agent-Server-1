@@ -102,6 +102,16 @@ build-arcagi-image)
         AUTO_COMPRESS=$AUTO_COMPRESS_REMOTE python examples/arcagi_slime_grpo/build_image.py'"
     ;;
 
+build-arcagi-rl-image)
+    # Build the synthetic rl_tasks runtime image (bakes sft/rl_tasks, scaffolded).
+    AUTO_COMPRESS_REMOTE="${AUTO_COMPRESS_REMOTE:-/home/fraser_convergence_ai/auto-compress}"
+    echo "==> Building arcagi-rl runtime docker image on cluster (cpu partition)..."
+    ssh "$HOST" "cd $REMOTE_DIR && srun --partition=cpu --gpus=0 --cpus-per-task=8 --time=00:40:00 bash -c '\
+        cd $REMOTE_DIR && \
+        source .venv/bin/activate && \
+        AUTO_COMPRESS=$AUTO_COMPRESS_REMOTE python examples/arcagi_slime_grpo/build_image.py --rl-tasks'"
+    ;;
+
 submit)
     # Aliases for the common jobs.
     ARG="${1:-smoke}"
@@ -112,8 +122,9 @@ submit)
         train)       SLURM_FILE="job_polar_train.slurm" ;;
         arcagi)      SLURM_FILE="job_arcagi_train.slurm" ;;
         arcagi2)     SLURM_FILE="job_arcagi_train_2node.slurm" ;;
+        arcagi-rl)   SLURM_FILE="job_arcagi_rl_2node.slurm" ;;
         *.slurm)     SLURM_FILE="$ARG" ;;
-        *)           echo "Unknown job: $ARG (use smoke|calculator|train|arcagi|arcagi2|<file>.slurm)"; exit 2 ;;
+        *)           echo "Unknown job: $ARG (use smoke|calculator|train|arcagi|arcagi2|arcagi-rl|<file>.slurm)"; exit 2 ;;
     esac
 
     EXTRA_ARGS="$*"

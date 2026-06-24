@@ -273,17 +273,18 @@ if [ -s "${PROMPT_DATA}" ]; then
 else
     AC_PYTHON="${AUTO_COMPRESS_PYTHON:-${AUTO_COMPRESS}/.venv/bin/python}"
     [ -x "${AC_PYTHON}" ] || AC_PYTHON="${PYTHON_BIN}"
-    echo "Building train JSONL with ${AC_PYTHON}"
+    echo "Building train JSONL (${DATA_SOURCE:-arcagi}) with ${AC_PYTHON}"
     AUTO_COMPRESS="${AUTO_COMPRESS}" \
         "${AC_PYTHON}" "${SCRIPT_DIR}/prepare_data.py" --n-tasks "${N_TASKS}" \
-        --output "${PROMPT_DATA}"
+        --source "${DATA_SOURCE:-arcagi}" --output "${PROMPT_DATA}"
 fi
 
 # ── 6. Rollout docker image → NFS tarball ───────────────────────────
+# BUILD_IMAGE_ARGS lets the rl_tasks run pass --rl-tasks (bakes sft/rl_tasks).
 if [ "${BUILD_IMAGE}" = "1" ] || { [ "${BUILD_IMAGE}" = "auto" ] && [ ! -f "${ARCAGI_IMAGE_TARBALL}" ]; }; then
     echo "Building rollout image -> ${ARCAGI_IMAGE_TARBALL}"
     AUTO_COMPRESS="${AUTO_COMPRESS}" \
-        "${PYTHON_BIN}" "${SCRIPT_DIR}/build_image.py" \
+        "${PYTHON_BIN}" "${SCRIPT_DIR}/build_image.py" ${BUILD_IMAGE_ARGS:-} \
         --image "${ARCAGI_IMAGE}" --save-tar "${ARCAGI_IMAGE_TARBALL}"
 else
     echo "Rollout image tarball present; skipping build: ${ARCAGI_IMAGE_TARBALL}"

@@ -34,6 +34,23 @@ IMAGE_VERSION = "1"
 VERSION_LABEL = "io.polar.arcagi-image-version"
 # Shared-NFS location for the saved image tarball (survives node autoscaling).
 DEFAULT_SAVE_TAR = "/home/fraser_convergence_ai/arcagi-image/polar-arcagi.tar.gz"
+# Synthetic rl_tasks variant (cold-start training): bakes sft/rl_tasks/ with all
+# task .hy reset to baseline.
+RL_IMAGE = "polar-arcagi-rl:latest"
+RL_SAVE_TAR = "/home/fraser_convergence_ai/arcagi-image/polar-arcagi-rl.tar.gz"
+
+# .dockerignore lines per variant. The arcagi image drops all of sft/ (smaller);
+# the rl image keeps sft/rl_tasks but still drops the heavy sft/ subdirs.
+_IGNORE_BASE = [
+    ".git", ".venv", "**/.venv",
+    "baseline_run/runs", "baseline_run/.serve-venv",
+    "results*.tsv", "run.log", "**/__pycache__", "*.pyc",
+]
+_IGNORE_ARCAGI = _IGNORE_BASE + ["sft"]
+_IGNORE_RL = _IGNORE_BASE + [
+    "sft/out", "sft/training", "sft/templates", "sft/__pycache__",
+    "sft/*.py",  # keep sft/rl_tasks/, drop top-level sft generators
+]
 
 
 def auto_compress_root() -> Path:
@@ -60,66 +77,52 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
-def write_dockerignore(context: Path) -> Path:
-    """Write a .dockerignore into the context to keep the image lean.
-
-    Returns the path so the caller can clean it up if it created it.  We don't
-    clobber an existing one.
-    """
+def write_dockerignore(context: Path, lines: list[str]) -> None:
+    """Write a .dockerignore into the build context (always overwrite ours so
+    the arcagi vs rl variant gets the right include/exclude set)."""
     path = context / ".dockerignore"
-    if path.exists():
-        print(f"  (leaving existing {path})")
-        return path
-    path.write_text(
-        "\n".join(
-            [
-                ".git",
-                ".venv",
-                "**/.venv",
-                "baseline_run/runs",
-                "baseline_run/.serve-venv",
-                "sft",
-                "results*.tsv",
-                "run.log",
-                "**/__pycache__",
-                "*.pyc",
-            ]
-        )
-        + "\n"
-    )
-    print(f"  wrote {path}")
-    return path
+    path.write_text("\n".join(lines) + "\n")
+    print(f"  wrote {path} ({len(lines)} rules)")
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--rl-tasks", action="store_true",
+                    help="Build the synthetic rl_tasks image (bakes sft/rl_tasks "
+                         "scaffolded to baseline); defaults image+tar to the rl names.")
+    ap.add_argument("--image", default=None)
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("--save-tar", default=DEFAULT_SAVE_TAR,
+    ap.add_argument("--save-tar", default=None,
                     help="gzip tarball path on shared NFS (set '' to skip)")
     args = ap.parse_args()
 
+    image = args.image or (RL_IMAGE if args.rl_tasks else DEFAULT_IMAGE)
+    save_tar = args.save_tar if args.save_tar is not None else (
+        RL_SAVE_TAR if args.rl_tasks else DEFAULT_SAVE_TAR)
+    ignore = _IGNORE_RL if args.rl_tasks else _IGNORE_ARCAGI
+
     context = auto_compress_root()
-    print(f"build context: {context}")
-    write_dockerignore(context)
+    print(f"build context: {context}  (rl_tasks={args.rl_tasks}, image={image})")
+    write_dockerignore(context, ignore)
 
     run([
         "docker", "build",
         "-f", str(DOCKERFILE),
-        "-t", args.image,
+        "-t", image,
         "--build-arg", f"POLAR_ARCAGI_IMAGE_VERSION={IMAGE_VERSION}",
+        "--build-arg", f"SCAFFOLD_RL_TASKS={'1' if args.rl_tasks else '0'}",
         "--label", f"{VERSION_LABEL}={IMAGE_VERSION}",
         str(context),
     ])
-    print(f"built {args.image}")
+    print(f"built {image}")
 
-    if args.save_tar:
-        tar = Path(args.save_tar)
+    if save_tar:
+        tar = Path(save_tar)
         tar.parent.mkdir(parents=True, exist_ok=True)
         # docker save → gzip in a shell pipe (avoids a giant intermediate tar).
         print(f"saving image to {tar} ...")
         subprocess.run(
-            f"docker save {args.image} | gzip -1 > {tar}",
+            f"docker save {image} | gzip -1 > {tar}",
             shell=True, check=True,
         )
         size_mb = tar.stat().st_size / (1024 * 1024)
