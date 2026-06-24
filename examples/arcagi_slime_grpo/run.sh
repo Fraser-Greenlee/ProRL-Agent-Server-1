@@ -49,6 +49,10 @@ export PATH="${HOME}/.local/bin:${PATH}"
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 [ -x "${CUDA_HOME}/bin/nvcc" ] && export PATH="${CUDA_HOME}/bin:${PATH}"
 export NVTE_CUDA_INCLUDE_DIR="${NVTE_CUDA_INCLUDE_DIR:-${CUDA_HOME}/include}"
+# CRITICAL: the venv bin must come FIRST so `ray`/`polar`/`python` resolve to
+# the venv (py3.12, ray 2.55), NOT ~/.local/bin (a py3.10 ray that starts a
+# cluster slime can't connect to). Re-prepend after the .local/cuda prepends.
+export PATH="${PYTHON_BIN_DIR}:${PATH}"
 
 is_path_like() {
     case "$1" in
@@ -174,11 +178,22 @@ sleep 2
 curl -sf http://127.0.0.1:8080/health || { echo "Polar rollout server not healthy"; exit 1; }
 
 # ── Step 2: Ray + Slime (SGLang engines + training) ────────────────
-# 4 train (TP=4) + 4 serve (1 engine, TP=4).
-ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-4}"
-ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-4}"
-ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-4}"
-TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-4}"
+# GPU split. Single-node default: 4 train (TP=4) + 4 serve. Multi-node (the
+# 27B fit): node0 = 8-GPU training (TP=8), node1 = 8-GPU SGLang serving.
+NNODES="${SLURM_NNODES:-1}"
+GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
+if [ "${NNODES}" -ge 2 ]; then
+    # Dedicate node0 to training (TP=8), node1's GPUs to rollout/serving.
+    ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-8}"
+    ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-8}"
+    ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-8}"
+    TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-8}"
+else
+    ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-4}"
+    ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-4}"
+    ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-4}"
+    TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-4}"
+fi
 
 # Conservative GRPO knobs for 27B (smaller groups + recompute to fit).
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
@@ -186,13 +201,37 @@ N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-12000}"
 SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-40000}"
 
-RAY_NUM_GPUS="${RAY_NUM_GPUS:-$((ACTOR_NUM_GPUS_PER_NODE + ROLLOUT_NUM_GPUS))}"
-RAY_HEAD_IP="${RAY_HEAD_IP:-127.0.0.1}"
-
-echo "=== Starting Ray on ${RAY_HEAD_IP} (${RAY_NUM_GPUS} GPUs) ==="
 ray stop --force 2>/dev/null || true
 sleep 1
-ray start --head --node-ip-address "$RAY_HEAD_IP" --num-gpus "$RAY_NUM_GPUS" --disable-usage-stats
+
+if [ "${NNODES}" -ge 2 ]; then
+    # ── Multi-node Ray: head on this (node0), workers join via srun ──
+    # Derive node IPs from the slurm allocation. MASTER_ADDR = node0 (here).
+    MASTER_ADDR="$(detect_host_ip)"
+    export no_proxy="localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}"
+    RAY_HEAD_IP="${MASTER_ADDR}"
+    echo "=== Multi-node Ray: head on ${MASTER_ADDR} (${ACTOR_NUM_GPUS_PER_NODE} GPUs), ${NNODES} nodes ==="
+    ray start --head --node-ip-address "${MASTER_ADDR}" \
+        --num-gpus "${ACTOR_NUM_GPUS_PER_NODE}" \
+        --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+    sleep 5
+    # Join every OTHER node in the allocation as a Ray worker via srun. Each
+    # contributes GPUS_PER_NODE to the cluster (rollout/serving lands there).
+    WORKER_NODES="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | tail -n +2)"
+    for wn in ${WORKER_NODES}; do
+        echo "  starting Ray worker on ${wn}"
+        srun --nodes=1 --ntasks=1 -w "${wn}" \
+            bash "${SCRIPT_DIR}/ray_worker.sh" "${MASTER_ADDR}" "${GPUS_PER_NODE}" \
+            >> "${PROJECT_ROOT}/logs/ray_worker_${wn}.log" 2>&1 &
+    done
+    sleep 20  # let workers register
+    echo "=== Ray cluster nodes ==="; ray list nodes 2>/dev/null | head -20 || true
+else
+    RAY_HEAD_IP="${RAY_HEAD_IP:-127.0.0.1}"
+    RAY_NUM_GPUS="${RAY_NUM_GPUS:-$((ACTOR_NUM_GPUS_PER_NODE + ROLLOUT_NUM_GPUS))}"
+    echo "=== Starting Ray on ${RAY_HEAD_IP} (${RAY_NUM_GPUS} GPUs) ==="
+    ray start --head --node-ip-address "$RAY_HEAD_IP" --num-gpus "$RAY_NUM_GPUS" --disable-usage-stats
+fi
 
 if [ -z "${CUDNN_LIB:-}" ]; then
     CUDNN_LIB="$("${PYTHON_BIN}" -c 'import nvidia.cudnn, os; print(os.path.join(list(nvidia.cudnn.__path__)[0], "lib"))' 2>/dev/null || true)"
@@ -307,6 +346,9 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --weight-decay 0.1 \
     --adam-beta1 0.9 \
     --adam-beta2 0.98 \
+    --optimizer-cpu-offload \
+    --optimizer-offload-fraction 1.0 \
+    --use-precision-aware-optimizer \
     --attention-dropout 0.0 \
     --hidden-dropout 0.0 \
     --accumulate-allreduce-grads-in-fp32 \
@@ -316,6 +358,7 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --sglang-mem-fraction-static 0.8 \
     --sglang-context-length "$SGLANG_CONTEXT_LENGTH" \
     --sglang-tool-call-parser qwen3_coder \
+    --sglang-disable-custom-all-reduce \
     --router-policy "${SGLANG_ROUTER_POLICY:-round_robin}" \
     ${WANDB_ARGS[@]+"${WANDB_ARGS[@]}"} \
     --sglang-router-port "$SGLANG_ROUTER_PORT"

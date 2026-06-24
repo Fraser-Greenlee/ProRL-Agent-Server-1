@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=arcagi-grpo
+#SBATCH --job-name=ok_to_cancel_arcagi-grpo
 #SBATCH --partition=dev
 #SBATCH --nodes=1
 #SBATCH --gpus=8

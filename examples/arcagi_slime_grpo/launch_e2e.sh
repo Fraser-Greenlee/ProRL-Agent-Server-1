@@ -43,6 +43,9 @@ fi
 # the pip `nvidia` namespace package has __file__=None (it does). Setting this
 # makes TE skip that path entirely. Must be set wherever TE is imported.
 export NVTE_CUDA_INCLUDE_DIR="${NVTE_CUDA_INCLUDE_DIR:-${CUDA_HOME}/include}"
+# Re-prepend the venv bin LAST so `ray`/`python`/`uv` resolve to the venv
+# (py3.12), not ~/.local/bin (a py3.10 ray that breaks the Ray cluster).
+export PATH="${PYTHON_BIN_DIR}:${PATH}"
 
 SLIME_DIR="${SLIME_DIR:-${PROJECT_ROOT}/slime}"
 SLIME_REPO="${SLIME_REPO:-https://github.com/THUDM/slime.git}"
@@ -261,8 +264,20 @@ fi
 [ "${APPLY_SGLANG_PATCH}" = "1" ] && bash "${PROJECT_ROOT}/scripts/patch/patch_sglang_0513_token_metadata.sh"
 
 # ── 5. Train JSONL ──────────────────────────────────────────────────
-AUTO_COMPRESS="${AUTO_COMPRESS}" \
-    "${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_data.py" --n-tasks "${N_TASKS}"
+# prepare_data.py imports hy + arckit + eval.py — these live in the
+# auto-compress env, NOT the training venv. Use auto-compress's venv python.
+# Skip entirely if the JSONL is already built (it's deterministic).
+PROMPT_DATA="${PROMPT_DATA:-${SCRIPT_DIR}/arcagi_train.jsonl}"
+if [ -s "${PROMPT_DATA}" ]; then
+    echo "Train JSONL present; skipping prepare_data: ${PROMPT_DATA}"
+else
+    AC_PYTHON="${AUTO_COMPRESS_PYTHON:-${AUTO_COMPRESS}/.venv/bin/python}"
+    [ -x "${AC_PYTHON}" ] || AC_PYTHON="${PYTHON_BIN}"
+    echo "Building train JSONL with ${AC_PYTHON}"
+    AUTO_COMPRESS="${AUTO_COMPRESS}" \
+        "${AC_PYTHON}" "${SCRIPT_DIR}/prepare_data.py" --n-tasks "${N_TASKS}" \
+        --output "${PROMPT_DATA}"
+fi
 
 # ── 6. Rollout docker image → NFS tarball ───────────────────────────
 if [ "${BUILD_IMAGE}" = "1" ] || { [ "${BUILD_IMAGE}" = "auto" ] && [ ! -f "${ARCAGI_IMAGE_TARBALL}" ]; }; then

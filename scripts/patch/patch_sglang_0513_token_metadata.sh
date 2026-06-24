@@ -27,6 +27,9 @@ from pathlib import Path
 import importlib.util
 
 
+# Accept 0.5.13 and its point releases (0.5.13.post1, ...). The patch matches
+# code snippets and fails loudly if any are absent, so allowing the prefix is
+# safe: a changed snippet errors rather than mis-patching.
 SUPPORTED_SGLANG_VERSION = "0.5.13"
 
 
@@ -44,10 +47,10 @@ def replace_once(text: str, old: str, new: str, *, label: str) -> str:
 
 import sglang  # noqa: E402
 
-if sglang.__version__ != SUPPORTED_SGLANG_VERSION:
+if not sglang.__version__.startswith(SUPPORTED_SGLANG_VERSION):
     fail(
         f"patch_sglang_0513_token_metadata.sh is pinned to "
-        f"sglang=={SUPPORTED_SGLANG_VERSION} but found {sglang.__version__}."
+        f"sglang=={SUPPORTED_SGLANG_VERSION}.* but found {sglang.__version__}."
     )
 
 spec = importlib.util.find_spec("sglang")
