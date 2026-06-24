@@ -69,6 +69,8 @@ sync)
         --ignore "web/node_modules" \
         --ignore "web/dist" \
         --ignore "*.sif" \
+        --ignore ".env.local" \
+        --ignore ".env.*" \
         --sync-mode "two-way-resolved"
 
     echo "==> Sync running. Use 'mutagen sync monitor $SYNC_NAME' to watch."
@@ -108,8 +110,9 @@ submit)
         smoke)       SLURM_FILE="job_polar_smoke.slurm" ;;
         calculator)  SLURM_FILE="job_polar_calculator.slurm" ;;
         train)       SLURM_FILE="job_polar_train.slurm" ;;
+        arcagi)      SLURM_FILE="job_arcagi_train.slurm" ;;
         *.slurm)     SLURM_FILE="$ARG" ;;
-        *)           echo "Unknown job: $ARG (use smoke|calculator|train|<file>.slurm)"; exit 2 ;;
+        *)           echo "Unknown job: $ARG (use smoke|calculator|train|arcagi|<file>.slurm)"; exit 2 ;;
     esac
 
     EXTRA_ARGS="$*"

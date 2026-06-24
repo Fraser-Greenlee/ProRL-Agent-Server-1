@@ -18,6 +18,14 @@ fi
 PYTHON_BIN_DIR="$(cd -- "$(dirname -- "${PYTHON_BIN}")" &>/dev/null && pwd)"
 export PATH="${PYTHON_BIN_DIR}:${PATH}"
 
+# uv + CUDA toolkit on PATH (non-login GPU shell); NVTE_CUDA_INCLUDE_DIR works
+# around the TE 2.5.0 Path(nvidia.__file__=None) import crash (megatron imports
+# TE). See launch_e2e.sh.
+export PATH="${HOME}/.local/bin:${PATH}"
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+[ -x "${CUDA_HOME}/bin/nvcc" ] && export PATH="${CUDA_HOME}/bin:${PATH}"
+export NVTE_CUDA_INCLUDE_DIR="${NVTE_CUDA_INCLUDE_DIR:-${CUDA_HOME}/include}"
+
 if [ ! -f "${SLIME_DIR}/tools/convert_hf_to_torch_dist.py" ]; then
     echo "ERROR: Slime not found at ${SLIME_DIR}. Clone it first:"
     echo "  git clone git@github.com:THUDM/slime.git ${SLIME_DIR}"

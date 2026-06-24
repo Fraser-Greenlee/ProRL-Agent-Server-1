@@ -43,6 +43,13 @@ fi
 PYTHON_BIN_DIR="$(cd -- "$(dirname -- "${PYTHON_BIN}")" &>/dev/null && pwd)"
 export PATH="${PYTHON_BIN_DIR}:${PATH}"
 
+# uv + CUDA toolkit on PATH (non-login GPU shell); NVTE_CUDA_INCLUDE_DIR works
+# around the TE 2.5.0 Path(nvidia.__file__=None) import crash. See launch_e2e.sh.
+export PATH="${HOME}/.local/bin:${PATH}"
+export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+[ -x "${CUDA_HOME}/bin/nvcc" ] && export PATH="${CUDA_HOME}/bin:${PATH}"
+export NVTE_CUDA_INCLUDE_DIR="${NVTE_CUDA_INCLUDE_DIR:-${CUDA_HOME}/include}"
+
 is_path_like() {
     case "$1" in
         /*|./*|../*|~*) return 0 ;;
@@ -204,6 +211,8 @@ RUNTIME_ENV_JSON="{
     \"PATH\": \"${PYTHON_BIN_DIR}:${PATH}\",
     \"VIRTUAL_ENV\": \"${VIRTUAL_ENV:-${PROJECT_ROOT}/.venv}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
+    \"CUDA_HOME\": \"${CUDA_HOME:-/usr/local/cuda}\",
+    \"NVTE_CUDA_INCLUDE_DIR\": \"${NVTE_CUDA_INCLUDE_DIR:-${CUDA_HOME:-/usr/local/cuda}/include}\",
     \"WANDB_API_KEY\": \"${WANDB_API_KEY:-}\",
     \"WANDB_DIR\": \"${PROJECT_ROOT}/logs\",
     \"TORCHINDUCTOR_CACHE_DIR\": \"${TORCHINDUCTOR_CACHE_DIR}\",
@@ -308,5 +317,5 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --sglang-context-length "$SGLANG_CONTEXT_LENGTH" \
     --sglang-tool-call-parser qwen3_coder \
     --router-policy "${SGLANG_ROUTER_POLICY:-round_robin}" \
-    "${WANDB_ARGS[@]}" \
+    ${WANDB_ARGS[@]+"${WANDB_ARGS[@]}"} \
     --sglang-router-port "$SGLANG_ROUTER_PORT"

@@ -75,12 +75,39 @@ reference solver + baseline body + the whole `library.hy`), and `metadata` with
 `baseline_size` from here. (Regenerated, not committed — it embeds library.hy
 per row, ~2 MB.)
 
-### 3. Convert weights + run
+### 3. One-shot: bootstrap + convert + train
+
+`launch_e2e.sh` does the whole bootstrap idempotently — clones Slime + Megatron,
+applies the router-token + SGLang-0.5.13 patches, installs the editable packages
+and training stack (Transformer Engine + Flash Linear Attention), builds the
+rollout image to the NFS tarball (if missing), prepares the JSONL, converts the
+HF checkpoint to Megatron torch_dist (if missing), then hands off to `run.sh`.
+
+It **must run on a GPU node** (TE builds from source; conversion needs CUDA) and
+holds the allocation for the whole run. Submit it via the slurm wrapper:
+
+```bash
+./run_remote.sh submit arcagi          # → sbatch job_arcagi_train.slurm (8×H100, dev)
+./run_remote.sh logs                   # tail the latest job log
+```
+
+Re-submitting resumes: every bootstrap stage skips work already done.
 
 `convert_weights.sh` (HF → Megatron torch_dist) and `run.sh` (Polar services +
 Ray + Slime) mirror the SWE-Gym example; `model_args.sh` carries the Qwen3.6-27B
-Megatron dimensions. **The 27B GPU split / parallelism in `run.sh` is not yet
-finalized** — see *Open: parallelism* below.
+Megatron dimensions; GPU split is 4 train (TP=4) + 4 serve (TP=4), conservative
+batch/recompute knobs (see *Open: parallelism* — values are estimates, the first
+run may need a memory-tuning cycle). `--num-epoch 50` loops the 40-task bank
+many times so we can watch the reward move.
+
+### Files unique to the launch path
+
+| File | Purpose |
+|---|---|
+| `launch_e2e.sh` | One-shot bootstrap + train (GPU node). |
+| `convert_weights.sh` | HF → Megatron torch_dist (run once; `launch_e2e` calls it). |
+| `run.sh` | Polar services + Ray + Slime `train_async.py`. |
+| `../../job_arcagi_train.slurm` | Slurm wrapper: 8×H100 on `dev`, calls `launch_e2e.sh`. |
 
 ## Files
 
@@ -113,6 +140,31 @@ needs `TP=4` (+ activation recompute) and the serve side `TP=4` to hold 27B at
 the rollout context length. `run.sh` is templated from SWE-Gym; the GPU split,
 `--tensor-model-parallel-size`, `--rollout-num-gpus*`, batch sizes, and
 `--max-tokens-per-gpu` still need tuning/validation for 27B.
+
+## Training-stack setup gotchas (all handled by launch_e2e.sh)
+
+These are the cluster-specific fixes that make the slime/Megatron stack actually
+import and run here — each was a hard failure the first time. `launch_e2e.sh`
+now does all of them; listed so they're not a mystery if something drifts.
+
+- **Megatron commit, not tag.** slime v0.3.0 pins Megatron-LM commit
+  `1dcf0dafa884ad52ffb243625717a3471643e087` (from its `docker/Dockerfile`).
+  Tags like `26.04-alpha.rc1` dropped `megatron/training/tokenizer/`, which
+  slime imports → `ModuleNotFoundError`.
+- **slime's Megatron patch.** slime ships `docker/patch/latest/megatron.patch`
+  (applied `git apply --3way`) that adds `--use-gated-attention`, the
+  `use_gated_attention` config field + gate logic, and checkpoint-load fixes.
+  Without it, conversion/training reject `--use-gated-attention`.
+- **Transformer Engine 2.10.0** (matched to that Megatron commit; 2.5.0 ≠).
+  Its `transformer-engine-torch` C++ build `#include`s `nccl.h` from the pip
+  `nvidia-nccl` package, so that include/lib dir must be on `CPATH`/`LIBRARY_PATH`.
+  And TE 2.x crashes at import doing `Path(nvidia.__file__=None)` unless
+  `NVTE_CUDA_INCLUDE_DIR` is set.
+- **numpy < 2.** Megatron hard-asserts `numpy<2`; the editable installs pull 2.x,
+  so we force-reinstall `numpy<2` in the training venv (the rollout container has
+  its own numpy, unaffected).
+- **PATH on GPU nodes.** Non-login shells lack `uv` (`~/.local/bin`) and `nvcc`
+  (`$CUDA_HOME/bin`); both are exported before any install/run step.
 
 ## Future work
 
