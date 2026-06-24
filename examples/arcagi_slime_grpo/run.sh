@@ -183,9 +183,11 @@ curl -sf http://127.0.0.1:8080/health || { echo "Polar rollout server not health
 NNODES="${SLURM_NNODES:-1}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 if [ "${NNODES}" -ge 2 ]; then
-    # Dedicate node0 to training (TP=8), node1's GPUs to rollout/serving.
+    # Dedicate node0 to training (TP=8); ALL other nodes' GPUs serve rollouts.
+    # With N nodes that's (N-1)*GPUS_PER_NODE serving GPUs, one TP=8 SGLang
+    # engine per worker node -> more rollout throughput for larger GRPO groups.
     ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-8}"
-    ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-8}"
+    ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-$(( (NNODES - 1) * GPUS_PER_NODE ))}"
     ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-8}"
     TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-8}"
 else

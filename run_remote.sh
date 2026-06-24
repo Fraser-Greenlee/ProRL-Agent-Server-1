@@ -123,8 +123,9 @@ submit)
         arcagi)      SLURM_FILE="job_arcagi_train.slurm" ;;
         arcagi2)     SLURM_FILE="job_arcagi_train_2node.slurm" ;;
         arcagi-rl)   SLURM_FILE="job_arcagi_rl_2node.slurm" ;;
+        arcagi-rl4)  SLURM_FILE="job_arcagi_rl_4node.slurm" ;;
         *.slurm)     SLURM_FILE="$ARG" ;;
-        *)           echo "Unknown job: $ARG (use smoke|calculator|train|arcagi|arcagi2|arcagi-rl|<file>.slurm)"; exit 2 ;;
+        *)           echo "Unknown job: $ARG (use smoke|calculator|train|arcagi|arcagi2|arcagi-rl|arcagi-rl4|<file>.slurm)"; exit 2 ;;
     esac
 
     EXTRA_ARGS="$*"
