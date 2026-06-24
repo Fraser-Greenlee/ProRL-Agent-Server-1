@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Polar — architecture &amp; GRPO batch construction</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1d222c;
+    --line: #2a3140;
+    --muted: #8b94a6;
+    --text: #e6ebf2;
+    --accent: #7cc4ff;
+    --green: #7ee2a8;
+    --amber: #f6c177;
+    --pink: #ef9bbc;
+    --violet: #b59cff;
+    --red: #ff8a8a;
+    --tag-bg: #232a36;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  .page {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 32px 24px 64px;
+  }
+  h1 {
+    font-size: 26px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+  .sub {
+    color: var(--muted);
+    margin-bottom: 28px;
+    font-size: 14px;
+  }
+  h2 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 36px 0 12px;
+    color: var(--text);
+    border-left: 3px solid var(--accent);
+    padding-left: 10px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px 20px;
+    margin: 12px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .legend .sw {
+    display: inline-block;
+    width: 12px; height: 12px; border-radius: 3px;
+    vertical-align: middle; margin-right: 6px;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  .swatch-trainer  { background: rgba(181,156,255,0.25); }
+  .swatch-bridge   { background: rgba(239,155,188,0.25); }
+  .swatch-rollout  { background: rgba(124,196,255,0.25); }
+  .swatch-gateway  { background: rgba(126,226,168,0.25); }
+  .swatch-runtime  { background: rgba(246,193,119,0.25); }
+  .swatch-infer    { background: rgba(255,138,138,0.25); }
+
+  /* Common box style */
+  .box {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+  }
+  .box .title {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .box .title .pill {
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    background: var(--tag-bg);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--muted);
+  }
+  .box .meta {
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11.5px;
+    background: rgba(255,255,255,0.04);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  /* Color tints per role */
+  .role-trainer  { border-color: rgba(181,156,255,0.55); background: linear-gradient(180deg, rgba(181,156,255,0.10), rgba(181,156,255,0.03)); }
+  .role-bridge   { border-color: rgba(239,155,188,0.55); background: linear-gradient(180deg, rgba(239,155,188,0.10), rgba(239,155,188,0.03)); }
+  .role-rollout  { border-color: rgba(124,196,255,0.55); background: linear-gradient(180deg, rgba(124,196,255,0.10), rgba(124,196,255,0.03)); }
+  .role-gateway  { border-color: rgba(126,226,168,0.55); background: linear-gradient(180deg, rgba(126,226,168,0.10), rgba(126,226,168,0.03)); }
+  .role-runtime  { border-color: rgba(246,193,119,0.55); background: linear-gradient(180deg, rgba(246,193,119,0.10), rgba(246,193,119,0.03)); }
+  .role-infer    { border-color: rgba(255,138,138,0.55); background: linear-gradient(180deg, rgba(255,138,138,0.10), rgba(255,138,138,0.03)); }
+
+  /* Diagram 1: System architecture */
+  .arch-grid {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 18px;
+    align-items: start;
+    margin-top: 14px;
+  }
+  .arch-col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .col-header {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 2px;
+  }
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px dashed var(--line);
+    border-radius: 8px;
+  }
+  .stack .stack-title {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  /* Per-session pipeline diagram */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin-top: 14px;
+  }
+  .stage {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+    position: relative;
+  }
+  .stage h4 {
+    margin: 0 0 6px;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .stage h4 .num {
+    background: var(--tag-bg);
+    color: var(--muted);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    width: 20px; height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+  }
+  .stage ul {
+    margin: 6px 0 0;
+    padding-left: 16px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .stage ul li { margin: 2px 0; }
+  .pipeline .arrow {
+    position: relative;
+  }
+  .pipeline-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+  }
+  .arrow-h {
+    align-self: center;
+    width: 22px;
+    height: 0;
+    border-top: 2px solid var(--line);
+    position: relative;
+  }
+  .arrow-h::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    top: -5px;
+    border: 5px solid transparent;
+    border-left-color: var(--line);
+  }
+
+  /* GRPO diagram */
+  .grpo {
+    display: grid;
+    grid-template-columns: 1.1fr 1.4fr 1fr;
+    gap: 18px;
+    margin-top: 14px;
+  }
+  .grpo .col {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .group-card {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .group-card .gh {
+    font-weight: 600; font-size: 12.5px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .group-card .gh .gid {
+    color: var(--muted); font-weight: 500; font-size: 11px;
+  }
+  .traj {
+    display: grid;
+    grid-template-columns: 80px 1fr 60px 60px;
+    gap: 6px;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 11.5px;
+  }
+  .traj .label { color: var(--muted); }
+  .traj .traces {
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+  }
+  .trace-chip {
+    background: var(--tag-bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+  .trace-chip.train { color: var(--green); border-color: rgba(126,226,168,0.45); }
+  .trace-chip.failed { color: var(--red); border-color: rgba(255,138,138,0.4); text-decoration: line-through; }
+  .reward-cell { text-align: right; font-variant-numeric: tabular-nums; }
+  .reward-cell.pos { color: var(--green); }
+  .reward-cell.neg { color: var(--red); }
+  .reward-cell.zero { color: var(--muted); }
+
+  .formula {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: rgba(124,196,255,0.06);
+    border: 1px solid rgba(124,196,255,0.25);
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+  .formula .v { color: var(--accent); }
+  .formula .c { color: var(--muted); }
+  .small { font-size: 11.5px; color: var(--muted); }
+  .kvs {
+    display: grid;
+    grid-template-columns: 130px 1fr;
+    gap: 4px 10px;
+    font-size: 12px;
+  }
+  .kvs dt { color: var(--muted); }
+  .kvs dd { margin: 0; }
+
+  /* SVG overlays */
+  .arch-wrap { position: relative; }
+  svg.overlay {
+    position: absolute; left: 0; top: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .lbl {
+    fill: var(--muted);
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .arrow-line {
+    stroke: var(--line);
+    stroke-width: 1.5;
+    fill: none;
+  }
+  .arrow-line.accent { stroke: var(--accent); stroke-dasharray: 4 3; }
+  .arrow-line.bridge { stroke: var(--pink); }
+  .arrow-line.gateway { stroke: var(--green); }
+
+  .footnote {
+    color: var(--muted);
+    font-size: 11.5px;
+    margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Polar — architecture &amp; GRPO batch construction</h1>
+  <div class="sub">
+    How a training step turns into rollouts: trainer (Slime) → Polar Rollout server → Gateway nodes (per-session pipeline with runtime sandbox + LLM proxy + inference) → trajectories → GRPO-normalized samples back into Slime.
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">1 · System architecture</h2>
+    <div class="legend">
+      <span><span class="sw swatch-trainer"></span>Trainer</span>
+      <span><span class="sw swatch-bridge"></span>Slime bridge</span>
+      <span><span class="sw swatch-rollout"></span>Rollout server</span>
+      <span><span class="sw swatch-gateway"></span>Gateway node</span>
+      <span><span class="sw swatch-runtime"></span>Runtime sandbox</span>
+      <span><span class="sw swatch-infer"></span>Inference server</span>
+    </div>
+
+    <div class="arch-wrap">
+      <div class="arch-grid" id="arch">
+
+        <!-- Column 1: trainer + bridge -->
+        <div class="arch-col">
+          <div class="col-header">Training process (Ray + Megatron)</div>
+
+          <div class="box role-trainer" id="b-trainer">
+            <div class="title">Slime trainer <span class="pill">--rollout-function-path</span></div>
+            <div class="meta">
+              Builds prompts &amp; <code>group_index</code>, calls
+              <code>generate_rollout_polar_async</code>, applies
+              <code>post_process_rewards</code>, then PPO/GRPO update.
+            </div>
+          </div>
+
+          <div class="box role-bridge" id="b-bridge">
+            <div class="title">slime_bridge <span class="pill">HTTP client</span></div>
+            <div class="meta">
+              <strong>Submit</strong>: groups → <code>TaskRequest</code> with
+              <code>num_samples = group_size</code>, stamped with
+              <code>{group_id, policy_version, rollout_step}</code>.<br/>
+              <strong>Coordinate</strong>: pause/resume gateway gen during
+              weight sync, drop off-policy-stale groups
+              (<code>max_off_policy_steps</code>), bound async admission
+              (<code>max_async_level</code>).<br/>
+              <strong>Receive</strong>: callback listener (FastAPI) +
+              poll fallback → <code>SessionResult</code>.
+            </div>
+          </div>
+
+          <div class="box role-bridge" id="b-adapter">
+            <div class="title">adapter.py + reward_post_process.py</div>
+            <div class="meta">
+              <code>SessionResult</code> → one Slime <code>Sample</code> per
+              <code>Trace</code>, all sharing the same
+              <code>(group_index, index)</code> key. GRPO normalization
+              done at <em>trajectory</em> granularity, broadcast back to
+              every trace.
+            </div>
+          </div>
+        </div>
+
+        <!-- Column 2: rollout + gateways -->
+        <div class="arch-col">
+          <div class="col-header">Polar service plane</div>
+
+          <div class="box role-rollout" id="b-rollout">
+            <div class="title">Rollout server <span class="pill">FastAPI · :8080</span></div>
+            <div class="meta">
+              <code>POST /rollout/task/submit</code> →
+              <code>manager</code> expands 1 task into <em>N sessions</em>;
+              <code>balancer</code> picks the least-loaded healthy gateway
+              (run → post-run → init pressure).
+              <code>pipeline</code> awaits gateway callback with poll
+              safety net; persists to <code>save_dir/task_&lt;id&gt;/</code>;
+              POSTs <code>TaskResult</code> to <code>callback_url</code>.
+            </div>
+          </div>
+
+          <div class="stack">
+            <div class="stack-title">Gateway fleet · one process per node</div>
+
+            <div class="box role-gateway" id="b-gw1">
+              <div class="title">gateway node localhost-01 <span class="pill">:8100</span></div>
+              <div class="meta">
+                Stage-isolated worker pools:
+                INIT → READY → RUNNING → POST-RUN.
+                Catch-all proxy route on the same port.
+              </div>
+            </div>
+
+            <div class="box role-gateway" id="b-gw2">
+              <div class="title">gateway node localhost-02 <span class="pill">:8101</span></div>
+              <div class="meta">
+                Heartbeats to rollout every <code>heartbeat_interval_seconds</code>.
+                Drains gracefully on shutdown.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Column 3: per-session detail -->
+        <div class="arch-col">
+          <div class="col-header">Inside one session (gateway-managed)</div>
+
+          <div class="box role-runtime" id="b-runtime">
+            <div class="title">Runtime sandbox <span class="pill">Docker / Apptainer</span></div>
+            <div class="meta">
+              One container per session. Host
+              <code>session_dir</code> bind-mounted at
+              <code>/polar/session</code>. Prepare recipe (upload_file /
+              upload_dir / exec) runs before the agent.
+            </div>
+          </div>
+
+          <div class="box role-runtime" id="b-agent">
+            <div class="title">Agent harness <span class="pill">unmodified agent</span></div>
+            <div class="meta">
+              Started by harness preset (<code>codex</code>,
+              <code>claude_code</code>, <code>gemini_cli</code>, …) or a
+              <code>shell</code>/<code>import_path</code>.
+              Polar injects:
+              <code>OPENAI_BASE_URL</code> / <code>ANTHROPIC_BASE_URL</code> /
+              <code>GOOGLE_API_URL</code> + <code>*_API_KEY = session_id</code>.
+              The agent never knows Polar is in the loop.
+            </div>
+          </div>
+
+          <div class="box role-gateway" id="b-proxy">
+            <div class="title">LLM proxy <span class="pill">gateway/proxy + transform/</span></div>
+            <div class="meta">
+              detect API family → transform request to the served model →
+              forward → capture <code>CompletionRecord</code> → transform
+              response back. Streaming is synthetic SSE replay.
+            </div>
+          </div>
+
+          <div class="box role-infer" id="b-infer">
+            <div class="title">Inference server <span class="pill">SGLang / vLLM</span></div>
+            <div class="meta">
+              Single served model; gateway adds token-id / logprob params
+              and canonicalizes responses. <code>/admin/inference/pause</code> +
+              <code>/resume</code> gate generation during weight sync.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- We rely on flow being top-to-bottom and column-to-column with arrows drawn by SVG below. -->
+      <svg class="overlay" id="overlay" aria-hidden="true"></svg>
+    </div>
+
+    <div class="footnote">
+      All cross-process traffic is HTTP. Cardinality: <code>1 trainer ↔ 1 rollout server ↔ N gateways ↔ N inference servers</code>.
+      The bridge package <code>slime_bridge</code> lives outside <code>polar</code> because Slime/Ray/Megatron are installed in the trainer environment only.
+    </div>
+  </div>
+
+  <h2>2 · Per-session pipeline (one of N samples)</h2>
+  <div class="panel">
+    <div class="small" style="margin-bottom:6px">
+      Each <code>TaskRequest</code> with <code>num_samples = G</code> fans out to <em>G sessions</em>. Each session is a state machine across the gateway's worker pools. Terminal status: <code>COMPLETED</code> · <code>ERROR</code> · <code>TIMEOUT</code>.
+    </div>
+    <div class="pipeline-row">
+      <div class="stage" style="flex:1">
+        <h4><span class="num">1</span> INIT</h4>
+        <div class="small">Capacity-limited by <code>max_init_workers</code>.</div>
+        <ul>
+          <li>start runtime container</li>
+          <li>bind-mount <code>/polar/session</code></li>
+          <li>execute <code>RuntimeSpec.prepare</code></li>
+          <li><strong>timeout budget starts here</strong></li>
+        </ul>
+      </div>
+      <div class="arrow-h"></div>
+      <div class="stage" style="flex:1">
+        <h4><span class="num">2</span> READY</h4>
+        <div class="small">Queued; waits for a run slot. Time queued is <em>not</em> charged.</div>
+        <ul>
+          <li>completion records cleared</li>
+          <li>session pinned in registry</li>
+          <li>proxy env prepared</li>
+        </ul>
+      </div>
+      <div class="arrow-h"></div>
+      <div class="stage" style="flex:1">
+        <h4><span class="num">3</span> RUNNING</h4>
+        <div class="small">Capacity-limited by <code>max_run_workers</code>.</div>
+        <ul>
+          <li>harness <code>setup()</code></li>
+          <li>harness <code>run_steps()</code> exec inside container</li>
+          <li>agent's LLM calls flow through proxy → inference → capture</li>
+        </ul>
+      </div>
+      <div class="arrow-h"></div>
+      <div class="stage" style="flex:1">
+        <h4><span class="num">4</span> POST-RUN</h4>
+        <div class="small">Capacity-limited by <code>max_postrun_workers</code>.</div>
+        <ul>
+          <li>builder: <code>CompletionSession</code> → <code>Trajectory</code></li>
+          <li>evaluator: <code>EvalResult</code> (outcome / per-trace reward)</li>
+          <li>merge reward onto <code>Trace.reward</code></li>
+          <li>tear down runtime · POST <code>/callbacks/session_result</code></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footnote">
+      Builders registered by name: <code>per_request</code>, <code>prefix_merging</code>. Evaluators: <code>session_completed</code>, <code>test_on_output</code>, <code>swebench_harness</code>. Either can also be passed as <code>module:Class</code>.
+    </div>
+  </div>
+
+  <h2>3 · How a GRPO batch is built (slime_bridge)</h2>
+  <div class="panel">
+    <div class="small" style="margin-bottom:6px">
+      One Polar <code>Trajectory</code> may have multiple <code>Trace</code>s — typical with the <code>per_request</code> builder, where each agent ↔ model turn becomes its own trace. The bridge keeps every trainable trace as its own Slime <code>Sample</code> but normalizes reward at <em>trajectory</em> granularity, then broadcasts the advantage back to every trace of that trajectory.
+    </div>
+
+    <div class="grpo">
+      <!-- Column A: groups -> sessions -->
+      <div class="col">
+        <div class="col-header">A · Group expansion</div>
+
+        <div class="group-card">
+          <div class="gh">Prompt P₁ <span class="gid">group_index = 0 · num_samples = 4</span></div>
+          <div class="small">→ 4 Polar sessions submitted under one <code>TaskRequest</code></div>
+          <div class="traj"><span class="label">session 0</span><span class="traces"><span class="trace-chip train">t0</span><span class="trace-chip train">t1</span><span class="trace-chip train">t2</span></span><span class="reward-cell">r=1.0</span><span class="small">COMPLETED</span></div>
+          <div class="traj"><span class="label">session 1</span><span class="traces"><span class="trace-chip train">t0</span><span class="trace-chip train">t1</span></span><span class="reward-cell">r=0.0</span><span class="small">COMPLETED</span></div>
+          <div class="traj"><span class="label">session 2</span><span class="traces"><span class="trace-chip train">t0</span><span class="trace-chip train">t1</span><span class="trace-chip train">t2</span><span class="trace-chip train">t3</span></span><span class="reward-cell">r=1.0</span><span class="small">COMPLETED</span></div>
+          <div class="traj"><span class="label">session 3</span><span class="traces"><span class="trace-chip failed">t0</span></span><span class="reward-cell zero">r=—</span><span class="small">TIMEOUT</span></div>
+        </div>
+
+        <div class="group-card">
+          <div class="gh">Prompt P₂ <span class="gid">group_index = 1 · num_samples = 4</span></div>
+          <div class="small">…another group, normalized independently</div>
+        </div>
+
+        <div class="formula">
+          group ≡ samples that share <span class="v">group_index</span><br/>
+          trajectory ≡ samples that share <span class="v">(group_index, index)</span>
+          <div class="c">→ all traces from one Polar session</div>
+        </div>
+      </div>
+
+      <!-- Column B: trajectory rewards -->
+      <div class="col">
+        <div class="col-header">B · Per-trajectory reward (one value per session)</div>
+
+        <div class="group-card">
+          <div class="gh">Group 0 — raw rewards <span class="gid">first reward per (g_idx, idx) wins</span></div>
+          <div class="traj"><span class="label">traj (0,0)</span><span class="small">3 traces · t0/t1/t2</span><span class="reward-cell pos">+1.0</span><span class="small">ok</span></div>
+          <div class="traj"><span class="label">traj (0,1)</span><span class="small">2 traces · t0/t1</span><span class="reward-cell zero">0.0</span><span class="small">ok</span></div>
+          <div class="traj"><span class="label">traj (0,2)</span><span class="small">4 traces</span><span class="reward-cell pos">+1.0</span><span class="small">ok</span></div>
+          <div class="traj"><span class="label">traj (0,3)</span><span class="small">1 trace</span><span class="reward-cell neg">excl</span><span class="small">FAILED</span></div>
+        </div>
+
+        <div class="formula">
+          valid trajectories: (0,0) (0,1) (0,2)<br/>
+          μ<sub>g=0</sub> = (1.0 + 0.0 + 1.0) / 3 = <span class="v">0.6667</span><br/>
+          σ<sub>g=0</sub> = stdev{1.0, 0.0, 1.0} ≈ <span class="v">0.5774</span><br/>
+          <span class="c"># GRPO advantage per trajectory:</span><br/>
+          A<sub>(0,0)</sub> = (1.0 − μ) / (σ + ε) = <span class="v">+0.577</span><br/>
+          A<sub>(0,1)</sub> = (0.0 − μ) / (σ + ε) = <span class="v">−1.155</span><br/>
+          A<sub>(0,2)</sub> = (1.0 − μ) / (σ + ε) = <span class="v">+0.577</span><br/>
+          A<sub>(0,3)</sub> = <span class="v">0</span>  <span class="c"># FAILED → forced 0, excluded from μ/σ</span>
+        </div>
+
+        <div class="small">
+          <code>std_norm</code> only when <code>advantage_estimator ∈ {grpo, gspo}</code> and <code>grpo_std_normalization=true</code>; otherwise just mean-center. If all members of a group fail, every advantage is forced to <code>0</code>.
+        </div>
+      </div>
+
+      <!-- Column C: sample expansion -->
+      <div class="col">
+        <div class="col-header">C · Broadcast back onto every Slime Sample</div>
+
+        <div class="group-card">
+          <div class="gh">Slime Samples (training batch)</div>
+          <div class="traj"><span class="label">(0,0,t0)</span><span class="small">tokens · loss_mask</span><span class="reward-cell pos">+0.577</span><span class="small">train</span></div>
+          <div class="traj"><span class="label">(0,0,t1)</span><span class="small">tokens · loss_mask</span><span class="reward-cell pos">+0.577</span><span class="small">train</span></div>
+          <div class="traj"><span class="label">(0,0,t2)</span><span class="small">tokens · loss_mask</span><span class="reward-cell pos">+0.577</span><span class="small">train</span></div>
+          <div class="traj"><span class="label">(0,1,t0)</span><span class="small">tokens · loss_mask</span><span class="reward-cell neg">−1.155</span><span class="small">train</span></div>
+          <div class="traj"><span class="label">(0,1,t1)</span><span class="small">tokens · loss_mask</span><span class="reward-cell neg">−1.155</span><span class="small">train</span></div>
+          <div class="traj"><span class="label">(0,2,t0…t3)</span><span class="small">tokens · loss_mask</span><span class="reward-cell pos">+0.577</span><span class="small">train</span></div>
+          <div class="traj"><span class="label">(0,3,t0)</span><span class="small">fully masked</span><span class="reward-cell zero">0</span><span class="small">no-grad</span></div>
+        </div>
+
+        <dl class="kvs" style="margin-top:6px">
+          <dt>response_ids</dt><dd>token ids generated by the agent</dd>
+          <dt>loss_mask</dt><dd>0/1 per token, set by <em>builder</em>; masked traces get all-zero</dd>
+          <dt>response_logprobs</dt><dd>captured at proxy from the inference server</dd>
+          <dt>reward</dt><dd>broadcast advantage from column B</dd>
+          <dt>(group_index, index)</dt><dd>the key the post-processor groups by</dd>
+        </dl>
+
+        <div class="footnote" style="margin-top:8px">
+          The reward post-processor doesn't double-count: only the first reward per <code>(group_index, index)</code> contributes to μ/σ, even though every trace of that trajectory is its own Sample. Off-policy-stale groups are dropped <em>before</em> they reach this stage.
+        </div>
+      </div>
+    </div>
+
+    <div class="footnote" style="margin-top:14px">
+      End-to-end ordering for one training step:
+      <code>Slime sampler</code> →
+      <code>render_task_payload</code> →
+      <code>POST /rollout/task/submit</code> (one per group, async) →
+      gateway pipeline (INIT→READY→RUNNING→POST-RUN per session) →
+      <code>session_result</code> callback →
+      <code>session_result_to_samples</code> (1 trace = 1 Sample) →
+      <code>post_process_rewards</code> (per-group GRPO normalize) →
+      Slime PPO/GRPO loss.
+    </div>
+  </div>
+</div>
+
+<script>
+// Draw connector arrows between known boxes after layout settles.
+(function () {
+  const overlay = document.getElementById('overlay');
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const arch = document.getElementById('arch');
+
+  function rectOf(id) {
+    const el = document.getElementById(id);
+    const a = arch.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return {
+      left: r.left - a.left,
+      top: r.top - a.top,
+      right: r.right - a.left,
+      bottom: r.bottom - a.top,
+      width: r.width,
+      height: r.height,
+      cx: r.left - a.left + r.width / 2,
+      cy: r.top - a.top + r.height / 2,
+    };
+  }
+
+  function arrow(x1, y1, x2, y2, cls, label, labelOffset) {
+    const path = document.createElementNS(svgNS, 'path');
+    const dx = x2 - x1;
+    const c1x = x1 + dx * 0.5, c1y = y1;
+    const c2x = x1 + dx * 0.5, c2y = y2;
+    path.setAttribute('d', `M ${x1} ${y1} C ${c1x} ${c1y} ${c2x} ${c2y} ${x2} ${y2}`);
+    path.setAttribute('class', 'arrow-line ' + (cls || ''));
+    path.setAttribute('marker-end', 'url(#ah)');
+    overlay.appendChild(path);
+    if (label) {
+      const t = document.createElementNS(svgNS, 'text');
+      t.setAttribute('x', (x1 + x2) / 2);
+      t.setAttribute('y', (y1 + y2) / 2 + (labelOffset || -4));
+      t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('class', 'lbl');
+      t.textContent = label;
+      overlay.appendChild(t);
+    }
+  }
+
+  function draw() {
+    overlay.setAttribute('width', arch.clientWidth);
+    overlay.setAttribute('height', arch.clientHeight);
+    overlay.innerHTML = `
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)" />
+        </marker>
+      </defs>
+    `;
+
+    // Trainer ↔ bridge (vertical, internal — skip, layout makes it obvious)
+    // Bridge → Rollout (submit)
+    const br = rectOf('b-bridge');
+    const ro = rectOf('b-rollout');
+    arrow(br.right + 2, br.cy, ro.left - 2, ro.cy, 'bridge', 'POST /rollout/task/submit', -6);
+
+    // Rollout → Gateway (dispatch)
+    const gw1 = rectOf('b-gw1');
+    arrow(ro.right + 2, ro.bottom - 14, gw1.left - 2, gw1.cy, 'accent', 'dispatch session', -6);
+
+    // Gateway → Runtime/Agent/Proxy/Infer (handled in column 3 by visual stacking; draw a logical link)
+    const rt = rectOf('b-runtime');
+    arrow(gw1.right + 2, gw1.cy, rt.left - 2, rt.cy, 'gateway', 'start runtime', -6);
+
+    const ag = rectOf('b-agent');
+    const px = rectOf('b-proxy');
+    const inf = rectOf('b-infer');
+    arrow(ag.left + ag.width * 0.55, ag.bottom + 2, px.left + px.width * 0.45, px.top - 2, 'gateway', 'LLM HTTP call', -4);
+    arrow(px.right - 30, px.bottom + 2, inf.right - 30, inf.top - 2, 'gateway', 'forward', -4);
+    arrow(inf.left + 30, inf.top - 2, px.left + 30, px.bottom + 2, 'accent', 'response', 14);
+
+    // Result callback gateway → rollout
+    const gw2 = rectOf('b-gw2');
+    arrow(gw2.left - 2, gw2.cy + 8, ro.right + 2, ro.bottom - 4, 'accent', 'session_result callback', 14);
+
+    // Rollout → bridge (TaskResult)
+    const ad = rectOf('b-adapter');
+    arrow(ro.left - 2, ro.bottom - 4, ad.right + 2, ad.cy, 'bridge', 'TaskResult (callback_url)', 14);
+  }
+
+  // Initial + on resize
+  if (document.readyState === 'complete') draw();
+  else window.addEventListener('load', draw);
+  window.addEventListener('resize', () => requestAnimationFrame(draw));
+})();
+</script>
+</body>
+</html>

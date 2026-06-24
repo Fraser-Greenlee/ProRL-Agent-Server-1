@@ -1,0 +1,99 @@
+# Polar bridge configuration for Slime's --custom-config-path.
+# These become attributes on the `args` namespace passed to the rollout function.
+
+polar_rollout_url: "http://127.0.0.1:8080"
+polar_gateway_url: "http://127.0.0.1:8100"
+polar_reward_key: "score"
+polar_max_async_level: 2
+polar_request_timeout: 2400
+polar_callback_host: "127.0.0.1"
+polar_min_complete_accept_fraction: 0.6
+
+# Docker image baked by build_image.py: auto-compress repo (all task files reset
+# to baseline scaffold), an arcagi venv (hy/hyrule/arckit/scipy/numpy) on PATH,
+# and a baked openhands-sdk 1.17 venv at /opt/openhands-sdk-venv.
+polar_arcagi_image: "polar-arcagi:latest"
+
+# Task template rendered per sample group.  Placeholders are filled from the
+# context: {instruction}, {num_samples}, {sample.*}, {args.*}.
+polar_task_template:
+  timeout_seconds: 2400
+  runtime:
+    backend: "docker"
+    image: "{args.polar_arcagi_image}"
+    network: "host"
+    workdir: "/polar/session/workspace"
+    env:
+      HOME: "/polar/session/home"
+      AUTO_COMPRESS: "/polar/session/workspace"
+      # arcagi venv first (eval.py deps), then openhands-sdk venv fallback the
+      # harness probes, then the baked node + system bins.
+      PATH: "/opt/arcagi-venv/bin:/opt/openhands-sdk-venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
+    # Materialize a fresh workspace from the baked, fully-scaffolded repo, then
+    # git-init so the evaluator can extract the agent's diff.  Every task file
+    # is already the baseline scaffold (image ran `eval.py --scaffold`), so the
+    # agent starts every rollout compressing from scratch and cannot read a
+    # solved sibling.
+    prepare:
+      - type: exec
+        command: >-
+          rm -rf /polar/session/workspace &&
+          mkdir -p /polar/session/workspace /polar/session/home
+          /polar/session/logs/agent &&
+          cp -a /opt/auto-compress/. /polar/session/workspace/ &&
+          cd /polar/session/workspace &&
+          git init -q &&
+          git config user.email 'polar@arcagi' &&
+          git config user.name 'Polar' &&
+          git add -A &&
+          git commit -qm 'baseline scaffold'
+    # Fresh grading runtime: same image, re-init the workspace so the evaluator
+    # can apply ONLY the agent's task-file diff onto a clean baseline.
+    eval_prepare:
+      - type: exec
+        command: >-
+          rm -rf /polar/session/workspace &&
+          mkdir -p /polar/session/workspace /polar/session/home &&
+          cp -a /opt/auto-compress/. /polar/session/workspace/ &&
+          cd /polar/session/workspace &&
+          git init -q &&
+          git config user.email 'polar@arcagi' &&
+          git config user.name 'Polar' &&
+          git add -A &&
+          git commit -qm 'baseline scaffold'
+  agent:
+    harness: "openhands_sdk"
+    model_name: "openai/Fraser/Qwen3.6-27B-ARC-Hy"
+    settings:
+      # Compression is a short task; cap the agent loop. Bump if rollouts are
+      # truncating before the agent finishes.
+      max_iterations: 30
+  builder:
+    strategy: "prefix_merging"
+  evaluator:
+    # Custom continuous reward: -1 if not fully correct, else
+    # (baseline_size - new_size) / baseline_size clipped to [0, 1].
+    strategy: "examples.arcagi_slime_grpo.arc_compress_evaluator:ArcCompressEvaluator"
+    refresh_runtime: true
+    config:
+      task_id: "{sample.metadata.task_id}"
+      baseline_size: "{sample.metadata.baseline_size}"
+      repo_dir: "/polar/session/workspace"
+      # Only the task file may reach the grader; drop everything else from the
+      # diff so library/eval edits can't influence the score (and to keep the
+      # patch tiny).
+      exclude_patterns:
+        - "library.hy"
+        - "eval.py"
+        - "reference/**"
+        - "**/reference/**"
+        - "baseline_run/**"
+        - "sft/**"
+        - ".openhands/**"
+        - "**/.openhands/**"
+        - "node_modules/**"
+        - "**/node_modules/**"
+        - ".venv/**"
+        - "**/.venv/**"
+
+polar_task_id_template: "polar-arcagi-grpo-{rollout_id}-{sample.group_index}"
