@@ -142,19 +142,102 @@ ensure_training_stack() {
     # TE must be 2.10.0 — the version slime v0.3.0's Megatron commit is built
     # against. A mismatched TE<->Megatron pairing is the usual cause of import/
     # kernel breakage. Only skip if 2.10.0 is already importable.
-    local te_ver
+    #
+    # TE's BACKEND (transformer_engine_cuXX core) must match torch's CUDA MAJOR.
+    # torch 2.11.0 here is cu130; if TE's core links libcudart.so.12 while torch
+    # loads .so.13, TE aborts at the first kernel ("Multiple libcudart libraries
+    # found"). The cu13 CORE has a prebuilt wheel, but transformer_engine_torch
+    # (the C++ ext) does NOT and must be source-compiled against a FULL cu13
+    # toolkit; AND `transformer-engine-torch` drags the cu12 core back in via its
+    # [core] extra, so the cu13 core must be reinstalled LAST. See the build
+    # block below — this is why we don't just `pip install transformer-engine`.
+    local te_ver torch_cuda torch_cuda_major te_ok te_probe
     te_ver="$("${PYTHON_BIN}" -c 'from importlib.metadata import version; print(version("transformer-engine"))' 2>/dev/null || echo "")"
-    if [ "$te_ver" = "2.10.0" ] && "${PYTHON_BIN}" -c "import transformer_engine.pytorch" >/dev/null 2>&1; then
-        echo "Transformer Engine 2.10.0 present; skipping."
+    torch_cuda="$("${PYTHON_BIN}" -c 'import torch; print(torch.version.cuda or "")' 2>/dev/null || echo "")"
+    torch_cuda_major="${torch_cuda%%.*}"
+    # "TE ok" requires version 2.10.0 AND the backend matching torch's CUDA
+    # major AND a clean pytorch import. Import torch FIRST (as the trainer does)
+    # so the matching nvidia cuXX libs are on the loader path before TE loads.
+    # Probe written to a temp file — a heredoc inside $(...) doesn't parse.
+    te_probe="$(mktemp)"
+    cat > "${te_probe}" <<'PY'
+import sys
+from importlib.metadata import version, PackageNotFoundError
+major = sys.argv[1]
+try:
+    import torch  # noqa: F401  (sets up the matching nvidia cuXX library path)
+    if version("transformer-engine") != "2.10.0":
+        raise SystemExit
+    version(f"transformer_engine_cu{major}")  # backend present for torch's major?
+    import transformer_engine.pytorch  # noqa: F401
+    print("yes")
+except (PackageNotFoundError, Exception):
+    print("no")
+PY
+    te_ok="$("${PYTHON_BIN}" "${te_probe}" "$torch_cuda_major" 2>/dev/null || echo no)"
+    rm -f "${te_probe}"
+    if [ "$te_ok" = "yes" ]; then
+        echo "Transformer Engine 2.10.0 (cu${torch_cuda_major} backend) present; skipping."
     else
-        command -v nvcc >/dev/null 2>&1 || { echo "ERROR: nvcc not found (need CUDA toolkit / CUDA_HOME)." >&2; exit 1; }
+        # Source-build TE 2.10.0 with the backend matching torch's CUDA MAJOR.
+        # The prebuilt `transformer_engine_cu${major}` CORE has a wheel, but
+        # `transformer_engine_torch` (the C++ pytorch ext) does NOT — it must be
+        # compiled against a FULL CUDA toolkit of torch's major (it needs the
+        # CCCL/libcu++ headers like <nv/target> that the pip nvidia-cuda wheels
+        # do NOT ship). Build against the wrong major and the process loads two
+        # libcudart majors and TE aborts at the first kernel ("Multiple
+        # libcudart"). So require a SYSTEM toolkit matching torch's major:
+        #   cu13x torch -> /usr/local/cuda-13.x   (install: cuda-toolkit-13-0)
+        #   cu12x torch -> /usr/local/cuda (12.x)
+        # cuDNN + NCCL headers still come from the pip wheels. The pip
+        # nvidia/cu13 wheel toolchain alone is INSUFFICIENT (missing CCCL).
+        # MUST run on a GPU node (nvcc compile).
+        local te_cuda_home te_nvcc
+        if [ -n "$torch_cuda_major" ] && [ "$torch_cuda_major" -ge 13 ] 2>/dev/null; then
+            # Prefer an explicit override, else the standard side-by-side path.
+            for cand in "${TE_CUDA13_HOME:-}" /usr/local/cuda-13.0 /usr/local/cuda-13; do
+                [ -n "$cand" ] && [ -x "${cand}/bin/nvcc" ] && \
+                    [ -f "${cand}/targets/x86_64-linux/include/nv/target" ] && { te_cuda_home="$cand"; break; }
+            done
+            [ -n "${te_cuda_home:-}" ] || {
+                echo "ERROR: torch is cu${torch_cuda_major} but no full CUDA-13 toolkit found." >&2
+                echo "  Install it (Ubuntu): sudo apt-get install -y cuda-toolkit-13-0  -> /usr/local/cuda-13.0" >&2
+                echo "  (The pip nvidia/cu13 wheels lack the CCCL headers TE's source build needs.)" >&2
+                exit 1; }
+        else
+            te_cuda_home="$cuda_home"
+            command -v nvcc >/dev/null 2>&1 || { echo "ERROR: nvcc not found (need CUDA toolkit / CUDA_HOME)." >&2; exit 1; }
+        fi
         [ -n "$cudnn_path" ] || { echo "ERROR: pip nvidia-cudnn not in venv (is torch a CUDA build?)." >&2; exit 1; }
-        echo "Installing Transformer Engine 2.10.0 (had: ${te_ver:-none})..."
+        te_nvcc="${te_cuda_home}/bin/nvcc"
+        # The CCCL headers live under a nested include dir in CUDA 13's layout.
+        local te_inc="${te_cuda_home}/targets/x86_64-linux/include"
+        [ -d "$te_inc" ] || te_inc="${te_cuda_home}/include"
+        echo "Building Transformer Engine 2.10.0 for cu${torch_cuda_major} (torch cuda=${torch_cuda:-none}; toolkit=${te_cuda_home}; had: ${te_ver:-none})..."
         uv pip install --python "${PYTHON_BIN}" ninja pybind11 setuptools wheel >/dev/null 2>&1 || true
-        CUDA_HOME="$cuda_home" \
-        CPATH="${cudnn_path}/include:${nccl_path}/include:${cuda_home}/include:${CPATH:-}" \
-        LIBRARY_PATH="${cudnn_path}/lib:${nccl_path}/lib:${cuda_home}/lib64:${LIBRARY_PATH:-}" \
-            uv pip install --python "${PYTHON_BIN}" --no-build-isolation "transformer-engine[pytorch]==2.10.0"
+        # Source-build the torch ext against the matching SYSTEM toolkit. This
+        # pulls the TE meta + (by its [core] extra) the cu12 core as a dep — even
+        # on cu13x torch. We correct that AFTER the build below; ordering matters:
+        # the cu12 core ships its OWN wheel_lib/libtransformer_engine.so that
+        # overwrites the cu13 one, so the cu13 core must be (re)installed LAST.
+        CUDA_HOME="$te_cuda_home" \
+        PATH="${te_cuda_home}/bin:${PATH}" \
+        NVTE_CUDA_INCLUDE_DIR="${te_inc}" \
+        CPATH="${cudnn_path}/include:${nccl_path}/include:${te_inc}:${CPATH:-}" \
+        LIBRARY_PATH="${cudnn_path}/lib:${nccl_path}/lib:${te_cuda_home}/lib64:${te_cuda_home}/lib:${LIBRARY_PATH:-}" \
+            uv pip install --python "${PYTHON_BIN}" --no-cache --no-build-isolation \
+                --reinstall-package transformer_engine_torch \
+                "transformer-engine==2.10.0" "transformer-engine-torch==2.10.0"
+        # Now pin the CORE to torch's major: on cu13x remove the cu12 core the
+        # build dragged in, then force-reinstall the cu13 core LAST so its
+        # libtransformer_engine.so (NEEDED: libcudart.so.13 only) is the copy on
+        # disk. Without this the core links .so.12 and TE aborts at first kernel.
+        if [ "$torch_cuda_major" -ge 13 ] 2>/dev/null; then
+            uv pip uninstall --python "${PYTHON_BIN}" transformer_engine_cu12 >/dev/null 2>&1 || true
+            uv pip install --python "${PYTHON_BIN}" --no-cache \
+                --reinstall-package "transformer_engine_cu${torch_cuda_major}" \
+                "transformer-engine-cu${torch_cuda_major}==2.10.0"
+        fi
     fi
 
     if "${PYTHON_BIN}" -c \

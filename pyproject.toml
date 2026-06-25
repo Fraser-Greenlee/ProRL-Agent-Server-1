@@ -45,7 +45,7 @@ dev = [
 ]
 
 [tool.uv]
-torch-backend = "auto"
+torch-backend = "cu130"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

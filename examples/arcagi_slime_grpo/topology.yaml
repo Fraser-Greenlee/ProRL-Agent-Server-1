@@ -11,9 +11,9 @@ gateway:
       host: 127.0.0.1
       port: 8100
       public_url: http://127.0.0.1:8100
-      max_init_workers: 16
-      max_run_workers: 16
-      max_postrun_workers: 16
+      max_init_workers: 64
+      max_run_workers: 64
+      max_postrun_workers: 64
       model_served: Fraser/Qwen3.6-27B-ARC-Hy
       inference:
         engine: sglang

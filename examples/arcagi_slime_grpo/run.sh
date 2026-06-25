@@ -54,6 +54,50 @@ export NVTE_CUDA_INCLUDE_DIR="${NVTE_CUDA_INCLUDE_DIR:-${CUDA_HOME}/include}"
 # cluster slime can't connect to). Re-prepend after the .local/cuda prepends.
 export PATH="${PYTHON_BIN_DIR}:${PATH}"
 
+# ── CUDA-13 mount-namespace re-exec (Transformer Engine vs system cuda-12) ──
+# TE's cu13 build aborts at the first kernel with "Multiple libcudart libraries
+# found" because its compiled loader scans /usr/local/cuda* and finds the system
+# 12.9 toolkit beside torch's cu13 runtime. No env/LD_LIBRARY_PATH/LD_PRELOAD
+# fixes it (it's a filesystem-existence scan, and it probes /usr/local/cuda-12
+# independent of CUDA_HOME — verified by strace). We can't remove the shared
+# system toolkit. Fix: re-exec this whole script inside a PRIVATE mount namespace
+# that bind-mounts the cu13 toolkit OVER the cuda-12 paths. Global /usr/local is
+# untouched for other users; Ray actors forked by the in-ns raylet inherit the
+# mask (verified: TE fused-attn runs to completion). See cuda13_ns.sh and the
+# arcagi_te_cudart_conflict memory. SGLang serving workers launch on other nodes
+# via ray_worker.sh (outside this ns) and are unaffected.
+#   Guarded/idempotent: only re-execs when torch is cu13 AND a cuda-12 toolkit
+#   coexists AND sudo+unshare actually work; otherwise runs normally (portable to
+#   clean single-CUDA nodes). POLAR_IN_CUDA13_NS sentinel prevents re-exec loops.
+if [ -z "${POLAR_IN_CUDA13_NS:-}" ]; then
+    _torch_cuda_major="$("${PYTHON_BIN}" -c 'import torch;print((torch.version.cuda or "").split(".")[0])' 2>/dev/null || echo "")"
+    _cu13_home=""
+    for _c in "${TE_CUDA13_HOME:-}" /usr/local/cuda-13.0 /usr/local/cuda-13; do
+        [ -n "$_c" ] && [ -d "$_c" ] && { _cu13_home="$_c"; break; }
+    done
+    _cu12_present=0
+    for _c in /usr/local/cuda-12.9 /usr/local/cuda-12; do
+        [ -d "$_c" ] && { _cu12_present=1; break; }
+    done
+    if [ "${_torch_cuda_major}" -ge 13 ] 2>/dev/null && [ -n "${_cu13_home}" ] && [ "${_cu12_present}" = 1 ]; then
+        # `sudo -n` SCRUBS the environment; `sudo -n -E` preserves it (verified
+        # the sudoers here allows SETENV). We need the full env (SLURM_*,
+        # HF_CHECKPOINT, SAVE_DIR, WANDB_*, the PATH/VENV exports above) to reach
+        # the re-exec'd run.sh, so -E is required, not optional.
+        if sudo -n -E unshare -m true >/dev/null 2>&1; then
+            echo "=== Re-exec under cuda-13 mount namespace (masking system cuda-12 for TE) ==="
+            export POLAR_IN_CUDA13_NS=1 TE_CUDA13_HOME="${_cu13_home}"
+            exec sudo -n -E unshare -m \
+                bash "${SCRIPT_DIR}/cuda13_ns.sh" "$(id -un)" \
+                bash "${BASH_SOURCE[0]}" "$@"
+        else
+            echo "WARNING: torch is cu${_torch_cuda_major} with a system cuda-12 toolkit present, but" >&2
+            echo "  'sudo -n -E unshare -m' is unavailable — TE will likely abort with 'Multiple libcudart'." >&2
+            echo "  Install passwordless sudo (with SETENV) for unshare, or remove one CUDA major from /usr/local." >&2
+        fi
+    fi
+fi
+
 is_path_like() {
     case "$1" in
         /*|./*|../*|~*) return 0 ;;
@@ -257,9 +301,44 @@ fi
 if [ -z "${CUDNN_LIB:-}" ]; then
     CUDNN_LIB="$("${PYTHON_BIN}" -c 'import nvidia.cudnn, os; print(os.path.join(list(nvidia.cudnn.__path__)[0], "lib"))' 2>/dev/null || true)"
 fi
-RUNTIME_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-if [ -n "${CUDNN_LIB}" ] && [ -d "$CUDNN_LIB" ]; then
-    RUNTIME_LD_LIBRARY_PATH="${CUDNN_LIB}:${RUNTIME_LD_LIBRARY_PATH}"
+
+# CUDA library path for the TRAINING Ray job. Transformer Engine's runtime does
+# a by-name scan for libcudart and ABORTS if it finds two majors ("Multiple
+# libcudart libraries found"). torch 2.11 + TE here are CUDA 13, but the
+# cluster's DEFAULT system toolkit at /usr/local/cuda is 12.9 — if its lib64 is
+# on LD_LIBRARY_PATH (it is, via the login env) TE finds libcudart.so.12 next to
+# the cu13 .so.13 and dies at the first attention kernel. Fix: when torch is
+# cu13, set CUDA_HOME to the cu13 toolkit and build LD_LIBRARY_PATH from cu13
+# libs (system cuda-13 toolkit lib64 + cuDNN/NCCL pip wheels), EXCLUDING the
+# 12.9 default. (Verified by strace: clean cu13-only path runs TE fused-attn to
+# exit 0; see arcagi_te_cudart_conflict memory.) Two copies of .so.13 are fine —
+# TE only rejects mixed MAJORS. SGLang engines are separate processes — unaffected.
+TORCH_CUDA_MAJOR="$("${PYTHON_BIN}" -c 'import torch;print((torch.version.cuda or "").split(".")[0])' 2>/dev/null || echo "")"
+TRAIN_CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
+if [ "${TORCH_CUDA_MAJOR}" -ge 13 ] 2>/dev/null; then
+    # Prefer the real side-by-side cu13 toolkit (matches the TE build); fall back
+    # to the pip nvidia/cu13 wheel dir if no system toolkit is present.
+    TRAIN_CUDA_HOME=""
+    for cand in "${TE_CUDA13_HOME:-}" /usr/local/cuda-13.0 /usr/local/cuda-13; do
+        [ -n "$cand" ] && [ -d "$cand" ] && { TRAIN_CUDA_HOME="$cand"; break; }
+    done
+    if [ -z "${TRAIN_CUDA_HOME}" ]; then
+        TRAIN_CUDA_HOME="$("${PYTHON_BIN}" -c 'import os,nvidia.cu13 as c;print(list(c.__path__)[0])' 2>/dev/null || echo "/usr/local/cuda")"
+    fi
+    NCCL_LIB="$("${PYTHON_BIN}" -c 'import nvidia.nccl, os; print(os.path.join(list(nvidia.nccl.__path__)[0], "lib"))' 2>/dev/null || true)"
+    # cu13 libs ONLY — deliberately omit ${LD_LIBRARY_PATH} so the 12.9 default
+    # can't leak a libcudart.so.12 into TE's scan. Cover both toolkit layouts.
+    RUNTIME_LD_LIBRARY_PATH=""
+    for d in "${TRAIN_CUDA_HOME}/targets/x86_64-linux/lib" "${TRAIN_CUDA_HOME}/lib64" "${TRAIN_CUDA_HOME}/lib" "${CUDNN_LIB}" "${NCCL_LIB}"; do
+        [ -n "$d" ] && [ -d "$d" ] && RUNTIME_LD_LIBRARY_PATH="${RUNTIME_LD_LIBRARY_PATH:+${RUNTIME_LD_LIBRARY_PATH}:}${d}"
+    done
+    echo "Training CUDA major=${TORCH_CUDA_MAJOR}: CUDA_HOME=${TRAIN_CUDA_HOME}; cu13-only LD path (12.9 default excluded)."
+else
+    # cu12x torch: original behavior (system toolkit is the right major).
+    RUNTIME_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+    if [ -n "${CUDNN_LIB}" ] && [ -d "$CUDNN_LIB" ]; then
+        RUNTIME_LD_LIBRARY_PATH="${CUDNN_LIB}:${RUNTIME_LD_LIBRARY_PATH}"
+    fi
 fi
 
 # PROJECT_ROOT on PYTHONPATH so the evaluator import path
@@ -271,8 +350,8 @@ RUNTIME_ENV_JSON="{
     \"PATH\": \"${PYTHON_BIN_DIR}:${PATH}\",
     \"VIRTUAL_ENV\": \"${VIRTUAL_ENV:-${PROJECT_ROOT}/.venv}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"CUDA_HOME\": \"${CUDA_HOME:-/usr/local/cuda}\",
-    \"NVTE_CUDA_INCLUDE_DIR\": \"${NVTE_CUDA_INCLUDE_DIR:-${CUDA_HOME:-/usr/local/cuda}/include}\",
+    \"CUDA_HOME\": \"${TRAIN_CUDA_HOME}\",
+    \"NVTE_CUDA_INCLUDE_DIR\": \"${TRAIN_CUDA_HOME}/include\",
     \"WANDB_API_KEY\": \"${WANDB_API_KEY:-}\",
     \"WANDB_DIR\": \"${PROJECT_ROOT}/logs\",
     \"TORCHINDUCTOR_CACHE_DIR\": \"${TORCHINDUCTOR_CACHE_DIR}\",

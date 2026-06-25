@@ -32,19 +32,27 @@ shift 2>/dev/null || true
 case "$CMD" in
 
 setup)
+    echo "==> Removing any existing remote venv..."
+    ssh "$HOST" "cd $REMOTE_DIR && rm -rf .venv"
+
     echo "==> Creating remote venv (login node)..."
     ssh "$HOST" "export PATH=\$HOME/.local/bin:\$PATH && mkdir -p $REMOTE_DIR && cd $REMOTE_DIR && uv venv --python 3.12"
 
-    echo "==> Installing core Polar deps on GPU node (gets CUDA wheels, avoids login OOM)..."
+    # CUDA 13 stack: sglang 0.5.13 (only version supporting Qwen3.6 qwen3_5)
+    # hard-pins torch==2.11.0 + cuda-python>=13, so torch must be cu130. The TE
+    # training side is then built for cu13 against a system cuda-13 toolkit by
+    # launch_e2e ensure_training_stack. (Do NOT "fix" this to cu12 — sglang 0.5.13
+    # cannot resolve on cu12.) Runs on a GPU node to avoid login-node OOM.
+    echo "==> Installing Polar + SGLang on GPU node (torch cu130 / CUDA 13)..."
     ssh "$HOST" "cd $REMOTE_DIR && srun --partition=$PARTITION --gpus=1 --cpus-per-gpu=12 --time=01:00:00 bash -c '\
         export PATH=\$HOME/.local/bin:\$PATH && \
         cd $REMOTE_DIR && \
         source .venv/bin/activate && \
-        uv pip install -e . && \
-        uv pip install vllm --torch-backend=auto'"
+        uv pip install -e . --torch-backend=cu130 && \
+        uv pip install sglang==0.5.13 --prerelease=allow'"
 
     echo "==> Verifying install..."
-    ssh "$HOST" "cd $REMOTE_DIR && source .venv/bin/activate && python -c 'import polar; import vllm; print(\"polar=\" + polar.__file__); print(\"vllm OK\")'"
+    ssh "$HOST" "cd $REMOTE_DIR && source .venv/bin/activate && python -c 'import polar, sglang, torch; print(\"polar=\" + polar.__file__); print(\"sglang\", sglang.__version__); print(\"torch\", torch.__version__, torch.version.cuda)'"
     echo "==> Done. Run './run_remote.sh build-image' next, then './run_remote.sh submit smoke'."
     ;;
 
