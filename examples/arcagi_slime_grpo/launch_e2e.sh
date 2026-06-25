@@ -320,6 +320,20 @@ if [ "${INSTALL_EDITABLE}" = "1" ]; then
     else
         echo "numpy is already 1.x; skipping."
     fi
+    # scipy must match numpy<2. The deps drag in scipy 1.18 whose metadata
+    # requires numpy>=2.0 and whose scipy.sparse uses np.long (numpy-2-only) —
+    # so on numpy 1.26 ANY import chain that reaches scipy (sglang ->
+    # transformers loss utils -> scipy.optimize) dies with
+    # "module 'numpy' has no attribute 'long'". scipy 1.11.4 is the last line
+    # with broad numpy<2 support. --no-deps so it can't pull numpy 2.x back.
+    sp_ver="$("${PYTHON_BIN}" -c 'import scipy; print(scipy.__version__)' 2>/dev/null || echo "")"
+    sp_major_minor="${sp_ver%.*}"
+    if [ -z "$sp_ver" ] || { [ -n "$sp_ver" ] && "${PYTHON_BIN}" -c "import sys; v=tuple(int(x) for x in '${sp_ver}'.split('.')[:2]); sys.exit(0 if v>(1,11) else 1)" 2>/dev/null; }; then
+        echo "Pinning scipy==1.11.4 for numpy<2 (had ${sp_ver:-none})..."
+        uv pip install --python "${PYTHON_BIN}" --no-deps "scipy==1.11.4"
+    else
+        echo "scipy ${sp_ver} already numpy<2 compatible; skipping."
+    fi
 fi
 
 # ── 3. Training stack (TE + FLA) ────────────────────────────────────
