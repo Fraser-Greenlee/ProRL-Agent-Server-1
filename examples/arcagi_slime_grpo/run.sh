@@ -214,18 +214,20 @@ trap cleanup EXIT
 # The gateway process runs the reward evaluator, whose import path is
 # `examples.arcagi_slime_grpo.arc_compress_evaluator:ArcCompressEvaluator`.
 # examples/ has no __init__.py (namespace package), so PROJECT_ROOT must be on
-# PYTHONPATH for that import to resolve — otherwise every session ends ERROR
-# "evaluator failed: No module named 'examples'", yielding zero reward / zero
-# trainable tokens and dropped GRPO groups (job 19612). The Ray train job gets
-# this via RUNTIME_ENV_JSON, but serve_rollout/serve_gateway inherit only this
-# shell's env, so export it here too.
-export PYTHONPATH="${PROJECT_ROOT}:${PROJECT_ROOT}/src:${PYTHONPATH:-}"
+# PYTHONPATH for that in-process class import (registry _import_class) to
+# resolve — otherwise every session ends ERROR "evaluator failed: No module
+# named 'examples'", yielding zero reward / zero trainable tokens and dropped
+# GRPO groups (jobs 19612/19616). NOTE: a plain `export PYTHONPATH` is NOT
+# enough here — run.sh re-execs through `runuser` (the cuda-13 namespace wrap),
+# and runuser/PAM SANITIZES PYTHONPATH across the user boundary, so it arrives
+# empty. Pass it EXPLICITLY to each service via `env` so it can't be stripped.
+POLAR_PYTHONPATH="${PROJECT_ROOT}:${PROJECT_ROOT}/src:${PYTHONPATH:-}"
 echo "=== Starting Polar rollout server (:8080) ==="
-polar serve_rollout -c "${TOPOLOGY_PATH}" &
+env PYTHONPATH="${POLAR_PYTHONPATH}" polar serve_rollout -c "${TOPOLOGY_PATH}" &
 PIDS+=($!)
 sleep 2
 echo "=== Starting Polar gateway (:8100) ==="
-polar serve_gateway -c "${TOPOLOGY_PATH}" --node-id localhost-node-01 &
+env PYTHONPATH="${POLAR_PYTHONPATH}" polar serve_gateway -c "${TOPOLOGY_PATH}" --node-id localhost-node-01 &
 PIDS+=($!)
 sleep 2
 curl -sf http://127.0.0.1:8080/health || { echo "Polar rollout server not healthy"; exit 1; }
