@@ -56,7 +56,9 @@ polar_task_template:
     harness: "openhands_sdk"
     model_name: "openai/Fraser/Qwen3.6-27B-ARC-Hy"
     settings:
-      max_iterations: 30
+      # 15: observed rollouts only need a handful of turns (22 turns reached
+      # ~30K of the 64K window). See DEBUG_STATE.md jobs 19536/19537.
+      max_iterations: 15
   builder:
     strategy: "prefix_merging"
   evaluator:

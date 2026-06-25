@@ -72,6 +72,11 @@ class OpenHandsSdkHarness(BaseHarness):
         return [
             ExecInput(
                 command=(
+                    # pipefail: without it the pipeline's exit status is tee's
+                    # (always 0), so a crashing runner is recorded as a
+                    # "completed" step and the failure surfaces only as the
+                    # downstream "no completions" — hiding the real traceback.
+                    'set -o pipefail; '
                     'export LLM_API_KEY="$OPENAI_API_KEY" LLM_BASE_URL="$OPENAI_BASE_URL" && '
                     'PYTHON_BIN="$HOME/.venv/bin/python"; '
                     '[ -x "$PYTHON_BIN" ] || PYTHON_BIN="/opt/openhands-sdk-venv/bin/python"; '
@@ -175,7 +180,13 @@ def main():
     except ImportError:
         from openhands.sdk.llm import LLM
 
-    instruction = os.environ.get("AGENT_INSTRUCTION", "")
+    # Pop (not get): OpenHands' TerminalTool copies the process environment into
+    # its tmux session via `tmux set-environment`, which has a per-value command
+    # length limit. A large instruction (e.g. the arcagi prompt embeds the full
+    # library.hy + grids, hundreds of KB) overflows it with "command too long"
+    # and kills tool init before the first LLM call. The instruction reaches the
+    # model via send_message; the agent's shell never needs it in its env.
+    instruction = os.environ.pop("AGENT_INSTRUCTION", "")
     model = os.environ.get("LLM_MODEL", "openai/gpt-5.4")
     api_key = os.environ.get("LLM_API_KEY", "")
     base_url = os.environ.get("LLM_BASE_URL", "")

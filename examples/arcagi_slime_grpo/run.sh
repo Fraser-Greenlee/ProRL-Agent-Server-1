@@ -200,8 +200,27 @@ fi
 # Conservative GRPO knobs for 27B (smaller groups + recompute to fit).
 ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-4}"
 N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-8}"
-MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-12000}"
-SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-40000}"
+# MAX_TOKENS_PER_GPU does double duty: it's Megatron's per-GPU dynamic-batch
+# budget AND (via slime_bridge _resolve_max_tokens = mtpg * cp_size) the cap
+# above which a trace is DROPPED before training. At 12000 it dropped EVERY
+# real trace — the ARC instruction prefix alone is ~25K tokens, sessions run
+# 32-47K — yielding all-placeholder groups and "zero trainable tokens / no
+# progress" (job 19539). Must be >= the longest admissible trace. With
+# rollout-max-prompt-len 49152 + response 16000 the ceiling is ~65K, so match
+# the context window. Memory: at TP=8 each rank had ~64 GB free post-weights;
+# with full recompute + CPU optimizer offload one ~65K micro-batch fits (~50 GB
+# est). If a real step OOMs, fall back to context-parallel-size 2 (halves
+# per-GPU sequence memory) rather than re-lowering this (re-lowering silently
+# drops long traces again).
+MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-65536}"
+# 65536: the KV pool is sized by --sglang-mem-fraction-static (≈1.69M tokens at
+# 0.8, TP=4), NOT by context length, so raising this from 40000 costs no extra
+# memory — it only lifts the per-sequence cap. Measured agent rollouts grow
+# ~600 tok/turn off a ~25K instruction floor; a single large tool/eval output
+# once spiked a turn by ~9.6K and overran 40000. 64K gives >1.5x headroom over
+# the worst observed sequence while staying far under max_position_embeddings
+# (262144). See DEBUG_STATE.md (jobs 19536/19537).
+SGLANG_CONTEXT_LENGTH="${SGLANG_CONTEXT_LENGTH:-65536}"
 
 ray stop --force 2>/dev/null || true
 sleep 1
@@ -317,7 +336,7 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --rollout-batch-size "$ROLLOUT_BATCH_SIZE" \
     --n-samples-per-prompt "$N_SAMPLES_PER_PROMPT" \
     --rollout-max-response-len 16000 \
-    --rollout-max-prompt-len 32000 \
+    --rollout-max-prompt-len 49152 \
     --dynamic-history \
     --num-steps-per-rollout 1 \
     --tensor-model-parallel-size "$TENSOR_MODEL_PARALLEL_SIZE" \

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 from contextlib import suppress
 from pathlib import Path
@@ -960,6 +961,16 @@ class GatewayNodeManager:
         session_dir: Path,
         session_id: str,
     ) -> None:
+        # Debug escape hatch: keep per-session dirs (which hold the agent's own
+        # stdout at logs/agent/) so a failed rollout can be inspected. Default
+        # is to delete, as before.
+        if os.environ.get("POLAR_KEEP_SESSION_DIRS"):
+            logger.info(
+                "POLAR_KEEP_SESSION_DIRS set; preserving session dir %s for %s",
+                session_dir,
+                session_id,
+            )
+            return
         try:
             await asyncio.to_thread(shutil.rmtree, session_dir)
         except FileNotFoundError:

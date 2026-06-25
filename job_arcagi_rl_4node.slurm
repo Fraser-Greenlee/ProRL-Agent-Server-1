@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=ok_to_cancel_arcagi-rl-4n
+#SBATCH --job-name=okay_to_cancel_arcagi-rl-4n
 #SBATCH --partition=dev
 #SBATCH --nodes=4
 #SBATCH --gpus-per-node=8
