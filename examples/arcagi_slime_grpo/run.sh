@@ -296,7 +296,14 @@ if [ "${NNODES}" -ge 2 ]; then
     WORKER_NODES="$(scontrol show hostnames "${SLURM_JOB_NODELIST}" | tail -n +2)"
     for wn in ${WORKER_NODES}; do
         echo "  starting Ray worker on ${wn}"
+        # srun defaults to --export=ALL, so this (already-namespaced) run.sh
+        # would leak POLAR_IN_CUDA13_NS=1 to the worker, making ray_worker.sh
+        # think it's already masked and SKIP its own namespace — leaving the
+        # worker's cuda-12 visible to any train actor Ray places there (the
+        # job-19635 crash). `env -u` clears the sentinel so each worker applies
+        # its OWN mask on its OWN node.
         srun --nodes=1 --ntasks=1 -w "${wn}" \
+            env -u POLAR_IN_CUDA13_NS \
             bash "${SCRIPT_DIR}/ray_worker.sh" "${MASTER_ADDR}" "${GPUS_PER_NODE}" \
             >> "${PROJECT_ROOT}/logs/ray_worker_${wn}.log" 2>&1 &
     done
