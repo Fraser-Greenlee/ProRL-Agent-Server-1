@@ -46,5 +46,7 @@ echo "[cuda13_ns] cuda -> $(readlink -f /usr/local/cuda); libcudart.so.12 leaks=
 # WANDB_*, SLURM_*, the run.sh exports, etc.) — without it runuser resets to a
 # fresh login env and the re-exec'd workload loses its venv/cluster context.
 # HOME can get reset to root's by sudo; pin it back to the user's.
+# Absolute /usr/bin/env — bare `env` can resolve to a non-executable
+# ~/.local/bin/env on PATH (execve -> exit 13).
 exec runuser -u "${RUN_USER}" --preserve-environment -- \
-    env "HOME=$(getent passwd "${RUN_USER}" | cut -d: -f6)" "$@"
+    /usr/bin/env "HOME=$(getent passwd "${RUN_USER}" | cut -d: -f6)" "$@"

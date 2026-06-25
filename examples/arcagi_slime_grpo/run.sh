@@ -302,8 +302,11 @@ if [ "${NNODES}" -ge 2 ]; then
         # worker's cuda-12 visible to any train actor Ray places there (the
         # job-19635 crash). `env -u` clears the sentinel so each worker applies
         # its OWN mask on its OWN node.
+        # Absolute /usr/bin/env — a non-exec ~/.local/bin/env on PATH otherwise
+        # makes srun's execve fail (exit 13), so no worker joins and the
+        # placement group hangs waiting for GPUs (job 19639).
         srun --nodes=1 --ntasks=1 -w "${wn}" \
-            env -u POLAR_IN_CUDA13_NS \
+            /usr/bin/env -u POLAR_IN_CUDA13_NS \
             bash "${SCRIPT_DIR}/ray_worker.sh" "${MASTER_ADDR}" "${GPUS_PER_NODE}" \
             >> "${PROJECT_ROOT}/logs/ray_worker_${wn}.log" 2>&1 &
     done
