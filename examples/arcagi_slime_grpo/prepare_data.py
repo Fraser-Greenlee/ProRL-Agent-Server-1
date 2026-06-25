@@ -155,7 +155,7 @@ def _synth_prompt(task_id, pairs, baseline_body, library_body, np) -> str:
                       f"Output:\n```\n{_render_grid(p['output'])}\n```\n")
     grids = "\n".join(blocks).rstrip()
     return _SYNTH_TEMPLATE.format(
-        task_id=task_id, grids=grids,
+        task_id=task_id, grids=grids, n_pairs=len(pairs),
         baseline_body=baseline_body, library_body=library_body,
     )
 
@@ -181,6 +181,23 @@ truth.
 - Write `inputs()[i]` as a CONSTRUCTIVE expression and `to-output` as a
   STRUCTURAL rewrite, using primitives from `library.hy` below.
 
+# Verify your work (do this — don't guess)
+
+After every edit, run this exact command from the terminal to check correctness
+and see your compression score:
+
+```
+python /opt/auto-compress/sft/rl_tasks/score_synthetic.py \\
+  --root /opt/auto-compress/sft/rl_tasks --verify {task_id}
+```
+
+It prints, per pair, whether the output is correct and — when it's wrong — a
+grid DELTA marking each off cell as `[got!=want]`, so you can see exactly what
+to fix. It also prints `size`, the `baseline`, and the `reward`. Iterate edit →
+verify until it reports `{n_pairs}/{n_pairs} correct`, then keep shrinking the
+program (fewer objects) while it stays fully correct. Do NOT try to import or
+`hy.eval` the file yourself — use this command.
+
 # Task {task_id}
 
 ## Grids
@@ -199,7 +216,8 @@ truth.
 {library_body}
 ```
 
-Produce a smaller `.hy` body that still passes. Verify before finishing.
+Produce a smaller `.hy` body that still passes. Verify with the command above
+before finishing.
 """
 
 
