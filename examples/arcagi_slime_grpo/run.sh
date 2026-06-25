@@ -383,6 +383,18 @@ RUNTIME_ENV_JSON="{
   }
 }"
 
+# Env vars for the MegatronTrainRayActor specifically. slime builds the train
+# actor's env from a fixed dict + args.train_env_vars (actor_group.py) — it does
+# NOT inherit the ray-job RUNTIME_ENV_JSON, so actor-only vars must go here.
+# NVTE_TORCH_COMPILE=0: Transformer Engine wraps its fused ops in torch.compile
+# by default (jit.py, NVTE_TORCH_COMPILE defaults to 1). On Qwen3.6's hybrid
+# attention at TP=8 that dynamo trace hit a fake-tensor view error
+# (view(...,6,256)->768; 6*256=1536) and crashed the first training step (job
+# 19640). Disabling TE's compile runs the ops eagerly — we're not throughput-
+# bound, and it either avoids the dynamo mis-trace or surfaces a clearer eager
+# error. See arcagi_te_cudart_conflict memory (UPDATE 7).
+TRAIN_ENV_VARS_JSON="${TRAIN_ENV_VARS_JSON:-{\"NVTE_TORCH_COMPILE\": \"0\"}}"
+
 # W&B: only enable if a key is present (sourced from .env.local).  Without one,
 # train offline-disabled rather than hard-failing on login.
 WANDB_ARGS=()
@@ -476,6 +488,7 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --attention-softmax-in-fp32 \
     --attention-backend auto \
     --no-gradient-accumulation-fusion \
+    --train-env-vars "${TRAIN_ENV_VARS_JSON}" \
     --sglang-mem-fraction-static 0.8 \
     --sglang-context-length "$SGLANG_CONTEXT_LENGTH" \
     --sglang-tool-call-parser qwen3_coder \
