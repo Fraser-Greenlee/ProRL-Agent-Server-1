@@ -211,6 +211,15 @@ cleanup() {
 trap cleanup EXIT
 
 # ── Step 1: Polar services (host, CPU only) ─────────────────────────
+# The gateway process runs the reward evaluator, whose import path is
+# `examples.arcagi_slime_grpo.arc_compress_evaluator:ArcCompressEvaluator`.
+# examples/ has no __init__.py (namespace package), so PROJECT_ROOT must be on
+# PYTHONPATH for that import to resolve — otherwise every session ends ERROR
+# "evaluator failed: No module named 'examples'", yielding zero reward / zero
+# trainable tokens and dropped GRPO groups (job 19612). The Ray train job gets
+# this via RUNTIME_ENV_JSON, but serve_rollout/serve_gateway inherit only this
+# shell's env, so export it here too.
+export PYTHONPATH="${PROJECT_ROOT}:${PROJECT_ROOT}/src:${PYTHONPATH:-}"
 echo "=== Starting Polar rollout server (:8080) ==="
 polar serve_rollout -c "${TOPOLOGY_PATH}" &
 PIDS+=($!)
