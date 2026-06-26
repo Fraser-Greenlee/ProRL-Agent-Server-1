@@ -298,6 +298,56 @@ else
     echo "Megatron patch applied."
 fi
 
+# Gated-attention TP fix: Megatron slices `query` to the rank's responsible
+# q_heads when num_query_groups < world_size (TP) but FORGETS to slice `gate`
+# the same way, so gate keeps num_attention_heads_per_partition heads while the
+# attention output has (np/tp) — `gate.view(*core_attn_out.shape)` then crashes
+# in _apply_output_gate at the first train step (Qwen3.6 --attention-output-gate,
+# nqg=4, TP=8: view (t,1,6,256)->768; 6*256=1536 != 768). slime's megatron.patch
+# doesn't cover this. Apply our one-block fix idempotently after it.
+GATE_PATCH_SENTINEL="${MEGATRON_DIR}/.gate_tp_slice_patch_applied"
+GATE_ATTN_FILE="${MEGATRON_DIR}/megatron/core/transformer/attention.py"
+if [ -f "${GATE_PATCH_SENTINEL}" ]; then
+    echo "Megatron gated-attention TP slice patch already applied."
+elif [ -f "${GATE_ATTN_FILE}" ]; then
+    echo "Applying Megatron gated-attention TP slice patch..."
+    "${PYTHON_BIN}" - "${GATE_ATTN_FILE}" <<'GATEPATCH'
+import sys
+p = sys.argv[1]; s = open(p).read()
+if "Gate: slice per-rank q_heads to match query (step 4)" in s:
+    print("  already patched in-file"); sys.exit(0)
+old = (
+    "        if output_gate:\n"
+    "            # Gate [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]\n"
+    "            gate = gate.reshape(*gate.shape[:2], -1, self.hidden_size_per_attention_head)\n"
+    "            return query, key, value, gate\n"
+)
+new = (
+    "        if output_gate:\n"
+    "            # Gate [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]\n"
+    "            gate = gate.reshape(*gate.shape[:2], -1, self.hidden_size_per_attention_head)\n"
+    "            if self.config.num_query_groups < self.world_size:\n"
+    "                # Gate: slice per-rank q_heads to match query (step 4).\n"
+    "                idx = get_tensor_model_parallel_rank() % (\n"
+    "                    self.world_size // self.config.num_query_groups\n"
+    "                )\n"
+    "                size = self.num_attention_heads_per_partition // (\n"
+    "                    self.world_size // self.config.num_query_groups\n"
+    "                )\n"
+    "                gate = gate[:, :, idx * size : (idx + 1) * size, :]\n"
+    "            return query, key, value, gate\n"
+)
+if old not in s:
+    print("  ERROR: gate patch target not found (Megatron attention.py changed)", file=sys.stderr)
+    sys.exit(2)
+open(p, "w").write(s.replace(old, new, 1))
+print("  patched gate per-rank slice")
+GATEPATCH
+    touch "${GATE_PATCH_SENTINEL}"
+    [ "${INSTALL_EDITABLE:-1}" = "1" ] && uv pip install --python "${PYTHON_BIN}" -e "${MEGATRON_DIR}" >/dev/null 2>&1 || true
+    echo "Gated-attention TP slice patch applied."
+fi
+
 # ── 2. Editable installs ────────────────────────────────────────────
 if [ "${INSTALL_EDITABLE}" = "1" ]; then
     uv pip install --python "${PYTHON_BIN}" -e "."
