@@ -238,18 +238,26 @@ curl -sf http://127.0.0.1:8080/health || { echo "Polar rollout server not health
 NNODES="${SLURM_NNODES:-1}"
 GPUS_PER_NODE="${GPUS_PER_NODE:-8}"
 if [ "${NNODES}" -ge 2 ]; then
-    # Dedicate node0 to training (TP=8); ALL other nodes' GPUs serve rollouts.
-    # With N nodes that's (N-1)*GPUS_PER_NODE serving GPUs, one TP=8 SGLang
-    # engine per worker node -> more rollout throughput for larger GRPO groups.
+    # Training uses ACTOR_NUM_NODES nodes (TP=8 per node); the REMAINING nodes
+    # serve rollouts (one TP=8 SGLang engine each). ACTOR_NUM_NODES>1 lets the
+    # train actor span nodes for context-parallel (CONTEXT_PARALLEL_SIZE>1),
+    # which shards the SEQUENCE across GPUs and halves per-GPU activation memory
+    # — the fix for the train-step OOM at 64K tokens (TP=8 alone uses all 8 GPUs
+    # of one node, so CP>1 needs >1 train node). Must satisfy
+    # TP*CP*PP == ACTOR_NUM_NODES*GPUS_PER_NODE.
+    ACTOR_NUM_NODES="${ACTOR_NUM_NODES:-1}"
     ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-8}"
-    ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-$(( (NNODES - 1) * GPUS_PER_NODE ))}"
+    ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-$(( (NNODES - ACTOR_NUM_NODES) * GPUS_PER_NODE ))}"
     ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-8}"
     TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-8}"
+    CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
 else
+    ACTOR_NUM_NODES="${ACTOR_NUM_NODES:-1}"
     ACTOR_NUM_GPUS_PER_NODE="${ACTOR_NUM_GPUS_PER_NODE:-4}"
     ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-4}"
     ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-4}"
     TENSOR_MODEL_PARALLEL_SIZE="${TENSOR_MODEL_PARALLEL_SIZE:-4}"
+    CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-1}"
 fi
 
 # Conservative GRPO knobs for 27B (smaller groups + recompute to fit).
@@ -393,7 +401,15 @@ RUNTIME_ENV_JSON="{
 # 19640). Disabling TE's compile runs the ops eagerly — we're not throughput-
 # bound, and it either avoids the dynamo mis-trace or surfaces a clearer eager
 # error. See arcagi_te_cudart_conflict memory (UPDATE 7).
-TRAIN_ENV_VARS_JSON="${TRAIN_ENV_VARS_JSON:-{\"NVTE_TORCH_COMPILE\": \"0\"}}"
+# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True: job 19644 reached accepted=3/4
+# (gate fix worked, past attention) then OOM'd in the train step — failing alloc
+# was only 32 MiB against 68 GB already allocated, i.e. FRAGMENTATION not a hard
+# capacity wall. The alloc-conf in RUNTIME_ENV_JSON does NOT reach the actor
+# (same inheritance gap), and it wrongly combined max_split_size_mb with
+# expandable_segments (mutually exclusive). Set the correct value HERE so the
+# actor gets it; expandable_segments defragments and is what the OOM msg itself
+# recommends. If it still OOMs, escalate to --context-parallel-size 2.
+TRAIN_ENV_VARS_JSON="${TRAIN_ENV_VARS_JSON:-{\"NVTE_TORCH_COMPILE\": \"0\", \"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}}"
 
 # W&B: only enable if a key is present (sourced from .env.local).  Without one,
 # train offline-disabled rather than hard-failing on login.
@@ -422,7 +438,7 @@ echo "=== Launching train_async.py (Qwen3.6-27B, TP=${TENSOR_MODEL_PARALLEL_SIZE
 ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --runtime-env-json="${RUNTIME_ENV_JSON}" \
     -- "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
-    --actor-num-nodes 1 \
+    --actor-num-nodes "$ACTOR_NUM_NODES" \
     --actor-num-gpus-per-node "$ACTOR_NUM_GPUS_PER_NODE" \
     --rollout-num-gpus "$ROLLOUT_NUM_GPUS" \
     --rollout-num-gpus-per-engine "$ROLLOUT_NUM_GPUS_PER_ENGINE" \
@@ -454,7 +470,7 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --tensor-model-parallel-size "$TENSOR_MODEL_PARALLEL_SIZE" \
     --sequence-parallel \
     --pipeline-model-parallel-size 1 \
-    --context-parallel-size 1 \
+    --context-parallel-size "$CONTEXT_PARALLEL_SIZE" \
     --expert-model-parallel-size 1 \
     --expert-tensor-parallel-size 1 \
     --recompute-granularity full \
