@@ -181,7 +181,15 @@ TOPOLOGY_TEMPLATE="${TOPOLOGY_TEMPLATE:-${SCRIPT_DIR}/topology.yaml}"
 POLAR_CONFIG_TEMPLATE="${POLAR_CONFIG_TEMPLATE:-${SCRIPT_DIR}/polar_config.yaml}"
 TOPOLOGY_PATH="${TOPOLOGY_PATH:-${RUN_DIR}/topology.yaml}"
 CUSTOM_CONFIG_PATH="${CUSTOM_CONFIG_PATH:-${RUN_DIR}/polar_config.yaml}"
-COMPILER_CACHE_ROOT="${COMPILER_CACHE_ROOT:-${RUN_DIR}/compiler_cache}"
+# Compiler caches must be NODE-LOCAL, not on shared NFS. With multi-rank
+# training (and especially CP>1 spanning nodes) many ranks JIT-compile the same
+# Triton kernels (e.g. the GDN causal_conv1d_fwd_kernel) into the SAME cache
+# dir; on NFS that races — one rank reads a .ttgir another hasn't finished
+# writing -> FileNotFoundError mid-forward (crashed job 19645 at the first
+# step). A per-node /tmp keeps each node's cache separate (no cross-node NFS
+# race) and Triton's own per-process locking handles intra-node concurrency;
+# it's also far faster than NFS. Keyed by job id so concurrent jobs don't mix.
+COMPILER_CACHE_ROOT="${COMPILER_CACHE_ROOT:-/tmp/polar_compiler_cache/${SLURM_JOB_ID:-local}}"
 TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-${COMPILER_CACHE_ROOT}/torchinductor}"
 TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${COMPILER_CACHE_ROOT}/triton}"
 mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
@@ -409,7 +417,12 @@ RUNTIME_ENV_JSON="{
 # expandable_segments (mutually exclusive). Set the correct value HERE so the
 # actor gets it; expandable_segments defragments and is what the OOM msg itself
 # recommends. If it still OOMs, escalate to --context-parallel-size 2.
-TRAIN_ENV_VARS_JSON="${TRAIN_ENV_VARS_JSON:-{\"NVTE_TORCH_COMPILE\": \"0\", \"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"}}"
+# TORCHINDUCTOR_FORCE_DISABLE_CACHES=1: slime's own QA doc prescribes this for
+# the compiler-cache read/write FileNotFoundError — many train ranks JIT the
+# same kernels (the GDN causal_conv1d_fwd_kernel) and race on the cache, crashing
+# the first step (job 19645, at accepted=2/4, past the OOM). No cache = no race.
+# (We also moved the cache off NFS to node-local /tmp above as defense-in-depth.)
+TRAIN_ENV_VARS_JSON="${TRAIN_ENV_VARS_JSON:-{\"NVTE_TORCH_COMPILE\": \"0\", \"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\", \"TORCHINDUCTOR_FORCE_DISABLE_CACHES\": \"1\"}}"
 
 # W&B: only enable if a key is present (sourced from .env.local).  Without one,
 # train offline-disabled rather than hard-failing on login.
