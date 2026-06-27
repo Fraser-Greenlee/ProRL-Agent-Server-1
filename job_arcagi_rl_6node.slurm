@@ -51,6 +51,22 @@ export CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-4}"
 export MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-16384}"
 export N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
 
+# ── RL tuning (run 20064 -> this) ───────────────────────────────────────
+# Across ~22 steps (19937+20064) the reward stayed FLAT: reward_mean osc.
+# -1.0..-0.75, resolved 0..23%, no trend. Root cause was the tiny per-step
+# batch: rollout-batch-size=4 means each step sees only 4 of 1015 tasks, so an
+# all-hard draw zeroes the GRPO advantage (pg_loss=0 on ~1/3 of steps). Two
+# levers, biggest first:
+#  - rollout-batch-size 4 -> 16: 16 tasks/step (×16 samples = 256 rollouts/step)
+#    → far fewer zero-advantage steps, much lower step-to-step variance.
+#  - lr 1e-6 -> 3e-6: the updates that DID have signal were tiny; 3x larger.
+# Cost: 256 rollouts/step (vs 64) ~4x more generation per step, but rollouts
+# overlap training (max_async_level=2) and engines were never saturated, so the
+# ~24-min optimizer step still dominates wall-time. Watch GPU mem on the train
+# actor (4x more traces/step through dynamic batching; mtpg=16384 has headroom).
+export ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-16}"
+export LR="${LR:-3e-6}"
+
 # Checkpoint cadence. Job 19937 died at its FIRST save (default interval 10 =
 # step 10, ~6h in) → 0 usable checkpoints. Three independent fixes now:
 #  1) run.sh polls REAL ray job status (not the submit client), so a dropped

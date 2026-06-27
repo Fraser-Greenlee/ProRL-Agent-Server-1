@@ -530,7 +530,7 @@ ray job submit --address="${RAY_JOB_ADDR}" \
     --eps-clip 0.2 \
     --eps-clip-high 0.28 \
     --optimizer adam \
-    --lr 1e-6 \
+    --lr "${LR:-1e-6}" \
     --lr-decay-style constant \
     --weight-decay 0.1 \
     --adam-beta1 0.9 \
