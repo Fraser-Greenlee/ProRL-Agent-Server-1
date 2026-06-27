@@ -51,6 +51,17 @@ export CONTEXT_PARALLEL_SIZE="${CONTEXT_PARALLEL_SIZE:-4}"
 export MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-16384}"
 export N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-16}"
 
+# Checkpoint cadence. Job 19937 died at its FIRST save (default interval 10 =
+# step 10, ~6h in) → 0 usable checkpoints. Three independent fixes now:
+#  1) run.sh polls REAL ray job status (not the submit client), so a dropped
+#     log-stream can't trigger the EXIT-trap `ray stop` and SIGKILL a save.
+#  2) run.sh defaults to --no-save-optim (SAVE_OPTIM=1 to override): the save
+#     drops from ~786GB to ~model-only (~50GB) and writes in <1 min over NFS —
+#     we don't resume this run's optimizer (load is the SFT base), so it's safe.
+#  3) interval 5 lands a recoverable checkpoint ~3h in and caps loss-on-death at
+#     ~5 steps. With small saves the disk/wall-time cost is negligible.
+export SAVE_INTERVAL="${SAVE_INTERVAL:-5}"
+
 # Synthetic-task wiring.
 export DATA_SOURCE=rl_tasks
 export PROMPT_DATA="${PROMPT_DATA:-$PWD/examples/arcagi_slime_grpo/rl_tasks_train.jsonl}"

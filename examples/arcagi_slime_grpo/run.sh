@@ -448,7 +448,33 @@ else
 fi
 
 echo "=== Launching train_async.py (Qwen3.6-27B, TP=${TENSOR_MODEL_PARALLEL_SIZE}) ==="
-ray job submit --address="http://${RAY_HEAD_IP}:8265" \
+# Submit DETACHED (--no-wait) and reconcile against the real job status below.
+# Why not a blocking `ray job submit`: its blocking mode tails the job's logs,
+# and that client connection can drop (e.g. head-node RAM pressure + a heavy
+# multi-hundred-GB NFS checkpoint write) while the job is still RUNNING. If the
+# script exited on that spurious client return, `trap cleanup EXIT` would
+# `ray stop --force` and SIGKILL the in-flight save — exactly what killed the
+# step-10 save in job 19937 (a ~786GB optimizer-state checkpoint was cut off
+# mid-write, leaving an unusable iter_0000009). We instead poll `ray job status`
+# (the source of truth) and only fall through to teardown on a terminal state.
+RAY_JOB_ADDR="http://${RAY_HEAD_IP}:8265"
+TRAIN_SUBMISSION_ID="${RUN_ID}"
+
+# Checkpoint size control. The full save is ~786GB because the offloaded fp32
+# distributed-optimizer Adam state (--optimizer-cpu-offload --offload-fraction
+# 1.0 --use-precision-aware-optimizer) dominates it, and it takes >11 min over
+# NFS. We do NOT resume the optimizer here (--load/--ref-load both point at the
+# SFT base, not at --save), so the saved optimizer is dead weight. --no-save-optim
+# drops it → save shrinks to ~model-only (~50GB), writes in <1 min, and the 4.1TB-
+# free NFS volume no longer fills after a few interval saves. Set SAVE_OPTIM=1 to
+# keep optimizer state (only needed if you later want to resume THIS run's Adam).
+SAVE_ARGS=()
+if [ "${SAVE_OPTIM:-0}" != "1" ]; then
+    SAVE_ARGS+=(--no-save-optim)
+fi
+
+ray job submit --address="${RAY_JOB_ADDR}" \
+    --no-wait --submission-id "${TRAIN_SUBMISSION_ID}" \
     --runtime-env-json="${RUNTIME_ENV_JSON}" \
     -- "${PYTHON_BIN}" "${SLIME_DIR}/train_async.py" \
     --actor-num-nodes "$ACTOR_NUM_NODES" \
@@ -461,6 +487,7 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --load "$LOAD_DIR" \
     --save "$SAVE_DIR" \
     --save-interval "${SAVE_INTERVAL:-10}" \
+    ${SAVE_ARGS[@]+"${SAVE_ARGS[@]}"} \
     --update-weights-interval 1 \
     --rollout-function-path slime_bridge.rollout.generate_rollout_polar_async \
     --custom-rm-path slime_bridge.reward.reward_func \
@@ -525,3 +552,60 @@ ray job submit --address="http://${RAY_HEAD_IP}:8265" \
     --router-policy "${SGLANG_ROUTER_POLICY:-round_robin}" \
     ${WANDB_ARGS[@]+"${WANDB_ARGS[@]}"} \
     --sglang-router-port "$SGLANG_ROUTER_PORT"
+
+# ── Wait on the REAL job status (not the submit client) ─────────────────
+# Stream logs best-effort in the background so we still see training output,
+# but the run's lifetime is governed solely by `ray job status`. A dropped log
+# tail (head-node pressure during a big checkpoint write) restarts the tail
+# instead of ending the script — so the EXIT-trap `ray stop` can no longer
+# kill an in-flight save. We only break out on a TERMINAL status.
+echo "=== Submitted ${TRAIN_SUBMISSION_ID}; following logs + polling status ==="
+tail_logs() {
+    # Best-effort, auto-restarting log follow. Never lets a tail failure end
+    # the run (|| true); the status loop is the real watchdog.
+    while true; do
+        ray job logs --address="${RAY_JOB_ADDR}" --follow "${TRAIN_SUBMISSION_ID}" 2>/dev/null || true
+        # If the job is terminal, stop re-following; else the stream dropped
+        # while still RUNNING — reconnect after a short pause.
+        local s
+        s="$(ray job status --address="${RAY_JOB_ADDR}" "${TRAIN_SUBMISSION_ID}" 2>/dev/null | grep -oE 'SUCCEEDED|FAILED|STOPPED' | head -1 || true)"
+        [ -n "${s}" ] && break
+        sleep 5
+    done
+}
+tail_logs &
+LOG_TAIL_PID=$!
+PIDS+=("${LOG_TAIL_PID}")
+
+# Poll the authoritative job status until terminal. RUNNING/PENDING never exit
+# the loop, no matter what happens to the dashboard client or log stream.
+TRAIN_FINAL_STATUS="UNKNOWN"
+status_poll_fails=0
+while true; do
+    JOB_STATUS="$(ray job status --address="${RAY_JOB_ADDR}" "${TRAIN_SUBMISSION_ID}" 2>/dev/null \
+        | grep -oE 'PENDING|RUNNING|SUCCEEDED|FAILED|STOPPED' | head -1 || true)"
+    if [ -z "${JOB_STATUS}" ]; then
+        # Transient dashboard hiccup — do NOT treat as terminal. Only give up
+        # after many consecutive failures (cluster genuinely gone).
+        status_poll_fails=$((status_poll_fails + 1))
+        if [ "${status_poll_fails}" -ge 60 ]; then
+            echo "WARN: ray job status unreachable for ~30min; assuming cluster lost." >&2
+            TRAIN_FINAL_STATUS="UNREACHABLE"
+            break
+        fi
+        sleep 30
+        continue
+    fi
+    status_poll_fails=0
+    case "${JOB_STATUS}" in
+        SUCCEEDED|FAILED|STOPPED)
+            TRAIN_FINAL_STATUS="${JOB_STATUS}"
+            break
+            ;;
+    esac
+    sleep 30
+done
+
+echo "=== train_async.py terminal status: ${TRAIN_FINAL_STATUS} ==="
+kill "${LOG_TAIL_PID}" 2>/dev/null || true
+[ "${TRAIN_FINAL_STATUS}" = "SUCCEEDED" ]
