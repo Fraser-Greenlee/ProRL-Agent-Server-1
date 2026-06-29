@@ -21,15 +21,26 @@ OUT="${OUT:-$PWD/runs/distill_full}"
 LOG="${LOG:-$PWD/runs/distill_full.log}"
 mkdir -p "$(dirname "$LOG")" "$OUT"
 
-echo "=== full distill solve-only run started $(date) ===" | tee -a "$LOG"
-echo "out=$OUT  model=opus  parallel=5  max_turns=50  (solve-only)" | tee -a "$LOG"
+# REFINE=1 adds --refine: Phase 1 skips already-solved tasks, Phase 2 seeds a
+# refine trajectory from each solved solution to chase further compression.
+# Pointed at an OUT that already has solves, this runs ONLY the refine pass.
+REFINE_FLAG=""
+MODE_DESC="solve-only"
+if [ "${REFINE:-0}" = "1" ]; then
+    REFINE_FLAG="--refine"
+    MODE_DESC="solve(skip existing)+refine"
+fi
 
-# Solve-only (no --refine): 1015 tasks, Opus, parallel=5. Resumable.
+echo "=== full distill run ($MODE_DESC) started $(date) ===" | tee -a "$LOG"
+echo "out=$OUT  model=opus  parallel=5  max_turns=50  ${REFINE_FLAG}" | tee -a "$LOG"
+
+# 1015 tasks, Opus, parallel=5. Resumable (skips attempted solve/refine).
 uv run --with openhands-sdk --with openhands-tools --with litellm --with certifi \
   python examples/arcagi_slime_grpo/distill_generate.py \
   --out "$OUT" --tasks 1015 \
   --model anthropic/claude-opus-4-8 --parallel 5 \
   --max-iterations 50 --thinking-budget 12288 --task-timeout 2400 \
+  ${REFINE_FLAG} \
   >> "$LOG" 2>&1
 
 echo "=== full distill run finished $(date) (rc=$?) ===" | tee -a "$LOG"
