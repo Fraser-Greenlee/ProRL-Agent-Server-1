@@ -100,8 +100,16 @@ def main() -> int:
         if args.min_reward is not None and not (reward is not None and reward >= args.min_reward):
             continue
 
+        # Some trajectories graded correct (the worker wrote+verified the .hy) but
+        # captured NO assistant turns — a ConversationRunError (e.g. 429 retry
+        # exhaustion) aborted before events_to_messages recorded anything. The
+        # solution is real but there's nothing to SFT on, so drop it and COUNT it
+        # (visibility — these are recoverable via the refine pass, which seeds from
+        # the saved final_solution).
         msgs = rec.get("messages") or []
-        if not msgs:
+        n_asst = sum(1 for m in msgs if m.get("role") == "assistant")
+        if not msgs or n_asst == 0:
+            stats["empty_traj"] = stats.get("empty_traj", 0) + 1
             continue
         if args.strip_thinking:
             msgs = _strip_thinking(msgs)
@@ -136,8 +144,12 @@ def main() -> int:
             f.write(json.dumps(ex) + "\n")
 
     n_tasks = len({e["task_id"] for e in kept})
+    empty = stats.get("empty_traj", 0)
     print(f"scanned {stats['total']} trajectories: "
           f"{stats['correct']} fully-correct, {stats['wins']} reward>0")
+    if empty:
+        print(f"  dropped {empty} correct-but-empty trajectories (ConversationRunError "
+              f"aborted before any turn was captured; solution exists, recoverable via refine)")
     print(f"kept {stats['kept']} SFT examples covering {n_tasks} distinct task(s)"
           f"{' (best-per-task)' if args.best_per_task else ''}"
           f"{' [thinking stripped]' if args.strip_thinking else ''}")
